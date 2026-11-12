@@ -58,7 +58,7 @@ def test_reminder_time_weekday_window(client, monkeypatch):
 
 
 def test_one_claim_per_day_and_retry(client):
-    now = utc("2026-11-12T02:00:00")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     assert daily.claim_reminder("2026-11-12", "123", now)
     assert not daily.claim_reminder("2026-11-12", "123", now)
     daily.mark_reminder("2026-11-12", "123", False)
