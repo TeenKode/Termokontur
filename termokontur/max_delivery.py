@@ -125,7 +125,7 @@ def queue_temperature_alerts() -> int:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute("""
             SELECT p.id AS room_id, p.name, p.building, p.min_temp, p.max_temp,
-                   b.user_id, x.id AS reading_id, x.value
+                   b.user_id, x.id AS reading_id, x.value, x.observed_at
             FROM rooms p
             JOIN max_bindings b ON b.room_id=p.id
             JOIN readings x ON x.id=(
@@ -135,6 +135,9 @@ def queue_temperature_alerts() -> int:
             WHERE p.active=1
         """).fetchall()
         for row in rows:
+            freshness_hours = int(settings.get("stale_hours", "26"))
+            if now - datetime.fromisoformat(row["observed_at"]) > timedelta(hours=freshness_hours):
+                continue
             state = ("below" if row["value"] < row["min_temp"]
                      else "above" if row["value"] > row["max_temp"] else "normal")
             old=conn.execute("""
@@ -152,8 +155,8 @@ def queue_temperature_alerts() -> int:
             event_raw=f"alert:{row['room_id']}:{row['user_id']}:{row['reading_id']}:{stamp}"
             key=hashlib.sha256(event_raw.encode("utf-8")).hexdigest()
             label="ниже минимума" if state=="below" else "выше максимума"
-            msg=(f"Термоконтур: температура {label}!\\n"
-                 f"{row['building']} / {row['name']}: {row['value']:g} °C\\n"
+            msg=(f"Термоконтур: температура {label}!\n"
+                 f"{row['building']} / {row['name']}: {row['value']:g} °C\n"
                  f"Допустимый диапазон: {row['min_temp']:g}–{row['max_temp']:g} °C.")
             conn.execute("""INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
                             VALUES(?,'complete',?)""",(key,stamp))
