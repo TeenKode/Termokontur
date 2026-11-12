@@ -2,6 +2,7 @@
 # Debian 13 userland smoke: exercise native installer and updater using only
 # disposable root filesystem and a mock systemctl (CI has no systemd PID 1).
 set -Eeuo pipefail
+trap 'status=$?; echo "Debian smoke failed at line $LINENO (status=$status)" >&2; if [[ -f /var/lib/termokontur/update-status.json ]]; then cat /var/lib/termokontur/update-status.json >&2; fi; exit "$status"' ERR
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git ca-certificates curl python3 python3-venv python3-pip tzdata passwd util-linux >/dev/null
@@ -85,14 +86,19 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   -d '{"building":"CI Test","name":"101","min_temp":18,"max_temp":24}' \
   http://127.0.0.1:8092/api/rooms >/dev/null
 
+echo "Begin native updater smoke assertions"
 # Force a change to exercise the actual stage/swap path of the updater.
 printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
 runuser -u termokontur -- touch /var/lib/termokontur/update-request
 /usr/local/sbin/termokontur-apply-update
+echo "Updater returned; validating post-update state"
+cat /var/lib/termokontur/update-status.json
 grep -q '"state": "success"' /var/lib/termokontur/update-status.json
+echo "Checking previous application backup"
 test -d /opt/termokontur-previous
 test -d /var/lib/termokontur/backups
 test -n "$(find /var/lib/termokontur/backups -name 'pre-update-*' -print -quit)"
+echo "Comparing installed privileged system components"
 cmp /src/deploy/systemd/termokontur-update.service /etc/systemd/system/termokontur-update.service
 cmp /src/scripts/termokontur-apply-update /usr/local/sbin/termokontur-apply-update
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
