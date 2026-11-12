@@ -232,18 +232,48 @@ def dashboard(stale_hours: int = 26) -> dict:
             result.append(item)
     return {"counts": counts, "rooms": result, "generated_at": utc_now()}
 
-def issue_code(room_id: int, validity_minutes: int = 30) -> str:
-    room = room_get(room_id)
-    if not room or not room["active"]:
-        raise ValueError("Кабинет не найден")
-    code = secrets.token_hex(5).upper()
-    digest = hashlib.sha256(code.encode()).hexdigest()
-    expiry = (datetime.now(timezone.utc) + timedelta(minutes=validity_minutes)).isoformat(timespec="seconds")
+def issue_codes_bulk(room_ids: list[int], validity_minutes: int = 1440) -> list[dict]:
+    """Issue new one-time MAX codes atomically for 1..250 active rooms.
+
+    Existing unused codes for the selected rooms are revoked. Plaintext codes
+    are returned exactly once; only their SHA-256 digests are stored in SQLite.
+    """
+    if not room_ids or len(room_ids) > 250 or len(set(room_ids)) != len(room_ids):
+        raise ValueError("Выберите от 1 до 250 уникальных кабинетов")
+    if any(type(room_id) is not int or room_id <= 0 for room_id in room_ids):
+        raise ValueError("Некорректный ID кабинета")
+    if validity_minutes not in (30, 120, 1440, 10080):
+        raise ValueError("Недопустимый срок действия кода")
+    placeholders = ",".join("?" for _ in room_ids)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=validity_minutes)).isoformat(timespec="seconds")
+    issued = []
     with connect() as conn:
-        conn.execute("DELETE FROM pairing_codes WHERE expires_at < ?", (utc_now(),))
-        conn.execute("INSERT INTO pairing_codes(digest, room_id, expires_at) VALUES (?,?,?)",
-                     (digest, room_id, expiry))
-    return code
+        conn.execute("BEGIN IMMEDIATE")
+        found = [
+            dict(row) for row in conn.execute(
+                f"SELECT id, building, floor, name FROM rooms "
+                f"WHERE active=1 AND id IN ({placeholders}) ORDER BY building, name, id",
+                room_ids,
+            )
+        ]
+        if len(found) != len(room_ids):
+            raise ValueError("Часть кабинетов отсутствует или отключена")
+        conn.execute("DELETE FROM pairing_codes WHERE expires_at<=?", (utc_now(),))
+        conn.execute(f"DELETE FROM pairing_codes WHERE room_id IN ({placeholders})", room_ids)
+        for room in found:
+            code = secrets.token_hex(8).upper()
+            digest = hashlib.sha256(code.encode("ascii")).hexdigest()
+            conn.execute(
+                "INSERT INTO pairing_codes(digest, room_id, expires_at) VALUES (?,?,?)",
+                (digest, room["id"], expires_at),
+            )
+            issued.append({**room, "code": code, "expires_at": expires_at})
+    return issued
+
+
+def issue_code(room_id: int, validity_minutes: int = 30) -> str:
+    """Issue a single code, revoking old unused ones for this room."""
+    return issue_codes_bulk([room_id], validity_minutes)[0]["code"]
 
 def bind_code(user_id: str, code: str) -> dict | None:
     digest = hashlib.sha256(code.strip().upper().encode()).hexdigest()

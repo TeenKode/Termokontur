@@ -40,3 +40,17 @@
 .archive-toggle input{width:auto}
 .archived-room{opacity:.7;background:#fafbfe}
 .archived-label{display:block;margin-top:5px;font-size:10px;color:#a36f34}
+
+/* Bulk MAX pairing: compact, scrollable room checklist. */
+#max-codes-dialog{width:min(690px,calc(100% - 28px))}
+.max-codes-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.max-codes-select-label{display:flex!important;flex-direction:row!important;align-items:center;gap:9px!important}
+.max-codes-select-label input,.max-codes-room input{width:auto;flex:0 0 auto;accent-color:#14a786}
+.text-button{background:transparent;border:0;color:#208b78;font-size:12px;text-decoration:underline}
+.max-codes-list{min-height:90px;max-height:300px;overflow-y:auto;border:1px solid #dee8ef;border-radius:10px;padding:5px}
+.max-codes-room{display:flex!important;flex-direction:row!important;align-items:center;gap:13px!important;padding:10px;border-radius:7px;cursor:pointer}
+.max-codes-room:hover{background:#f1f8f6}
+.max-codes-room-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.max-codes-room-text strong{font-size:13px;color:#24374f;overflow-wrap:anywhere}
+.max-codes-room-text small{font-size:11px;color:#728297;overflow-wrap:anywhere}
+.max-codes-empty{padding:22px;text-align:center;color:#748197;font-size:13px}

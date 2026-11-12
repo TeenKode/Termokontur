@@ -1,6 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer;
+const selectedMaxRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -430,4 +431,108 @@ $("install-update").addEventListener("click",async()=>{
   if(!confirm("Установить обновление с официального GitHub? Панель временно перезапустится."))return;
   try{const r=await api("/api/update/request","POST",{});toast(r.message);await loadUpdateStatus();}
   catch(error){toast(error.message,true);}
+});
+
+/* Bulk MAX onboarding: administrator selects rooms and downloads one-time codes. */
+function maxCodeVisibleRooms(){
+  const building=$("max-codes-building").value;
+  const needle=$("max-codes-search").value.trim().toLocaleLowerCase("ru");
+  return rooms.filter(r=>(!building||r.building===building) &&
+    [r.building,r.floor,r.name,r.kind].some(value=>
+      String(value).toLocaleLowerCase("ru").includes(needle)));
+}
+function renderMaxCodes(){
+  const activeIds=new Set(rooms.map(room=>room.id));
+  for(const id of selectedMaxRooms) if(!activeIds.has(id))selectedMaxRooms.delete(id);
+  const visible=maxCodeVisibleRooms();
+  const list=$("max-codes-list");list.replaceChildren();
+  for(const room of visible){
+    const label=el("label","max-codes-room");
+    const check=el("input");check.type="checkbox";check.checked=selectedMaxRooms.has(room.id);
+    check.addEventListener("change",()=>{
+      if(check.checked){
+        if(selectedMaxRooms.size>=250){
+          check.checked=false;toast("Максимум 250 кабинетов за один выпуск",true);return;
+        }
+        selectedMaxRooms.add(room.id);
+      }else selectedMaxRooms.delete(room.id);
+      renderMaxCodes();
+    });
+    const info=el("span","max-codes-room-text");
+    info.append(el("strong","",room.name));
+    info.append(el("small","",room.building+(room.floor?" · этаж "+room.floor:"")));
+    label.append(check,info);list.append(label);
+  }
+  if(!visible.length)list.append(el("p","max-codes-empty","Нет кабинетов для выбранного фильтра."));
+  const selectAll=$("max-codes-select-all");
+  const selectedVisible=visible.filter(room=>selectedMaxRooms.has(room.id)).length;
+  selectAll.checked=!!visible.length&&selectedVisible===visible.length;
+  selectAll.indeterminate=selectedVisible>0&&selectedVisible<visible.length;
+  selectAll.disabled=!visible.length;
+  $("max-codes-count").textContent=
+    "Выбрано: "+selectedMaxRooms.size+" из "+rooms.length+" активных кабинетов. Отображается: "+visible.length+".";
+  $("download-max-codes").disabled=selectedMaxRooms.size===0;
+}
+$("bulk-max-codes").addEventListener("click",()=>{
+  selectedMaxRooms.clear();
+  $("max-codes-search").value="";
+  $("max-codes-building").replaceChildren();
+  option($("max-codes-building"),"","Все корпуса");
+  for(const building of [...new Set(rooms.map(room=>room.building))].sort())
+    option($("max-codes-building"),building,building);
+  $("max-codes-expiry").value="1440";
+  $("max-codes-dialog").showModal();
+  renderMaxCodes();
+});
+$("close-max-codes").addEventListener("click",()=>$("max-codes-dialog").close());
+$("cancel-max-codes").addEventListener("click",()=>$("max-codes-dialog").close());
+$("max-codes-building").addEventListener("change",renderMaxCodes);
+$("max-codes-search").addEventListener("input",renderMaxCodes);
+$("max-codes-clear").addEventListener("click",()=>{
+  selectedMaxRooms.clear();renderMaxCodes();
+});
+$("max-codes-select-all").addEventListener("change",event=>{
+  const visible=maxCodeVisibleRooms();
+  if(event.target.checked){
+    const toAdd=visible.filter(room=>!selectedMaxRooms.has(room.id));
+    if(selectedMaxRooms.size+toAdd.length>250){
+      toast("Выберите не более 250 кабинетов за один раз",true);
+      renderMaxCodes();return;
+    }
+    for(const room of toAdd)selectedMaxRooms.add(room.id);
+  }else for(const room of visible)selectedMaxRooms.delete(room.id);
+  renderMaxCodes();
+});
+$("max-codes-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(selectedMaxRooms.size===0){toast("Выберите кабинеты",true);return;}
+  const button=$("download-max-codes");
+  button.disabled=true;
+  try{
+    const response=await fetch("/api/max/pairing-codes.csv",{
+      method:"POST",credentials:"same-origin",cache:"no-store",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        room_ids:[...selectedMaxRooms],
+        validity_minutes:Number($("max-codes-expiry").value)
+      })
+    });
+    if(!response.ok){
+      if(response.status===401)enterLogin();
+      let reason="Ошибка выпуска кодов";
+      try{const data=await response.json();reason=typeof data.detail==="string"?data.detail:reason;}
+      catch{}
+      throw Error(reason);
+    }
+    const csv=await response.blob();
+    const url=URL.createObjectURL(csv);
+    const link=document.createElement("a");
+    link.href=url;link.download="termokontur-max-codes.csv";
+    document.body.append(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),15000);
+    $("max-codes-dialog").close();
+    toast("Коды созданы. Храните файл в защищённом месте и выдавайте коды индивидуально.");
+    selectedMaxRooms.clear();
+  }catch(error){toast(error.message,true);}
+  finally{renderMaxCodes();}
 });

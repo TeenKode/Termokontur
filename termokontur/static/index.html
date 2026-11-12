@@ -83,13 +83,13 @@
       </section>
 
       <section id="view-rooms" class="view" hidden>
-        <div class="heading"><div><h1>Управление помещениями</h1><p>Корпуса, нормативы и привязка сотрудников к MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
+        <div class="heading"><div><h1>Управление помещениями</h1><p>Корпуса, нормативы и привязка сотрудников к MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-max-codes" class="btn secondary">↓ Коды подключения MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
         <div class="panel">
           <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Поиск по названию, этажу или корпусу" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Экспорт кабинетов CSV</button></div>
           <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
-        <div class="info-strip"><strong>Как подключить учителя?</strong> Нажмите «Код MAX» напротив кабинета и передайте одноразовый код сотруднику. В боте он отправит <code>/bind КОД</code>. Код действует 30 минут.</div>
+        <div class="info-strip"><strong>Как подключить учителя?</strong> Для одного кабинета используйте «Код MAX» (30 минут). Для нескольких — «Коды подключения MAX»: выберите помещения, срок действия и выгрузите CSV для Excel. Каждый код одноразовый, а новый выпуск аннулирует прежние неиспользованные коды выбранных кабинетов.</div>
       </section>
       <section id="view-settings" class="view" hidden>
         <div class="heading"><div><h1>Настройки</h1><p>Все пользовательские параметры сохраняются в базе и применяются из панели.</p></div></div>
@@ -175,6 +175,31 @@
       <label>Помещение <select id="reading-room" required></select></label>
       <label>Температура, °C <input id="reading-value" type="number" min="-40" max="60" step="0.1" placeholder="21.5" required></label>
       <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button type="submit" value="save" class="btn primary">Записать показание</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="max-codes-dialog">
+    <form id="max-codes-form" class="dialog-form">
+      <div class="dialog-head">
+        <div><h2>Коды подключения к MAX</h2><p>Массовая генерация одноразовых кодов для преподавателей.</p></div>
+        <button type="button" id="close-max-codes" class="x-button" aria-label="Закрыть">×</button>
+      </div>
+      <div class="field-grid">
+        <label>Корпус<select id="max-codes-building"><option value="">Все корпуса</option></select></label>
+        <label>Срок действия<select id="max-codes-expiry"><option value="30">30 минут</option><option value="120">2 часа</option><option value="1440" selected>24 часа</option><option value="10080">7 дней</option></select></label>
+      </div>
+      <label>Найти кабинет<input id="max-codes-search" type="search" placeholder="Номер, название или этаж"></label>
+      <div class="max-codes-toolbar">
+        <label class="max-codes-select-label"><input id="max-codes-select-all" type="checkbox"> Выбрать все отображённые</label>
+        <button type="button" id="max-codes-clear" class="text-button">Снять выделение</button>
+      </div>
+      <div id="max-codes-list" class="max-codes-list" aria-label="Выбор кабинетов"></div>
+      <p id="max-codes-count" class="bulk-preview" aria-live="polite">Выбрано: 0</p>
+      <p class="hint" id="max-codes-hint">Выгружается CSV с корпусом, кабинетом, кодом, командой /bind и датой истечения. <strong>Это секретные коды:</strong> передавайте их только соответствующим сотрудникам. Повторно скачать те же коды нельзя. Перевыпуск отменяет старые неиспользованные коды выбранных помещений.</p>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-max-codes" class="btn secondary">Отмена</button>
+        <button type="submit" id="download-max-codes" class="btn primary" disabled>Создать и скачать CSV</button>
+      </div>
     </form>
   </dialog>
 
