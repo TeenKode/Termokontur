@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from . import db, daily, settings
+from . import db, daily, settings, max_delivery
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
@@ -34,7 +34,7 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
     if action == "/bind":
         if len(parts) != 2:
             return "Введите /bind КОД — код получите у администратора."
-        room = db.bind_code(user_id, parts[1])
+        room = db.bind_code(user_id, parts[1], event_id)
         if room is None:
             return "Код недействителен или истёк. Запросите новый."
         return f"Кабинет привязан: {room['building']} / {room['name']} (ID {room['room_id']})."
@@ -141,8 +141,8 @@ async def poll(token: str):
                                  timeout=httpx.Timeout(45, connect=12)) as client:
         backoff = 2
         while True:
-            if token != settings.get("max_token", ""):
-                logger.info("MAX token updated; reconnecting")
+            if token != settings.get("max_token", "") or settings.get("max_mode", "polling") != "polling":
+                logger.info("MAX mode or token updated; reconnecting")
                 return
             try:
                 await send_reminders(client)
@@ -154,16 +154,11 @@ async def poll(token: str):
                 response.raise_for_status()
                 payload = response.json()
                 for update in payload.get("updates", []):
-                    processed = process_update(update)
-                    if processed is None:
-                        continue
-                    uid, reply = processed
-                    sent = await client.post("/messages", params={"user_id": uid},
-                                             json={"text": reply})
-                    sent.raise_for_status()
+                    max_delivery.enqueue(update)
                 next_marker = payload.get("marker")
                 if next_marker is not None:
                     db.set_state("max_marker", str(next_marker))
+                await max_delivery.drain(client)
                 backoff = 2
             except (httpx.HTTPError, ValueError, KeyError) as exc:
                 logger.warning("MAX API temporarily unavailable: %s", exc)
@@ -181,7 +176,14 @@ def main():
             if not token:
                 await asyncio.sleep(10)
                 continue
-            await poll(token)
+            if settings.get("max_mode", "polling") == "webhook":
+                async with httpx.AsyncClient(base_url=API, headers={"Authorization": token},
+                                             timeout=httpx.Timeout(30, connect=12)) as client:
+                    await max_delivery.drain(client)
+                    await send_reminders(client)
+                await asyncio.sleep(3)
+            else:
+                await poll(token)
 
     asyncio.run(worker())
 

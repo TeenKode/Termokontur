@@ -88,6 +88,9 @@ def public() -> dict:
     data["reminders_enabled"] = data["reminders_enabled"] == "1"
     data["reminder_days"] = [int(x) for x in data["reminder_days"].split(",") if x.strip()]
     data["reminder_window_minutes"] = int(data["reminder_window_minutes"])
+    data["max_mode"] = get("max_mode", "polling")
+    data["max_webhook_url"] = get("max_webhook_url", "")
+    data["max_webhook_configured"] = bool(get("max_webhook_secret"))
     data["max_token_configured"] = bool(get("max_token"))
     data["ingest_key_configured"] = bool(get("ingest_key"))
     return data
@@ -127,3 +130,22 @@ def validated(data: dict) -> dict[str, str]:
         "reminder_days": ",".join(map(str, sorted(set(days)))),
         "reminder_window_minutes": str(window),
     }
+
+def set_max_webhook(url: str, secret: str) -> None:
+    if not _valid_secret(secret):
+        raise ValueError("Invalid MAX webhook secret")
+    with db.connect() as conn:
+        for key, value in (("max_mode", "webhook"), ("max_webhook_url", url),
+                           ("max_webhook_secret", secret)):
+            conn.execute(
+                """INSERT INTO settings(key, value) VALUES (?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, value),
+            )
+
+def clear_max_webhook() -> None:
+    with db.connect() as conn:
+        conn.execute("DELETE FROM settings WHERE key IN ('max_webhook_secret', 'max_webhook_url')")
+        conn.execute("""INSERT INTO settings(key, value) VALUES ('max_mode','polling')
+                     ON CONFLICT(key) DO UPDATE SET value='polling'""")
+

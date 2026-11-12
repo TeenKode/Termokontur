@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import hmac
 import io
 import os
@@ -11,6 +12,9 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
+import ipaddress
+import httpx
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -18,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates
+from . import auth, db, daily, settings, updates, max_delivery
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
@@ -121,6 +125,10 @@ class SettingsIn(BaseModel):
     reminder_window_minutes: int = Field(ge=1, le=240)
 
 
+class MaxWebhookIn(BaseModel):
+    url: str = Field(min_length=20, max_length=255)
+
+
 class PasswordIn(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=256)
@@ -189,6 +197,8 @@ def save_settings(payload: SettingsIn):
 
 @app.put("/api/settings/max-token", dependencies=[Depends(require_admin)])
 def set_max_token(payload: SecretIn):
+    if settings.get("max_mode", "polling") == "webhook":
+        raise HTTPException(409, "Сначала отключите webhook MAX, чтобы изменить токен")
     if payload.value is not None and payload.value.strip():
         try:
             settings.set_secret("max_token", payload.value.strip())
@@ -197,6 +207,97 @@ def set_max_token(payload: SecretIn):
     else:
         settings.set_secret("max_token", None)
     return {"configured": bool(settings.get("max_token"))}
+
+
+def _validate_max_webhook_url(value: str) -> str:
+    """Require an externally reachable trusted HTTPS endpoint on port 443."""
+    try:
+        url = urlsplit(value.strip())
+        if (url.scheme != "https" or not url.hostname or url.port not in (None, 443)
+                or url.username is not None or url.password is not None
+                or url.query or url.fragment or url.path != "/api/max/webhook"):
+            raise ValueError()
+        hostname = url.hostname
+        if hostname in ("localhost",) or hostname.endswith((".local", ".internal")):
+            raise ValueError()
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if not address.is_global:
+                raise ValueError()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, "Укажите публичный HTTPS-адрес вида https://domain.example/api/max/webhook (порт 443)") from exc
+    return value.strip()
+
+
+@app.post("/api/settings/max-webhook", dependencies=[Depends(require_admin)])
+def enable_max_webhook(payload: MaxWebhookIn):
+    url = _validate_max_webhook_url(payload.url)
+    token = settings.get("max_token", "")
+    if not token:
+        raise HTTPException(409, "Сначала сохраните токен MAX")
+    secret = secrets.token_urlsafe(32)
+    try:
+        response = httpx.post(
+            "https://platform-api2.max.ru/subscriptions",
+            headers={"Authorization": token},
+            json={"url": url, "update_types": ["message_created", "bot_started"],
+                  "secret": secret},
+            timeout=20,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success") is not True:
+            raise ValueError(result.get("message", "MAX отклонил подписку"))
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(502, "Не удалось зарегистрировать webhook в MAX: " + str(exc)[:150]) from exc
+    settings.set_max_webhook(url, secret)
+    return {"ok": True, "max_mode": "webhook", "url": url}
+
+
+@app.post("/api/settings/max-polling", dependencies=[Depends(require_admin)])
+def switch_max_to_polling():
+    url = settings.get("max_webhook_url", "")
+    token = settings.get("max_token", "")
+    if url:
+        if not token:
+            raise HTTPException(409, "Отсутствует токен для отмены webhook-подписки")
+        try:
+            response = httpx.delete(
+                "https://platform-api2.max.ru/subscriptions",
+                params={"url": url},
+                headers={"Authorization": token},
+                timeout=20,
+            )
+            response.raise_for_status()
+            if response.json().get("success") is not True:
+                raise ValueError("MAX не подтвердил отмену подписки")
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(502, "Не удалось отключить подписку MAX: " + str(exc)[:150]) from exc
+    settings.clear_max_webhook()
+    return {"ok": True, "max_mode": "polling"}
+
+
+@app.post("/api/max/webhook")
+async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
+    secret = settings.get("max_webhook_secret", "")
+    if (settings.get("max_mode", "polling") != "webhook"
+            or not secret or not x_max_bot_api_secret
+            or not hmac.compare_digest(secret, x_max_bot_api_secret)):
+        raise HTTPException(403, "Webhook не настроен или неверный секрет")
+    raw = await request.body()
+    if len(raw) > 65536:
+        raise HTTPException(413, "Слишком большой webhook-запрос")
+    try:
+        update = json.loads(raw)
+        if not isinstance(update, dict):
+            raise ValueError()
+    except (ValueError, UnicodeError) as exc:
+        raise HTTPException(422, "Некорректное событие MAX") from exc
+    max_delivery.enqueue(update)
+    return {"ok": True}
 
 
 @app.post("/api/settings/ingest-key", dependencies=[Depends(require_admin)])
