@@ -270,6 +270,10 @@ async function loadSettings() {
     for(const checkbox of document.querySelectorAll('[name="remind-day"]'))
       checkbox.checked=settingsCache.reminder_days.includes(Number(checkbox.value));
     $("max-status").textContent=settingsCache.max_token_configured?"Токен MAX настроен":"Токен MAX отсутствует";
+    $("max-webhook-mode").textContent=settingsCache.max_mode==="webhook"?"MAX: webhook включён (производственный режим).":"MAX: тестовый режим Long Polling.";
+    $("max-webhook-url").value=settingsCache.max_webhook_url || "";
+    $("switch-polling").disabled=settingsCache.max_mode!=="webhook";
+    $("activate-webhook").disabled=!settingsCache.max_token_configured;
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
     await loadUpdateStatus();
@@ -535,4 +539,23 @@ $("max-codes-form").addEventListener("submit",async event=>{
     selectedMaxRooms.clear();
   }catch(error){toast(error.message,true);}
   finally{renderMaxCodes();}
+});
+
+/* Configure a trustworthy public HTTPS webhook without editing server files. */
+$("max-webhook-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(!confirm("Активировать HTTPS webhook в MAX? При этом тестовый Long Polling будет отключён."))return;
+  try{
+    await api("/api/settings/max-webhook","POST",{url:$("max-webhook-url").value.trim()});
+    toast("Webhook зарегистрирован в MAX");
+    await loadSettings();
+  }catch(error){toast(error.message,true);}
+});
+$("switch-polling").addEventListener("click",async()=>{
+  if(!confirm("Отключить webhook и вернуться к тестовому Long Polling?"))return;
+  try{
+    await api("/api/settings/max-polling","POST",{});
+    toast("MAX переведён в тестовый режим");
+    await loadSettings();
+  }catch(error){toast(error.message,true);}
 });

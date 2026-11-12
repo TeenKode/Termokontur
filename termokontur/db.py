@@ -84,6 +84,25 @@ def initialize() -> None:
             password_hash TEXT NOT NULL,
             session_epoch INTEGER NOT NULL DEFAULT 1
         );
+        CREATE TABLE IF NOT EXISTS max_inbox (
+            event_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK(state IN ('processing', 'complete')),
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS max_outbox (
+            event_id TEXT PRIMARY KEY REFERENCES max_inbox(event_id),
+            user_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TEXT NOT NULL,
+            delivered_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS max_bind_events (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            room_id INTEGER NOT NULL REFERENCES rooms(id),
+            recorded_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS reminder_deliveries (
             local_day TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -275,12 +294,21 @@ def issue_code(room_id: int, validity_minutes: int = 30) -> str:
     """Issue a single code, revoking old unused ones for this room."""
     return issue_codes_bulk([room_id], validity_minutes)[0]["code"]
 
-def bind_code(user_id: str, code: str) -> dict | None:
+def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | None:
     digest = hashlib.sha256(code.strip().upper().encode()).hexdigest()
     with connect() as conn:
         # A write transaction ensures a code can be consumed by exactly one user.
         # BEGIN IMMEDIATE serializes simultaneous bind attempts before lookup.
         conn.execute("BEGIN IMMEDIATE")
+        if event_id:
+            previous = conn.execute(
+                """SELECT r.id AS room_id, r.building, r.name FROM max_bind_events e
+                   JOIN rooms r ON r.id=e.room_id
+                   WHERE e.event_id=? AND e.user_id=?""",
+                (event_id, str(user_id)),
+            ).fetchone()
+            if previous:
+                return dict(previous)
         found = conn.execute(
             """SELECT p.room_id, r.building, r.name FROM pairing_codes p
                JOIN rooms r ON r.id=p.room_id
@@ -294,6 +322,11 @@ def bind_code(user_id: str, code: str) -> dict | None:
             return None
         conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)",
                      (str(user_id), found["room_id"]))
+        if event_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO max_bind_events(event_id,user_id,room_id,recorded_at) VALUES(?,?,?,?)",
+                (event_id, str(user_id), found["room_id"], utc_now()),
+            )
         return dict(found)
 
 def bound_rooms(user_id: str) -> list[dict]:
