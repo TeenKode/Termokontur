@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101d31">
+  <title>Термоконтур — мониторинг температуры</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="brand large"><span class="brand-icon">°</span><span>термо<span class="brand-accent">контур</span></span></div>
+      <h1>Контроль температуры</h1>
+      <p>Единая панель мониторинга помещений и журнал измерений.</p>
+      <form id="login-form">
+        <label for="password">Пароль администратора</label>
+        <input id="password" type="password" autocomplete="current-password" required autofocus>
+        <button type="submit" class="btn primary full">Войти в систему</button>
+        <div id="login-error" class="form-error" role="alert"></div>
+      </form>
+    </div>
+  </section>
+
+  <div id="app-root" class="shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-icon">°</span><span>термо<span class="brand-accent">контур</span></span></div>
+      <div class="nav-caption">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <nav class="navigation" aria-label="Разделы">
+        <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
+        <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
+        <button type="button" data-tab="rooms" class="nav-button"><span class="nav-icon">▤</span>Помещения</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="connection-dot"></span> Локальный сервер
+        <button type="button" id="logout" class="logout-btn">Выйти</button>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="eyebrow">МОНИТОРИНГ МИКРОКЛИМАТА</div>
+        <div class="topbar-actions">
+          <span id="updated-at" class="muted">—</span>
+          <button type="button" id="refresh" class="btn secondary">↻ Обновить</button>
+        </div>
+      </header>
+
+      <section id="view-overview" class="view">
+        <div class="heading">
+          <div><h1>Обзор температуры</h1><p>Текущее состояние помещений по последним измерениям.</p></div>
+          <button type="button" class="btn primary" id="quick-reading">+ Добавить измерение</button>
+        </div>
+        <div class="metrics">
+          <article class="metric"><span class="metric-label">Всего помещений</span><strong id="count-total">0</strong><small>Под мониторингом</small></article>
+          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>Последние показания</small></article>
+          <article class="metric"><span class="metric-label">Отклонения</span><strong id="count-alert" class="bad">0</strong><small>Ниже или выше нормы</small></article>
+          <article class="metric"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">0</strong><small>Требуется измерение</small></article>
+        </div>
+        <div class="panel">
+          <div class="panel-heading">
+            <div><h2>Помещения</h2><p>Статус по каждому кабинету</p></div>
+            <div class="filter-row"><input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета"><select id="building-filter" aria-label="Корпус"><option value="">Все корпуса</option></select></div>
+          </div>
+          <div class="table-scroll"><table><thead><tr><th>Помещение</th><th>Корпус</th><th>Температура</th><th>Норма</th><th>Получено</th><th>Статус</th></tr></thead><tbody id="overview-table"></tbody></table></div>
+          <p id="overview-empty" class="empty" hidden>Помещения ещё не добавлены. Перейдите в раздел «Помещения».</p>
+        </div>
+      </section>
+
+      <section id="view-readings" class="view" hidden>
+        <div class="heading"><div><h1>Журнал измерений</h1><p>История показаний от сотрудников и датчиков.</p></div><div class="heading-actions"><button type="button" id="export-csv" class="btn secondary">↓ Скачать CSV</button><button type="button" id="add-reading" class="btn primary">+ Новое измерение</button></div></div>
+        <div class="panel">
+          <div class="panel-heading"><h2>Последние измерения</h2><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
+          <div class="chart-container"><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График последних измерений"></canvas><p class="chart-note">Последние показания выбранного помещения, °C</p></div>
+          <div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Корпус</th><th>Кабинет</th><th>°C</th><th>Источник</th></tr></thead><tbody id="readings-table"></tbody></table></div>
+          <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
+        </div>
+      </section>
+
+      <section id="view-rooms" class="view" hidden>
+        <div class="heading"><div><h1>Управление помещениями</h1><p>Корпуса, нормативы и привязка сотрудников к MAX.</p></div><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div>
+        <div class="panel">
+          <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
+          <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
+        </div>
+        <div class="info-strip"><strong>Как подключить учителя?</strong> Нажмите «Код MAX» напротив кабинета и передайте одноразовый код сотруднику. В боте он отправит <code>/bind КОД</code>. Код действует 30 минут.</div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="room-dialog">
+    <form method="dialog" id="room-form" class="dialog-form">
+      <div class="dialog-head"><div><h2 id="room-dialog-title">Новое помещение</h2><p>Заполните параметры помещения.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
+      <input id="edit-room-id" type="hidden">
+      <label>Корпус <input id="room-building" type="text" maxlength="100" placeholder="Например, Старшая школа" required></label>
+      <div class="field-grid"><label>Помещение <input id="room-name" type="text" maxlength="100" placeholder="Кабинет 201" required></label><label>Этаж <input id="room-floor" type="text" maxlength="30" placeholder="2"></label></div>
+      <label>Тип помещения <input id="room-kind" type="text" maxlength="80" value="Кабинет" required></label>
+      <div class="field-grid"><label>Минимум, °C <input id="room-min" type="number" min="-40" max="60" step="0.1" value="18" required></label><label>Максимум, °C <input id="room-max" type="number" min="-40" max="60" step="0.1" value="24" required></label></div>
+      <p class="hint">Нормативы зависят от типа помещения. Проверьте применимые требования.</p>
+      <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button id="room-save" type="submit" value="save" class="btn primary">Сохранить</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="reading-dialog">
+    <form method="dialog" id="reading-form" class="dialog-form">
+      <div class="dialog-head"><div><h2>Новое измерение</h2><p>Ручная запись температуры в журнал.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
+      <label>Помещение <select id="reading-room" required></select></label>
+      <label>Температура, °C <input id="reading-value" type="number" min="-40" max="60" step="0.1" placeholder="21.5" required></label>
+      <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button type="submit" value="save" class="btn primary">Записать показание</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="pairing-dialog">
+    <div class="dialog-form">
+      <div class="dialog-head"><div><h2>Код подключения MAX</h2><p>Передайте код сотруднику лично.</p></div><button class="x-button" id="close-pairing" aria-label="Закрыть">×</button></div>
+      <div class="pairing-code" id="pairing-code"></div>
+      <p class="hint">Сотрудник отправляет боту команду <code>/bind КОД</code>. Код одноразовый, действует 30 минут.</p>
+      <button type="button" id="copy-pairing" class="btn primary full">Скопировать команду</button>
+    </div>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
