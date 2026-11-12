@@ -57,3 +57,22 @@ def test_pairing_and_disabled_room(admin):
     assert admin.patch(f"/api/rooms/{rid}",json={"active":False}).status_code == 200
     assert admin.post("/api/readings",json={"room_id":rid,"value":22}).status_code == 422
     assert admin.get("/api/dashboard").json()["rooms"] == []
+
+def test_example_device_key_is_disabled(admin, monkeypatch):
+    rid = admin.post("/api/rooms", json=room_payload()).json()["id"]
+    monkeypatch.setenv("TERMOKONTUR_INGEST_KEY", "REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY")
+    response = admin.post("/api/ingest",
+                          json={"room_id":rid,"value":21},
+                          headers={"X-Api-Key":"REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY"})
+    assert response.status_code == 503
+
+def test_example_admin_secrets_cannot_start(monkeypatch, tmp_path):
+    import pytest
+    from fastapi.testclient import TestClient
+    from termokontur.app import app
+    monkeypatch.setenv("TERMOKONTUR_DB", str(tmp_path / "db.sqlite3"))
+    monkeypatch.setenv("TERMOKONTUR_ADMIN_PASSWORD", "REPLACE_WITH_A_LONG_RANDOM_PASSWORD")
+    monkeypatch.setenv("TERMOKONTUR_SECRET", "REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS")
+    with pytest.raises(RuntimeError):
+        with TestClient(app):
+            pass
