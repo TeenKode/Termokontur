@@ -163,3 +163,30 @@ def test_update_endpoint_is_protected_and_unsupported(admin):
     assert admin.get("/api/update/status").status_code==200
     assert not admin.get("/api/update/status").json()["supported"]
     assert admin.post("/api/update/request",json={}).status_code==409
+
+
+def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_path):
+    from termokontur import updates, db
+    systemd_path = tmp_path / "termokontur-update.path"
+    systemd_path.write_text("[Path]\nPathExists=/var/lib/termokontur/update-request\n")
+    monkeypatch.setattr(updates, "SYSTEMD_PATH", systemd_path)
+    (db.db_path().parent / "installed-revision").write_text("a"*40+"\n")
+    current = admin.get("/api/update/status").json()
+    assert current["supported"]
+    assert current["installed_revision"] == "a"*40
+
+    class FakeGitHubResponse:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"sha": "b"*40}
+
+    monkeypatch.setattr(updates.httpx, "get", lambda *a, **kw: FakeGitHubResponse())
+    checked = admin.get("/api/update/check")
+    assert checked.status_code == 200
+    assert checked.json()["available"]
+    first = admin.post("/api/update/request", json={})
+    assert first.status_code == 200
+    assert (db.db_path().parent/"update-request").read_text().strip() == "main"
+    assert admin.post("/api/update/request", json={}).status_code == 409
+    assert admin.get("/api/update/status").json()["state"] == "queued"
