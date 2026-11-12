@@ -74,6 +74,16 @@ def initialize() -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS admin_account (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            session_epoch INTEGER NOT NULL DEFAULT 1
+        );
         CREATE TABLE IF NOT EXISTS reminder_deliveries (
             local_day TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -103,6 +113,34 @@ def create_room(building: str, floor: str, name: str, kind: str, minimum: float,
         )
         room_id = cur.lastrowid
     return room_get(room_id)
+
+def create_rooms_bulk(building: str, floor: str, kind: str, minimum: float,
+                      maximum: float, names: list[str]) -> dict:
+    """Insert a validated list in one transaction; duplicates are reported."""
+    if not names or len(names) > 250:
+        raise ValueError("Укажите от 1 до 250 помещений")
+    names = [name.strip() for name in names]
+    if any(not name or len(name) > 100 for name in names):
+        raise ValueError("Некорректное название помещения")
+    if len(set(names)) != len(names):
+        raise ValueError("Повторяющиеся помещения в списке")
+    if not building.strip() or len(building) > 100 or not kind.strip() or minimum >= maximum:
+        raise ValueError("Некорректные параметры помещений")
+    count = 0
+    skipped = []
+    with connect() as conn:
+        for name in names:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO rooms(building, floor, name, kind,
+                   min_temp, max_temp, created_at) VALUES(?,?,?,?,?,?,?)""",
+                (building.strip(), floor.strip(), name, kind.strip(), minimum, maximum, utc_now()),
+            )
+            if cur.rowcount:
+                count += 1
+            else:
+                skipped.append(name)
+    return {"created": count, "skipped": skipped, "total": len(names)}
+
 
 def update_room(room_id: int, patch: dict) -> dict | None:
     fields = {"building", "floor", "name", "kind", "min_temp", "max_temp", "active"}

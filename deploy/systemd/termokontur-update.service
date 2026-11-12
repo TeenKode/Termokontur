@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply an approved Termokontur update from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/termokontur-apply-update
+TimeoutStartSec=300
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/opt /var/lib/termokontur

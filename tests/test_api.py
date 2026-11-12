@@ -60,7 +60,8 @@ def test_pairing_and_disabled_room(admin):
 
 def test_example_device_key_is_disabled(admin, monkeypatch):
     rid = admin.post("/api/rooms", json=room_payload()).json()["id"]
-    monkeypatch.setenv("TERMOKONTUR_INGEST_KEY", "REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY")
+    from termokontur import settings
+    settings.set_secret("ingest_key", None)
     response = admin.post("/api/ingest",
                           json={"room_id":rid,"value":21},
                           headers={"X-Api-Key":"REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY"})

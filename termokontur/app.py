@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, daily
+from . import auth, db, daily, settings
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
@@ -25,11 +25,11 @@ FAILED_LOGINS: dict[str, list[float]] = {}
 
 @app.on_event("startup")
 def startup():
-    if len(os.environ.get("TERMOKONTUR_ADMIN_PASSWORD", "")) < 12 or os.environ["TERMOKONTUR_ADMIN_PASSWORD"].startswith("REPLACE_WITH_"):
-        raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (at least 12 characters)")
     if len(os.environ.get("TERMOKONTUR_SECRET", "")) < 32 or os.environ["TERMOKONTUR_SECRET"].startswith("REPLACE_WITH_"):
         raise RuntimeError("Set a unique TERMOKONTUR_SECRET (at least 32 characters)")
     db.initialize()
+    auth.bootstrap()
+    settings.bootstrap()
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -51,7 +51,7 @@ def signature(message: str) -> str:
 
 def session_cookie() -> str:
     payload = f"{int(time.time()) + 8 * 3600}:{secrets.token_urlsafe(18)}"
-    return f"{payload}:{signature(payload)}"
+    return f"{payload}:{signature(payload + ':' + str(auth.session_epoch()))}"
 
 def authenticated(request: Request) -> bool:
     cookie = request.cookies.get("tk_session", "")
@@ -59,7 +59,9 @@ def authenticated(request: Request) -> bool:
         expires, nonce, mac = cookie.split(":", 2)
         if int(expires) <= time.time() or len(nonce) < 12:
             return False
-        return hmac.compare_digest(mac, signature(f"{expires}:{nonce}"))
+        return hmac.compare_digest(
+            mac, signature(f"{expires}:{nonce}:{auth.session_epoch()}")
+        )
     except (ValueError, KeyError):
         return False
 
@@ -93,6 +95,29 @@ class RoomPatch(BaseModel):
     max_temp: float | None = Field(default=None, ge=-40, le=60, allow_inf_nan=False)
     active: bool | None = None
 
+class RoomsBulkIn(RoomIn):
+    names: list[str] = Field(min_length=1, max_length=250)
+
+
+class SettingsIn(BaseModel):
+    organization_name: str = Field(min_length=1, max_length=100)
+    timezone: str = Field(min_length=1, max_length=64)
+    stale_hours: int = Field(ge=1, le=168)
+    reminders_enabled: bool
+    reminder_time: str
+    reminder_days: list[int] = Field(min_length=1, max_length=7)
+    reminder_window_minutes: int = Field(ge=1, le=240)
+
+
+class PasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=12, max_length=256)
+
+
+class SecretIn(BaseModel):
+    value: str | None = None
+
+
 class ReadingIn(BaseModel):
     room_id: int = Field(gt=0)
     value: float = Field(ge=-40, le=60, allow_inf_nan=False)
@@ -120,8 +145,7 @@ def login(payload: Login, request: Request, response: Response):
     failures = [t for t in FAILED_LOGINS.get(ip, []) if now - t < 300]
     if len(failures) >= 5:
         raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
-    configured = os.environ["TERMOKONTUR_ADMIN_PASSWORD"]
-    if not hmac.compare_digest(payload.password.encode(), configured.encode()):
+    if not auth.check_password(payload.password):
         failures.append(now)
         FAILED_LOGINS[ip] = failures
         raise HTTPException(401, "Неверный пароль")
@@ -136,9 +160,55 @@ def logout(response: Response):
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True}
 
+@app.get("/api/settings", dependencies=[Depends(require_admin)])
+def get_settings():
+    return settings.public()
+
+
+@app.put("/api/settings", dependencies=[Depends(require_admin)])
+def save_settings(payload: SettingsIn):
+    try:
+        data = settings.validated(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    settings.update(data)
+    return settings.public()
+
+
+@app.put("/api/settings/max-token", dependencies=[Depends(require_admin)])
+def set_max_token(payload: SecretIn):
+    if payload.value is not None and payload.value.strip():
+        try:
+            settings.set_secret("max_token", payload.value.strip())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        settings.set_secret("max_token", None)
+    return {"configured": bool(settings.get("max_token"))}
+
+
+@app.post("/api/settings/ingest-key", dependencies=[Depends(require_admin)])
+def rotate_ingest_key():
+    key = secrets.token_urlsafe(36)
+    settings.set_secret("ingest_key", key)
+    return {"key": key, "warning": "Старый ключ недействителен. Обновите настройки Home Assistant."}
+
+
+@app.post("/api/settings/password", dependencies=[Depends(require_admin)])
+def change_password(payload: PasswordIn, response: Response):
+    try:
+        changed = auth.change_password(payload.current_password, payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not changed:
+        raise HTTPException(403, "Текущий пароль указан неверно")
+    response.delete_cookie("tk_session", path="/", samesite="strict")
+    return {"ok": True, "relogin_required": True}
+
+
 @app.get("/api/dashboard", dependencies=[Depends(require_admin)])
 def dashboard():
-    return db.dashboard(int(os.getenv("TERMOKONTUR_STALE_HOURS", "26")))
+    return db.dashboard(int(settings.get("stale_hours", "26")))
 
 @app.get("/api/daily", dependencies=[Depends(require_admin)])
 def daily_report():
@@ -161,6 +231,21 @@ def create_room(payload: RoomIn):
                               data["min_temp"], data["max_temp"])
     except sqlite3.IntegrityError:
         raise HTTPException(409, "В этом корпусе кабинет с таким названием уже существует")
+
+@app.post("/api/rooms/bulk", dependencies=[Depends(require_admin)])
+def bulk_rooms(payload: RoomsBulkIn):
+    data = payload.model_dump()
+    names = [name.strip() for name in data.pop("names")]
+    if any(len(name) > 100 or not name for name in names):
+        raise HTTPException(422, "Неверные названия помещений")
+    if data["min_temp"] >= data["max_temp"]:
+        raise HTTPException(422, "Минимум должен быть ниже максимума")
+    try:
+        return db.create_rooms_bulk(data["building"], data["floor"], data["kind"],
+                                    data["min_temp"], data["max_temp"], names)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
 
 @app.patch("/api/rooms/{room_id}", dependencies=[Depends(require_admin)])
 def patch_room(room_id: int, payload: RoomPatch):
@@ -224,7 +309,7 @@ def export_csv(room_id: int | None = None):
 
 @app.post("/api/ingest")
 def ingest(payload: IngestIn, x_api_key: str | None = Header(default=None)):
-    expected = os.getenv("TERMOKONTUR_INGEST_KEY", "")
+    expected = settings.get("ingest_key", "") or ""
     if len(expected) < 20 or expected.startswith("REPLACE_WITH_"):
         raise HTTPException(503, "Приём от датчиков не настроен")
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
