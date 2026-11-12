@@ -10,6 +10,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -102,6 +103,11 @@ class RoomsBulkIn(BaseModel):
     min_temp: float = Field(default=18, ge=-40, le=60, allow_inf_nan=False)
     max_temp: float = Field(default=24, ge=-40, le=60, allow_inf_nan=False)
     names: list[str] = Field(min_length=1, max_length=250)
+
+
+class BulkPairingCodesIn(BaseModel):
+    room_ids: list[int] = Field(min_length=1, max_length=250)
+    validity_minutes: Literal[30, 120, 1440, 10080] = 1440
 
 
 class SettingsIn(BaseModel):
@@ -308,6 +314,34 @@ def patch_room(room_id: int, payload: RoomPatch):
         return db.update_room(room_id, patch)
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Кабинет с таким названием уже существует")
+
+@app.post("/api/max/pairing-codes.csv", dependencies=[Depends(require_admin)])
+def export_bulk_max_codes(payload: BulkPairingCodesIn):
+    try:
+        codes = db.issue_codes_bulk(payload.room_ids, payload.validity_minutes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(("Корпус", "Этаж", "Кабинет", "ID кабинета",
+                     "Код MAX", "Команда боту", "Действует до (UTC)",
+                     "Ответственный (для заполнения)"))
+    for room in codes:
+        writer.writerow((
+            clean_cell(room["building"]), clean_cell(room["floor"]),
+            clean_cell(room["name"]), room["id"], room["code"],
+            "/bind " + room["code"], room["expires_at"], "",
+        ))
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="termokontur-max-codes.csv"',
+            "Cache-Control": "no-store, no-cache, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
 
 @app.post("/api/rooms/{room_id}/pairing", dependencies=[Depends(require_admin)])
 def pairing(room_id: int):
