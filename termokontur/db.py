@@ -292,7 +292,7 @@ def bind_code(user_id: str, code: str) -> dict | None:
         deleted = conn.execute("DELETE FROM pairing_codes WHERE digest=?", (digest,))
         if deleted.rowcount != 1:
             return None
-        conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)
+        conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)",
                      (str(user_id), found["room_id"]))
         return dict(found)
 
