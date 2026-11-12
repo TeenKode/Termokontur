@@ -82,11 +82,34 @@ def enqueue(update: dict) -> bool:
         raise
     return True
 
+def diagnostics() -> dict:
+    """Counts for authenticated administrators; never exposes message contents."""
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
+    with db.connect() as conn:
+        outbox = conn.execute("""
+            SELECT
+                COUNT(*) AS undelivered,
+                SUM(CASE WHEN attempts >= 10 THEN 1 ELSE 0 END) AS repeatedly_failed,
+                SUM(CASE WHEN next_retry_at <= ? THEN 1 ELSE 0 END) AS ready
+            FROM max_outbox WHERE delivered_at IS NULL
+        """, (db.utc_now(),)).fetchone()
+        stuck = conn.execute("""
+            SELECT COUNT(*) FROM max_inbox
+            WHERE state='processing' AND updated_at < ?
+        """, (stale,)).fetchone()[0]
+    return {
+        "undelivered": outbox["undelivered"],
+        "repeatedly_failed": outbox["repeatedly_failed"] or 0,
+        "ready": outbox["ready"] or 0,
+        "stalled_events": stuck,
+    }
+
+
 def pending(limit: int = 20) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("""
             SELECT event_id, user_id, text, attempts FROM max_outbox
-            WHERE delivered_at IS NULL AND next_retry_at<=? AND attempts<10
+            WHERE delivered_at IS NULL AND next_retry_at<=?
             ORDER BY next_retry_at, event_id LIMIT ?
         """, (db.utc_now(), limit))
         return [dict(row) for row in rows]
@@ -99,6 +122,8 @@ def mark_sent(key: str) -> None:
         )
 
 def mark_failed(key: str, attempts: int) -> None:
+    # Keep retrying with a capped backoff. A prolonged school network outage
+    # must not silently strand MAX replies after ten failed attempts.
     delay = min(2 ** min(attempts, 8) * 5, 900)
     next_time = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(timespec="seconds")
     with db.connect() as conn:

@@ -323,9 +323,13 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
             or not secret or not x_max_bot_api_secret
             or not hmac.compare_digest(secret, x_max_bot_api_secret)):
         raise HTTPException(403, "Webhook не настроен или неверный секрет")
-    raw = await request.body()
-    if len(raw) > 65536:
-        raise HTTPException(413, "Слишком большой webhook-запрос")
+    # Check size while streaming: request.body() would buffer an unbounded
+    # request before the size limit was applied.
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > 65536:
+            raise HTTPException(413, "Слишком большой webhook-запрос")
+        raw.extend(chunk)
     try:
         update = json.loads(raw)
         if not isinstance(update, dict):
@@ -339,6 +343,41 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
         # unacknowledged events after an interrupted processing attempt.
         raise HTTPException(503, "Событие ещё обрабатывается") from exc
     return {"ok": True}
+
+
+@app.get("/api/max/diagnostics", dependencies=[Depends(require_admin)])
+def max_diagnostics():
+    """Check local delivery backlog and MAX's actual webhook subscription."""
+    result = max_delivery.diagnostics()
+    mode = settings.get("max_mode", "polling")
+    token = settings.get("max_token", "") or ""
+    result.update({
+        "mode": mode,
+        "token_configured": bool(token),
+        "webhook_registered": None,
+        "webhook_check_error": False,
+    })
+    if mode != "webhook" or not token:
+        return result
+    url = settings.get("max_webhook_url", "")
+    try:
+        response = httpx.get(
+            "https://platform-api2.max.ru/subscriptions",
+            headers={"Authorization": token},
+            timeout=8.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        subscriptions = payload["subscriptions"]
+        if not isinstance(subscriptions, list):
+            raise ValueError("Invalid subscriptions response")
+        result["webhook_registered"] = any(
+            isinstance(item, dict) and item.get("url") == url
+            for item in subscriptions
+        )
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        result["webhook_check_error"] = True
+    return result
 
 
 @app.post("/api/settings/ingest-key", dependencies=[Depends(require_admin)])

@@ -163,3 +163,82 @@ def test_webhook_incomplete_event_returns_retryable_status(admin,monkeypatch):
     secret=settings.get("max_webhook_secret")
     resp=admin.post("/api/max/webhook",json=update,headers={"X-Max-Bot-Api-Secret":secret})
     assert resp.status_code==503
+
+
+
+def test_replies_are_not_abandoned_after_ten_failures(client):
+    """An extended network outage must not permanently strand a MAX reply."""
+    db.initialize()
+    max_delivery.enqueue(message("long-outage"))
+    with db.connect() as conn:
+        conn.execute("""
+            UPDATE max_outbox SET attempts=12,
+                next_retry_at='1970-01-01T00:00:00+00:00'
+        """)
+    pending=max_delivery.pending()
+    assert len(pending)==1
+    assert pending[0]["attempts"]==12
+    info=max_delivery.diagnostics()
+    assert info["undelivered"]==1
+    assert info["repeatedly_failed"]==1
+    assert info["ready"]==1
+    max_delivery.mark_failed(pending[0]["event_id"],12)
+    with db.connect() as conn:
+        row=conn.execute("SELECT attempts, delivered_at FROM max_outbox").fetchone()
+        assert row["attempts"]==13
+        assert row["delivered_at"] is None
+
+
+def test_max_diagnostics_requires_login(client):
+    assert client.get("/api/max/diagnostics").status_code==401
+
+
+def test_max_diagnostics_checks_remote_webhook_without_exposing_token(admin,monkeypatch):
+    from termokontur import app as app_module
+    token="test-max-token-diagnostics-123456789"
+    url="https://school.example/api/max/webhook"
+    settings.set_secret("max_token",token)
+    settings.set_max_webhook(url,"long-webhook-secret-1234567890")
+
+    class FakeResponse:
+        def __init__(self, urls):
+            self.urls=urls
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"subscriptions":[{"url":u} for u in self.urls]}
+
+    def active_get(*args,**kwargs):
+        assert args[0]=="https://platform-api2.max.ru/subscriptions"
+        assert kwargs["headers"]["Authorization"]==token
+        return FakeResponse([url])
+    monkeypatch.setattr(app_module.httpx,"get",active_get)
+    result=admin.get("/api/max/diagnostics")
+    assert result.status_code==200
+    assert result.json()["webhook_registered"] is True
+    assert "test-max-token" not in result.text
+    assert "long-webhook-secret" not in result.text
+
+    monkeypatch.setattr(app_module.httpx,"get",lambda *a,**kw:FakeResponse([]))
+    result=admin.get("/api/max/diagnostics").json()
+    assert result["webhook_registered"] is False
+    assert result["webhook_check_error"] is False
+
+    def unavailable(*args,**kwargs):
+        raise httpx.ConnectError("MAX unavailable")
+    monkeypatch.setattr(app_module.httpx,"get",unavailable)
+    result=admin.get("/api/max/diagnostics").json()
+    assert result["webhook_registered"] is None
+    assert result["webhook_check_error"] is True
+
+
+def test_max_webhook_stream_has_strict_size_limit(admin):
+    from termokontur import settings
+    settings.set_max_webhook(
+        "https://school.example/api/max/webhook", "long-webhook-secret-1234567890"
+    )
+    secret=settings.get("max_webhook_secret")
+    response=admin.post("/api/max/webhook", content=b"x"*65537,
+                        headers={"X-Max-Bot-Api-Secret":secret})
+    assert response.status_code==413
+    assert not max_delivery.pending()

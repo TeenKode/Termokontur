@@ -285,6 +285,7 @@ async function loadSettings() {
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
     await Promise.all([loadUpdateStatus(),loadBackups()]);
+    void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
 }
 $("general-settings-form").addEventListener("submit",async event=>{
@@ -572,6 +573,30 @@ $("switch-polling").addEventListener("click",async()=>{
     await loadSettings();
   }catch(error){toast(error.message,true);}
 });
+
+/* Live MAX connectivity and queue status: never expose stored credentials. */
+async function loadMaxDiagnostics() {
+  const target=$("max-diagnostics");
+  if(!settingsCache?.max_token_configured) {
+    target.textContent="MAX: токен не задан.";
+    return;
+  }
+  target.textContent="Проверка подключения MAX…";
+  try {
+    const state=await api("/api/max/diagnostics");
+    const lines=[];
+    if(state.mode==="webhook") {
+      if(state.webhook_check_error) lines.push("Не удалось проверить подписку MAX (проверьте подключение к API).");
+      else if(state.webhook_registered) lines.push("Webhook зарегистрирован в MAX.");
+      else lines.push("ВНИМАНИЕ: webhook отсутствует в MAX. Проверьте HTTPS-туннель и повторно зарегистрируйте подписку.");
+    } else lines.push("Используется тестовый Long Polling.");
+    lines.push("Неотправленных ответов: "+state.undelivered+".");
+    if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
+    if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");
+    target.textContent=lines.join(" ");
+  }catch(error) { target.textContent="Ошибка диагностики MAX: "+error.message; }
+}
+$("check-max-diagnostics").addEventListener("click",loadMaxDiagnostics);
 
 /* Keep live room status reasonably current without reloading the page. */
 setInterval(()=>{
