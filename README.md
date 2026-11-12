@@ -117,7 +117,7 @@ export TERMOKONTUR_DB=./data/termokontur.sqlite3
 export TERMOKONTUR_ADMIN_PASSWORD="$(python3 -c 'import secrets;print(secrets.token_urlsafe(20))')"
 export TERMOKONTUR_SECRET="$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')"
 uvicorn termokontur.app:app --host 127.0.0.1 --port 8092
-pytest -q
+python -m pytest -q
 ```
 
 MIT License. Текущие ограничения и планы: [docs/roadmap.md](docs/roadmap.md).
