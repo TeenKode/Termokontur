@@ -25,10 +25,10 @@ FAILED_LOGINS: dict[str, list[float]] = {}
 
 @app.on_event("startup")
 def startup():
-    if len(os.environ.get("TERMOKONTUR_ADMIN_PASSWORD", "")) < 12:
-        raise RuntimeError("Set TERMOKONTUR_ADMIN_PASSWORD (at least 12 characters)")
-    if len(os.environ.get("TERMOKONTUR_SECRET", "")) < 32:
-        raise RuntimeError("Set TERMOKONTUR_SECRET (at least 32 characters)")
+    if len(os.environ.get("TERMOKONTUR_ADMIN_PASSWORD", "")) < 12 or os.environ["TERMOKONTUR_ADMIN_PASSWORD"].startswith("REPLACE_WITH_"):
+        raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (at least 12 characters)")
+    if len(os.environ.get("TERMOKONTUR_SECRET", "")) < 32 or os.environ["TERMOKONTUR_SECRET"].startswith("REPLACE_WITH_"):
+        raise RuntimeError("Set a unique TERMOKONTUR_SECRET (at least 32 characters)")
     db.initialize()
 
 @app.middleware("http")
@@ -221,7 +221,7 @@ def export_csv(room_id: int | None = None):
 @app.post("/api/ingest")
 def ingest(payload: IngestIn, x_api_key: str | None = Header(default=None)):
     expected = os.getenv("TERMOKONTUR_INGEST_KEY", "")
-    if len(expected) < 20:
+    if len(expected) < 20 or expected.startswith("REPLACE_WITH_"):
         raise HTTPException(503, "Приём от датчиков не настроен")
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(401, "Неверный ключ")
