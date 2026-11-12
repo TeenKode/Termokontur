@@ -128,3 +128,38 @@ def test_unprocessed_event_is_retryable(client, monkeypatch):
         max_delivery.enqueue(message("retries"))
     monkeypatch.setattr(bot,"process_update",original)
     assert max_delivery.enqueue(message("retries"))
+
+
+def test_incomplete_event_is_not_acknowledged(client):
+    import hashlib
+    import pytest
+    update=message("incomplete-1")
+    key=hashlib.sha256(max_delivery.event_key(update).encode()).hexdigest()
+    with db.connect() as conn:
+        conn.execute("""INSERT INTO max_inbox(event_id,state,updated_at)
+                        VALUES(?,'processing',?)""",(key,db.utc_now()))
+    with pytest.raises(max_delivery.ProcessingPending):
+        max_delivery.enqueue(update)
+    with db.connect() as conn:
+        conn.execute("UPDATE max_inbox SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",(key,))
+    assert max_delivery.enqueue(update)
+    assert not max_delivery.enqueue(update)
+    assert len(max_delivery.pending())==1
+
+
+def test_webhook_incomplete_event_returns_retryable_status(admin,monkeypatch):
+    from termokontur import app as app_module
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"success":True}
+    monkeypatch.setattr(app_module.httpx,"post",lambda *args,**kwargs:Response())
+    admin.put("/api/settings/max-token",json={"value":"this-is-a-valid-token-123456789"})
+    admin.post("/api/settings/max-webhook",json={"url":"https://school.example/api/max/webhook"})
+    import hashlib
+    update=message("incomplete-2")
+    key=hashlib.sha256(max_delivery.event_key(update).encode()).hexdigest()
+    with db.connect() as conn:
+        conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'processing',?)",(key,db.utc_now()))
+    secret=settings.get("max_webhook_secret")
+    resp=admin.post("/api/max/webhook",json=update,headers={"X-Max-Bot-Api-Secret":secret})
+    assert resp.status_code==503

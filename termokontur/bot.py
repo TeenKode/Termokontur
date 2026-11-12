@@ -162,7 +162,7 @@ async def poll(token: str):
                     db.set_state("max_marker", str(next_marker))
                 await max_delivery.drain(client)
                 backoff = 2
-            except (httpx.HTTPError, ValueError, KeyError) as exc:
+            except (httpx.HTTPError, ValueError, KeyError, max_delivery.ProcessingPending) as exc:
                 logger.warning("MAX API temporarily unavailable: %s", exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 90)
