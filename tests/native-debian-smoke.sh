@@ -12,7 +12,7 @@ cat >/usr/local/bin/systemctl <<'SH'
 set -Eeuo pipefail
 start_web() {
   if [[ -f /run/termokontur-test.pid ]]; then
-    start-stop-daemon --stop --oknodo --pidfile /run/termokontur-test.pid >/dev/null 2>&1 || true
+    start-stop-daemon --stop --oknodo --retry TERM/5/KILL/2 --pidfile /run/termokontur-test.pid >/dev/null 2>&1 || true
     rm -f /run/termokontur-test.pid
   fi
   set -a
@@ -26,7 +26,7 @@ start_web() {
     -m uvicorn termokontur.app:app --host 127.0.0.1 --port 8092
 }
 stop_web() {
-  start-stop-daemon --stop --oknodo --pidfile /run/termokontur-test.pid >/dev/null 2>&1 || true
+  start-stop-daemon --stop --oknodo --retry TERM/5/KILL/2 --pidfile /run/termokontur-test.pid >/dev/null 2>&1 || true
   rm -f /run/termokontur-test.pid
 }
 verb="$1"
