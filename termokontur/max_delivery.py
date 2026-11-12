@@ -17,6 +17,11 @@ from . import db
 
 logger = logging.getLogger("termokontur.max_delivery")
 
+
+class ProcessingPending(Exception):
+    """Message is claimed by an active/incomplete worker; retry later."""
+
+
 def event_key(update: dict) -> str | None:
     kind = update.get("update_type")
     if kind == "message_created":
@@ -49,6 +54,12 @@ def enqueue(update: dict) -> bool:
         """, (key, now, stale))
         claimed = bool(cur.rowcount)
     if not claimed:
+        with db.connect() as conn:
+            row=conn.execute("SELECT state FROM max_inbox WHERE event_id=?", (key,)).fetchone()
+        if row and row["state"] == "processing":
+            # Do not ACK a webhook or advance a polling marker while another
+            # worker may have applied an effect but not persisted its reply.
+            raise ProcessingPending("MAX event is still being processed")
         return False
     try:
         from .bot import process_update

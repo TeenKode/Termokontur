@@ -332,7 +332,12 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
             raise ValueError()
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(422, "Некорректное событие MAX") from exc
-    max_delivery.enqueue(update)
+    try:
+        max_delivery.enqueue(update)
+    except max_delivery.ProcessingPending as exc:
+        # MAX retries deliveries with non-200 responses. This preserves
+        # unacknowledged events after an interrupted processing attempt.
+        raise HTTPException(503, "Событие ещё обрабатывается") from exc
     return {"ok": True}
 
 
