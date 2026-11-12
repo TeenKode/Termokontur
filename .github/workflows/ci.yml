@@ -21,4 +21,4 @@ jobs:
       - name: Compile
         run: python -m compileall -q termokontur
       - name: Test
-        run: pytest -q
+        run: python -m pytest -q
