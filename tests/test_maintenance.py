@@ -37,7 +37,7 @@ def test_backup_restore_invalidates_existing_sessions(admin):
     assert len(admin.get("/api/readings").json())==1
 
 
-def test_backup_upload_validation_and_delete(admin):
+def test_backup_upload_validation_and_delete(admin, monkeypatch):
     room(admin,"101")
     original=admin.post("/api/backups").json()
     snapshot=admin.get("/api/backups/"+original["name"]).content
@@ -47,7 +47,8 @@ def test_backup_upload_validation_and_delete(admin):
     assert imported.json()["name"] != original["name"]
     assert admin.post("/api/backups/import",content=b"invalid",
                       headers={"Content-Type":"application/octet-stream"}).status_code==422
-    assert admin.post("/api/backups/import",content=b"x"*100000001,
+    monkeypatch.setattr(maintenance,"MAX_IMPORT_BYTES",1024)
+    assert admin.post("/api/backups/import",content=b"x"*1025,
                       headers={"Content-Type":"application/octet-stream"}).status_code==413
     assert len(admin.get("/api/backups").json())==2
     assert admin.delete("/api/backups/"+imported.json()["name"]).status_code==200

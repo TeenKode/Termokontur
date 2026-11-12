@@ -411,7 +411,7 @@ def restore_backup(payload: RestoreBackupIn, response: Response):
         result = maintenance.restore(payload.name)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    except (OSError, Exception) as exc:
+    except Exception as exc:
         import logging
         logging.getLogger("termokontur.backups").exception("Restore failed")
         raise HTTPException(500, "Не удалось восстановить резервную копию") from exc

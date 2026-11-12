@@ -619,9 +619,10 @@ async function loadBackups(){
       download.addEventListener("click",()=>{window.location.href="/api/backups/"+encodeURIComponent(item.name);});
       const restore=el("button","btn secondary","Восстановить");
       restore.addEventListener("click",()=>{
+        $("restore-form").reset();
         $("restore-filename").value=item.name;
         $("restore-name").textContent=item.name;
-        $("restore-form").reset();$("restore-confirm").checked=false;
+        $("restore-confirm").checked=false;
         $("restore-dialog").showModal();
       });
       const remove=el("button","btn secondary","Удалить");
