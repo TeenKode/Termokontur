@@ -113,7 +113,16 @@ if TEST_BREAK_UPGRADE=1 /usr/local/sbin/termokontur-apply-update; then
   exit 1
 fi
 grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
-curl --silent --show-error --fail http://127.0.0.1:8092/health
+echo "Checking rollback health after process startup"
+recovered=0
+for i in $(seq 1 25); do
+  if curl --silent --show-error --fail http://127.0.0.1:8092/health; then
+    recovered=1
+    break
+  fi
+  sleep 1
+done
+test "$recovered" = 1
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
 echo "Debian 13 native install, update and rollback smoke succeeded."

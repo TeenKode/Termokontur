@@ -64,6 +64,7 @@ cleanup() {
       if [[ -d "$PREV" ]]; then mv "$PREV" "$APP"; fi
       restore_db || true
       systemctl start termokontur.service || true
+      if ! health; then echo "WARNING: rollback web health check failed" >&2; fi
       systemctl start termokontur-max.service || true
     fi
     record failed "Не удалось применить обновление. Проверьте журнал termokontur-update.service" || true
