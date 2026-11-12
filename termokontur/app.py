@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, daily
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
@@ -139,6 +139,10 @@ def logout(response: Response):
 @app.get("/api/dashboard", dependencies=[Depends(require_admin)])
 def dashboard():
     return db.dashboard(int(os.getenv("TERMOKONTUR_STALE_HOURS", "26")))
+
+@app.get("/api/daily", dependencies=[Depends(require_admin)])
+def daily_report():
+    return daily.summary()
 
 @app.get("/api/rooms", dependencies=[Depends(require_admin)])
 def rooms(include_inactive: bool = False):
