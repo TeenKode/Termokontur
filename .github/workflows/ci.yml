@@ -26,3 +26,11 @@ jobs:
           node --check termokontur/static/app.js
       - name: Test
         run: python -m pytest -q
+
+  native-debian:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native Debian 13 installer, update and rollback smoke
+        run: docker run --rm -v "$PWD:/src:ro" -w /src debian:trixie-slim bash tests/native-debian-smoke.sh

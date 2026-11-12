@@ -8,7 +8,7 @@ CONFIG_DIR="/etc/termokontur"
 CONFIG_FILE="${CONFIG_DIR}/termokontur.env"
 echo "[1/6] Installing Python system packages..."
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip ca-certificates git curl tzdata
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip ca-certificates git curl tzdata passwd util-linux
 echo "[2/6] Creating restricted service account..."
 if ! id termokontur >/dev/null 2>&1; then
   useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin termokontur
