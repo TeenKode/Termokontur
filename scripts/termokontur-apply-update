@@ -56,7 +56,7 @@ runuser -u termokontur -- /usr/bin/python3 -m venv "$STAGE/.venv"
 runuser -u termokontur -- "$STAGE/.venv/bin/python" -m pip install \
   --no-cache-dir -r "$STAGE/requirements.txt"
 runuser -u termokontur -- "$STAGE/.venv/bin/python" -m compileall -q "$STAGE/termokontur"
-chown -R root:root "$STAGE"
+chown -R root:root "$STAGE"\nchmod -R a+rX "$STAGE"\nchmod 0755 "$STAGE"
 
 systemctl stop termokontur-max.service 2>/dev/null || true
 systemctl stop termokontur.service
