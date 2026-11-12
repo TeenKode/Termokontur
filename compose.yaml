@@ -1,0 +1,30 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TERMOKONTUR_DB: /data/termokontur.sqlite3
+    ports:
+      - "8092:8092"
+    volumes:
+      - app-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  max-bot:
+    build: .
+    profiles: ["max"]
+    command: ["python", "-m", "termokontur.bot"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TERMOKONTUR_DB: /data/termokontur.sqlite3
+    volumes:
+      - app-data:/data
+
+volumes:
+  app-data:

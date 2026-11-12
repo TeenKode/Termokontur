@@ -1,0 +1,24 @@
+[Unit]
+Description=Termokontur MAX bot (experimental long polling)
+After=network-online.target termokontur.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=termokontur
+Group=termokontur
+WorkingDirectory=/opt/termokontur
+EnvironmentFile=/etc/termokontur/termokontur.env
+Environment=TERMOKONTUR_DB=/var/lib/termokontur/termokontur.sqlite3
+ExecStart=/opt/termokontur/.venv/bin/python -m termokontur.bot
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/termokontur
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
