@@ -116,7 +116,7 @@ class SettingsIn(BaseModel):
 
 class PasswordIn(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class SecretIn(BaseModel):
@@ -240,6 +240,24 @@ def daily_report():
 @app.get("/api/rooms", dependencies=[Depends(require_admin)])
 def rooms(include_inactive: bool = False):
     return db.room_list(active_only=not include_inactive)
+
+@app.get("/api/rooms/export.csv", dependencies=[Depends(require_admin)])
+def export_rooms(include_inactive: bool = True):
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(("ID", "Корпус", "Этаж", "Кабинет", "Тип помещения",
+                     "Мин. °C", "Макс. °C", "Состояние"))
+    for room in db.room_list(active_only=not include_inactive):
+        writer.writerow([room["id"], clean_cell(room["building"]),
+                         clean_cell(room["floor"]), clean_cell(room["name"]),
+                         clean_cell(room["kind"]), room["min_temp"],
+                         room["max_temp"], "Активен" if room["active"] else "Отключён"])
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="termokontur-rooms.csv"'},
+    )
+
 
 @app.post("/api/rooms", status_code=201, dependencies=[Depends(require_admin)])
 def create_room(payload: RoomIn):

@@ -1,6 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-let rooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer;
+let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer;
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -101,17 +101,37 @@ function renderOverview() {
 }
 function renderRooms(){
   const tbody=$("rooms-table");tbody.replaceChildren();
-  for(const room of rooms) {
-    const row=el("tr");cell(row,room.name);cell(row,room.building);
+  const search=$("rooms-search").value.trim().toLocaleLowerCase("ru");
+  const showInactive=$("show-inactive").checked;
+  const matching=allRooms.filter(r=>(showInactive || r.active) &&
+    [r.name,r.building,r.floor,r.kind].some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
+  for(const room of matching) {
+    const row=el("tr", room.active ? "" : "archived-room");
+    cell(row,room.name);
+    const building=cell(row,room.building);
+    if(!room.active)building.append(el("span","archived-label","Отключён"));
     cell(row,room.floor||"—");cell(row,room.kind);
     cell(row,room.min_temp+"–"+room.max_temp+" °C");
     const actions=cell(row,"");
-    const edit=el("button","","Изменить"),pair=el("button","","Код MAX"),disable=el("button","","Отключить");
-    edit.addEventListener("click",()=>openRoom(room));pair.addEventListener("click",()=>pairing(room));
-    disable.addEventListener("click",()=>disableRoom(room));
-    actions.append(edit,pair,disable);tbody.append(row);
+    const duplicate=el("button","","Копировать");
+    duplicate.title="Создать новый кабинет с теми же параметрами";
+    duplicate.addEventListener("click",()=>openRoom(room,true));
+    actions.append(duplicate);
+    if(room.active){
+      const edit=el("button","","Изменить"),pair=el("button","","Код MAX"),disable=el("button","","Отключить");
+      edit.addEventListener("click",()=>openRoom(room));
+      pair.addEventListener("click",()=>pairing(room));
+      disable.addEventListener("click",()=>disableRoom(room));
+      actions.prepend(edit);actions.append(pair,disable);
+    }else{
+      const restore=el("button","","Восстановить");
+      restore.addEventListener("click",()=>restoreRoom(room));
+      actions.append(restore);
+    }
+    tbody.append(row);
   }
-  show("rooms-empty",rooms.length===0);
+  show("rooms-empty",matching.length===0);
+  if(!matching.length)$("rooms-empty").textContent=allRooms.length?"По заданному фильтру помещений нет.":"Добавьте первое помещение.";
 }
 function renderReadings(){
   const tbody=$("readings-table");tbody.replaceChildren();
@@ -156,8 +176,8 @@ async function refresh() {
   try {
     const selected=$("reading-filter").value;
     const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
-    const [dash,allRooms,items,day]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily")]);
-    overview=dash.rooms;rooms=allRooms;readings=items;daily=day;
+    const [dash,activeRooms,items,day,all]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily"),api("/api/rooms?include_inactive=true")]);
+    overview=dash.rooms;rooms=activeRooms;allRooms=all;readings=items;daily=day;
     renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();
     $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
   } catch(error) {toast(error.message,true);}
@@ -166,10 +186,10 @@ async function refreshReadings(){
   try{const room=$("reading-filter").value;readings=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));renderReadings();}
   catch(error){toast(error.message,true);}
 }
-function openRoom(room=null){
+function openRoom(room=null, duplicate=false){
   $("room-form").reset();
-  $("room-dialog-title").textContent=room?"Изменить помещение":"Новое помещение";
-  $("edit-room-id").value=room?room.id:"";
+  $("room-dialog-title").textContent=duplicate?"Копировать помещение":room?"Изменить помещение":"Новое помещение";
+  $("edit-room-id").value=room && !duplicate ? room.id : "";
   if(room){for(const [name,value] of [["building",room.building],["name",room.name],["floor",room.floor],["kind",room.kind],["min",room.min_temp],["max",room.max_temp]]) $("room-"+name).value=value;}
   $("room-dialog").showModal();
 }
@@ -179,6 +199,12 @@ async function pairing(room){
     $("pairing-code").textContent=reply.code;
     $("pairing-dialog").showModal();
   } catch(error){toast(error.message,true);}
+}
+async function restoreRoom(room){
+  try{
+    await api("/api/rooms/"+room.id,"PATCH",{active:true});
+    await refresh();toast("Помещение восстановлено, история измерений сохранена");
+  }catch(error){toast(error.message,true);}
 }
 async function disableRoom(room) {
   if(!confirm("Отключить «"+room.name+"»? История измерений сохранится."))return;
@@ -199,6 +225,9 @@ $("reading-filter").addEventListener("change",refreshReadings);
 $("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-room").addEventListener("click",()=>openRoom());
+$("rooms-search").addEventListener("input",renderRooms);
+$("show-inactive").addEventListener("change",renderRooms);
+$("export-rooms").addEventListener("click",()=>{window.location.href="/api/rooms/export.csv";});
 $("export-csv").addEventListener("click",()=>{window.location.href="/api/export.csv";});
 $("close-pairing").addEventListener("click",()=>$("pairing-dialog").close());
 $("copy-pairing").addEventListener("click",async()=>{
@@ -285,6 +314,38 @@ $("copy-ingest").addEventListener("click",async()=>{
   try{await navigator.clipboard.writeText($("ingest-value").textContent);toast("Ключ скопирован");}
   catch{toast("Скопируйте ключ вручную",true);}
 });
+// Password visibility is client-side only; password values are not logged.
+for(const button of document.querySelectorAll("[data-password-target]")){
+  button.addEventListener("click",()=>{
+    const field=$(button.dataset.passwordTarget);
+    if(!field)return;
+    const visible=field.type==="password";
+    field.type=visible?"text":"password";
+    button.textContent=visible?"Скрыть":"Показать";
+    button.setAttribute("aria-pressed",String(visible));
+  });
+}
+function passwordFeedback(){
+  const value=$("new-password").value,confirmValue=$("confirm-password").value;
+  const hint=$("password-feedback");
+  hint.classList.remove("valid","invalid");
+  if(!value){hint.textContent="Минимум 8 символов. Спецсимволы не обязательны.";return;}
+  if(value.length<8){
+    hint.textContent="Недостаточная длина: "+value.length+" из 8 символов";
+    hint.classList.add("invalid");
+  }else if(confirmValue && value!==confirmValue){
+    hint.textContent="Пароли не совпадают";
+    hint.classList.add("invalid");
+  }else if(confirmValue){
+    hint.textContent="Пароль подходит, значения совпадают";
+    hint.classList.add("valid");
+  }else{
+    hint.textContent="Длина подходит. Повторите пароль ниже.";
+    hint.classList.add("valid");
+  }
+}
+$("new-password").addEventListener("input",passwordFeedback);
+$("confirm-password").addEventListener("input",passwordFeedback);
 $("password-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
   const old=$("old-password").value,pass=$("new-password").value;
@@ -292,6 +353,7 @@ $("password-settings-form").addEventListener("submit",async event=>{
   try{
     await api("/api/settings/password","POST",{current_password:old,new_password:pass});
     $("password-settings-form").reset();
+    passwordFeedback();
     enterLogin();
     $("login-error").textContent="Пароль изменён. Войдите с новым паролем.";
   }catch(error){toast(error.message,true);}

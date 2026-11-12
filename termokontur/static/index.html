@@ -16,7 +16,7 @@
       <p>Единая панель мониторинга помещений и журнал измерений.</p>
       <form id="login-form">
         <label for="password">Пароль администратора</label>
-        <input id="password" type="password" autocomplete="current-password" required autofocus>
+        <div class="password-field"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
         <button type="submit" class="btn primary full">Войти в систему</button>
         <div id="login-error" class="form-error" role="alert"></div>
       </form>
@@ -85,6 +85,7 @@
       <section id="view-rooms" class="view" hidden>
         <div class="heading"><div><h1>Управление помещениями</h1><p>Корпуса, нормативы и привязка сотрудников к MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
         <div class="panel">
+          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Поиск по названию, этажу или корпусу" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Экспорт кабинетов CSV</button></div>
           <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
@@ -122,11 +123,12 @@
           <article class="panel settings-panel">
             <h2>Безопасность</h2>
             <form id="password-settings-form" class="settings-form">
-              <label>Текущий пароль<input id="old-password" type="password" autocomplete="current-password" required></label>
-              <label>Новый пароль (не менее 12 символов)<input id="new-password" type="password" minlength="12" autocomplete="new-password" required></label>
-              <label>Повтор нового пароля<input id="confirm-password" type="password" minlength="12" autocomplete="new-password" required></label>
+              <label>Текущий пароль<div class="password-field"><input id="old-password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-password-target="old-password" aria-pressed="false" aria-label="Показать текущий пароль">Показать</button></div></label>
+              <label>Новый пароль (от 8 символов)<div class="password-field"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="new-password" aria-pressed="false" aria-label="Показать новый пароль">Показать</button></div></label>
+              <label>Повтор нового пароля<div class="password-field"><input id="confirm-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="confirm-password" aria-pressed="false" aria-label="Показать подтверждение пароля">Показать</button></div></label>
+              <p class="password-hint" id="password-feedback" role="status" aria-live="polite">Можно использовать только буквы или цифры — спецсимволы не обязательны.</p>
               <button type="submit" class="btn primary">Изменить пароль</button>
-              <p class="hint">После смены пароля все сеансы входа будут завершены.</p>
+              <p class="hint">От 8 до 256 символов. После смены пароля все сеансы входа будут завершены.</p>
             </form>
           </article>
           <article class="panel settings-panel">

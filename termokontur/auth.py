@@ -21,8 +21,8 @@ def bootstrap() -> None:
         if conn.execute("SELECT 1 FROM admin_account WHERE id=1").fetchone():
             return
         initial = os.environ.get("TERMOKONTUR_ADMIN_PASSWORD", "")
-        if len(initial) < 12 or initial.startswith("REPLACE_WITH_"):
-            raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (12+ chars) for first setup")
+        if len(initial) < 8 or initial.startswith("REPLACE_WITH_"):
+            raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (8+ chars) for first setup")
         salt = secrets.token_bytes(24)
         conn.execute(
             """INSERT INTO admin_account(id, salt, password_hash, session_epoch)
@@ -44,8 +44,8 @@ def session_epoch() -> int:
     return row["session_epoch"] if row else 0
 
 def change_password(old: str, new: str) -> bool:
-    if len(new) < 12 or len(new) > 256:
-        raise ValueError("Новый пароль: от 12 до 256 символов")
+    if len(new) < 8 or len(new) > 256:
+        raise ValueError("Новый пароль: от 8 до 256 символов")
     if new == old:
         raise ValueError("Укажите другой пароль")
     with db.connect() as conn:
