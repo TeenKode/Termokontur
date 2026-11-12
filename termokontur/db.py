@@ -278,6 +278,9 @@ def issue_code(room_id: int, validity_minutes: int = 30) -> str:
 def bind_code(user_id: str, code: str) -> dict | None:
     digest = hashlib.sha256(code.strip().upper().encode()).hexdigest()
     with connect() as conn:
+        # A write transaction ensures a code can be consumed by exactly one user.
+        # BEGIN IMMEDIATE serializes simultaneous bind attempts before lookup.
+        conn.execute("BEGIN IMMEDIATE")
         found = conn.execute(
             """SELECT p.room_id, r.building, r.name FROM pairing_codes p
                JOIN rooms r ON r.id=p.room_id
@@ -286,7 +289,9 @@ def bind_code(user_id: str, code: str) -> dict | None:
         ).fetchone()
         if not found:
             return None
-        conn.execute("DELETE FROM pairing_codes WHERE digest=?", (digest,))
+        deleted = conn.execute("DELETE FROM pairing_codes WHERE digest=?", (digest,))
+        if deleted.rowcount != 1:
+            return None
         conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)",
                      (str(user_id), found["room_id"]))
         return dict(found)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import hmac
 import io
 import os
@@ -389,7 +390,11 @@ def ingest(payload: IngestIn, x_api_key: str | None = Header(default=None)):
         raise HTTPException(503, "Приём от датчиков не настроен")
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(401, "Неверный ключ")
-    identifier = "ha:" + payload.event_id if payload.event_id else None
+    identifier = None
+    if payload.event_id:
+        # Event IDs are only unique within one sensor; namespace by room+device.
+        identity = f"{payload.room_id}\\0{payload.device}\\0{payload.event_id}"
+        identifier = "ha:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
     try:
         reading, inserted = db.add_reading(payload.room_id, payload.value,
                                            "ha", payload.device, identifier)

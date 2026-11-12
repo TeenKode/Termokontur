@@ -190,3 +190,15 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert (db.db_path().parent/"update-request").read_text().strip() == "main"
     assert admin.post("/api/update/request", json={}).status_code == 409
     assert admin.get("/api/update/status").json()["state"] == "queued"
+
+def test_ha_event_ids_are_namespaced_by_sensor_and_room(admin):
+    first=admin.post("/api/rooms",json=room_payload(name="101")).json()
+    second=admin.post("/api/rooms",json=room_payload(name="102")).json()
+    key="this-is-a-long-device-ingest-key-1234567890"
+    headers={"X-Api-Key":key}
+    base={"room_id":first["id"],"value":20.5,"device":"sensor.a","event_id":"2026-11-12"}
+    assert admin.post("/api/ingest",json=base,headers=headers).json()["inserted"]
+    assert not admin.post("/api/ingest",json=base,headers=headers).json()["inserted"]
+    assert admin.post("/api/ingest",json={**base,"device":"sensor.b"},headers=headers).json()["inserted"]
+    assert admin.post("/api/ingest",json={**base,"room_id":second["id"]},headers=headers).json()["inserted"]
+    assert len(admin.get("/api/readings").json())==3

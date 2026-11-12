@@ -13,4 +13,4 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=full
-ReadWritePaths=/opt /var/lib/termokontur
+ReadWritePaths=/opt /var/lib/termokontur /etc/systemd/system /usr/local/sbin
