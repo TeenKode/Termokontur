@@ -54,3 +54,15 @@
 .max-codes-room-text strong{font-size:13px;color:#24374f;overflow-wrap:anywhere}
 .max-codes-room-text small{font-size:11px;color:#728297;overflow-wrap:anywhere}
 .max-codes-empty{padding:22px;text-align:center;color:#748197;font-size:13px}
+
+/* Maintenance and responsive backups. */
+.backup-list{display:grid;gap:8px;max-height:330px;overflow:auto}
+.backup-entry{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px;border:1px solid #e2e8ef;border-radius:9px}
+.backup-entry-info{min-width:0;display:grid;gap:6px}
+.backup-entry-info strong{font-size:11px;color:#3b4a64;overflow-wrap:anywhere}
+.backup-entry-info small{font-size:11px;color:#8592a4}
+.backup-entry-actions{display:flex;gap:5px;flex-wrap:wrap}
+.backup-entry-actions button{padding:7px 10px;font-size:11px}
+@media(max-width:600px){.backup-entry{align-items:flex-start;flex-direction:column}.backup-entry-actions{width:100%}.backup-entry-actions button{flex:1}}
+#restore-dialog{max-height:90vh;overflow-y:auto}
+#max-codes-dialog,#bulk-dialog,#room-dialog{max-height:92vh;overflow-y:auto}
