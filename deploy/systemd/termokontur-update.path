@@ -1,0 +1,10 @@
+[Unit]
+Description=Termokontur automatic update request watcher
+After=local-fs.target
+
+[Path]
+PathExists=/var/lib/termokontur/update-request
+Unit=termokontur-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Root-owned fixed-action updater. Never execute caller-supplied shell code.
+set -Eeuo pipefail
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_TERMINAL_PROMPT=0
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+APP=/opt/termokontur
+DATA=/var/lib/termokontur
+PREV=/opt/termokontur-previous
+STAGE=
+SWAPPED=0
+
+record() {
+  local state="$1" message="$2"
+  runuser -u termokontur -- /usr/bin/python3 -c '
+import json,sys
+from pathlib import Path
+p=Path("/var/lib/termokontur/update-status.json")
+p.write_text(json.dumps({"state":sys.argv[1],"message":sys.argv[2]},ensure_ascii=False),encoding="utf-8")
+p.chmod(0o600)
+' "$state" "$message"
+}
+cleanup() {
+  local result=$?
+  trap - EXIT
+  if [ "$result" -ne 0 ]; then
+    if [ "$SWAPPED" -eq 1 ] && [ -d "$PREV" ]; then
+      systemctl stop termokontur.service 2>/dev/null || true
+      systemctl stop termokontur-max.service 2>/dev/null || true
+      if [ -d "$APP" ]; then mv "$APP" /opt/termokontur-failed-$$; fi
+      mv "$PREV" "$APP"
+      systemctl start termokontur.service || true
+      systemctl start termokontur-max.service || true
+    fi
+    record failed "Обновление не удалось. Проверьте journalctl -u termokontur-update.service" || true
+  fi
+  if [ -n "$STAGE" ] && [ -d "$STAGE" ]; then rm -rf -- "$STAGE"; fi
+  exit "$result"
+}
+trap cleanup EXIT
+
+if [ ! -f "$DATA/update-request" ]; then exit 0; fi
+# The update-request and update-status paths belong to the unprivileged
+# service account; do not open/write those files as root.
+runuser -u termokontur -- rm -f -- "$DATA/update-request"
+record installing "Скачивание и подготовка новой версии..."
+STAGE=$(mktemp -d /opt/termokontur-stage.XXXXXXXX)
+chown termokontur:termokontur "$STAGE"
+runuser -u termokontur -- git clone --depth 1 --single-branch --branch main \
+  https://github.com/TeenKode/Termokontur.git "$STAGE"
+REVISION=$(git -C "$STAGE" rev-parse HEAD)
+case "$REVISION" in
+  *[!0-9a-f]*|"") echo "Invalid commit SHA" >&2; exit 1 ;;
+esac
+runuser -u termokontur -- /usr/bin/python3 -m venv "$STAGE/.venv"
+runuser -u termokontur -- "$STAGE/.venv/bin/python" -m pip install \
+  --no-cache-dir -r "$STAGE/requirements.txt"
+runuser -u termokontur -- "$STAGE/.venv/bin/python" -m compileall -q "$STAGE/termokontur"
+chown -R root:root "$STAGE"\nchmod -R a+rX "$STAGE"\nchmod 0755 "$STAGE"
+
+systemctl stop termokontur-max.service 2>/dev/null || true
+systemctl stop termokontur.service
+if [ -d "$PREV" ]; then rm -rf -- "$PREV"; fi
+mv "$APP" "$PREV"
+SWAPPED=1
+mv "$STAGE" "$APP"
+STAGE=
+systemctl start termokontur.service
+healthy=0
+for attempt in $(seq 1 25); do
+  if curl --fail --silent --max-time 2 http://127.0.0.1:8092/health >/dev/null; then
+    healthy=1
+    break
+  fi
+  sleep 1
+done
+if [ "$healthy" != 1 ]; then
+  echo "Updated service did not become healthy" >&2
+  exit 1
+fi
+systemctl start termokontur-max.service || true
+runuser -u termokontur -- /usr/bin/python3 -c '
+from pathlib import Path
+Path("/var/lib/termokontur/installed-revision").write_text(__import__("sys").argv[1]+"\n",encoding="ascii")
+' "$REVISION"
+record success "Обновление успешно установлено. Новая версия работает."
+SWAPPED=0
+exit 0

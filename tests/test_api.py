@@ -60,7 +60,8 @@ def test_pairing_and_disabled_room(admin):
 
 def test_example_device_key_is_disabled(admin, monkeypatch):
     rid = admin.post("/api/rooms", json=room_payload()).json()["id"]
-    monkeypatch.setenv("TERMOKONTUR_INGEST_KEY", "REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY")
+    from termokontur import settings
+    settings.set_secret("ingest_key", None)
     response = admin.post("/api/ingest",
                           json={"room_id":rid,"value":21},
                           headers={"X-Api-Key":"REPLACE_WITH_A_LONG_RANDOM_DEVICE_KEY"})
@@ -78,7 +79,8 @@ def test_example_admin_secrets_cannot_start(monkeypatch, tmp_path):
             pass
 
 def test_daily_requires_auth_and_counts(admin, client, monkeypatch):
-    monkeypatch.setenv("TERMOKONTUR_TZ", "UTC")
+    from termokontur import settings
+    settings.update({"timezone": "UTC"})
     assert client.get("/api/daily").status_code == 200  # same authenticated client
     room_id = admin.post("/api/rooms", json=room_payload()).json()["id"]
     before = admin.get("/api/daily").json()
@@ -87,3 +89,104 @@ def test_daily_requires_auth_and_counts(admin, client, monkeypatch):
     admin.post("/api/readings", json={"room_id":room_id,"value":17.5})
     after = admin.get("/api/daily").json()
     assert after["counts"] == {"measured":1,"missing":0,"out_of_range":1}
+
+def test_change_password_and_revoke_sessions(admin):
+    other_cookie = admin.cookies.get("tk_session")
+    assert admin.post("/api/settings/password",json={
+        "current_password":"wrong",
+        "new_password":"replacement-password-1234"}).status_code == 403
+    assert admin.post("/api/settings/password",json={
+        "current_password":"this-is-a-test-admin-password",
+        "new_password":"replacement-password-1234"}).status_code == 200
+    assert admin.get("/api/rooms").status_code == 401
+    assert admin.post("/api/login",json={"password":"this-is-a-test-admin-password"}).status_code == 401
+    assert admin.post("/api/login",json={"password":"replacement-password-1234"}).status_code == 200
+    from termokontur.app import app
+    from fastapi.testclient import TestClient
+    with TestClient(app) as second:
+        second.cookies.set("tk_session",other_cookie)
+        assert second.get("/api/rooms").status_code == 401
+
+
+def test_manage_runtime_settings_and_secrets(admin, monkeypatch):
+    cfg = admin.get("/api/settings")
+    assert cfg.status_code == 200
+    assert "ingest_key" not in cfg.json()
+    assert "this-is-a-long-device-ingest-key-1234567890" not in cfg.text
+    payload = cfg.json()
+    payload = {k:v for k,v in payload.items() if not k.endswith("_configured")}
+    payload.update({"organization_name":"ЦО Открытие",
+                    "timezone":"Asia/Vladivostok","stale_hours":12,
+                    "reminders_enabled":True, "reminder_time":"09:15",
+                    "reminder_days":[0,1,2,3,4],"reminder_window_minutes":60})
+    response=admin.put("/api/settings",json=payload)
+    assert response.status_code == 200,response.text
+    assert response.json()["organization_name"] == "ЦО Открытие"
+    payload["timezone"]="Invalid/Foo"
+    assert admin.put("/api/settings",json=payload).status_code == 422
+    from termokontur import settings
+    settings.set_secret("max_token","a-valid-token-very-long-12345")
+    assert admin.get("/api/settings").json()["max_token_configured"]
+    assert "a-valid-token-very-long-12345" not in admin.get("/api/settings").text
+    admin.put("/api/settings/max-token",json={"value":None})
+    assert not admin.get("/api/settings").json()["max_token_configured"]
+    settings.bootstrap()
+    assert not admin.get("/api/settings").json()["max_token_configured"]
+
+
+def test_bulk_add_rooms(admin):
+    payload={"building":"Старшая школа","floor":"2","kind":"Кабинет",
+             "min_temp":18,"max_temp":24,"names":["Кабинет 201","Кабинет 202","Кабинет 203"]}
+    resp=admin.post("/api/rooms/bulk",json=payload)
+    assert resp.status_code==200,resp.text
+    assert resp.json()["created"]==3
+    second=admin.post("/api/rooms/bulk",json=payload).json()
+    assert second["created"]==0 and len(second["skipped"])==3
+    assert len(admin.get("/api/rooms").json())==3
+    payload["names"]=["Повтор","Повтор"]
+    assert admin.post("/api/rooms/bulk",json=payload).status_code==422
+    payload["names"]=[""]
+    assert admin.post("/api/rooms/bulk",json=payload).status_code==422
+
+
+def test_rotate_ingest_key(admin):
+    room=admin.post("/api/rooms",json=room_payload()).json()
+    old="this-is-a-long-device-ingest-key-1234567890"
+    rotated=admin.post("/api/settings/ingest-key").json()["key"]
+    assert len(rotated)>20 and rotated!=old
+    payload={"room_id":room["id"],"value":21}
+    assert admin.post("/api/ingest",json=payload,headers={"X-Api-Key":old}).status_code==401
+    assert admin.post("/api/ingest",json=payload,headers={"X-Api-Key":rotated}).status_code==200
+
+
+def test_update_endpoint_is_protected_and_unsupported(admin):
+    assert admin.get("/api/update/status").status_code==200
+    assert not admin.get("/api/update/status").json()["supported"]
+    assert admin.post("/api/update/request",json={}).status_code==409
+
+
+def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_path):
+    from termokontur import updates, db
+    systemd_path = tmp_path / "termokontur-update.path"
+    systemd_path.write_text("[Path]\nPathExists=/var/lib/termokontur/update-request\n")
+    monkeypatch.setattr(updates, "SYSTEMD_PATH", systemd_path)
+    (db.db_path().parent / "installed-revision").write_text("a"*40+"\n")
+    current = admin.get("/api/update/status").json()
+    assert current["supported"]
+    assert current["installed_revision"] == "a"*40
+
+    class FakeGitHubResponse:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"sha": "b"*40}
+
+    monkeypatch.setattr(updates.httpx, "get", lambda *a, **kw: FakeGitHubResponse())
+    checked = admin.get("/api/update/check")
+    assert checked.status_code == 200
+    assert checked.json()["available"]
+    first = admin.post("/api/update/request", json={})
+    assert first.status_code == 200
+    assert (db.db_path().parent/"update-request").read_text().strip() == "main"
+    assert admin.post("/api/update/request", json={}).status_code == 409
+    assert admin.get("/api/update/status").json()["state"] == "queued"

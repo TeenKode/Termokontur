@@ -10,11 +10,11 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db
+from . import db, settings
 
 
 def local_zone() -> ZoneInfo:
-    name = os.getenv("TERMOKONTUR_TZ", "UTC")
+    name = settings.get("timezone", "UTC")
     return ZoneInfo(name)
 
 
@@ -61,7 +61,7 @@ def summary(now: datetime | None = None) -> dict:
                 room["daily_status"] = "normal"
     return {
         "local_date": day.isoformat(),
-        "timezone": os.getenv("TERMOKONTUR_TZ", "UTC"),
+        "timezone": settings.get("timezone", "UTC"),
         "counts": counts,
         "rooms": rooms,
     }
@@ -85,18 +85,18 @@ def pending_users(snapshot: dict) -> dict[str, list[dict]]:
 
 
 def reminders_due(now: datetime | None = None) -> bool:
-    if os.getenv("TERMOKONTUR_REMINDERS_ENABLED", "0") != "1":
+    if settings.get("reminders_enabled", "0") != "1":
         return False
     zone = local_zone()
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     local = instant.astimezone(zone)
-    weekdays = os.getenv("TERMOKONTUR_REMINDER_DAYS", "0,1,2,3,4")
+    weekdays = settings.get("reminder_days", "0,1,2,3,4")
     try:
         allowed = {int(value.strip()) for value in weekdays.split(",")}
-        hour, minute = map(int, os.getenv("TERMOKONTUR_REMINDER_TIME", "09:00").split(":"))
-        window = int(os.getenv("TERMOKONTUR_REMINDER_WINDOW_MINUTES", "120"))
+        hour, minute = map(int, settings.get("reminder_time", "09:00").split(":"))
+        window = int(settings.get("reminder_window_minutes", "120"))
     except ValueError as exc:
         raise ValueError("Invalid reminder settings") from exc
     if not all(0 <= value <= 6 for value in allowed) or not (0 <= hour <= 23 and 0 <= minute <= 59) or not (1 <= window <= 240):

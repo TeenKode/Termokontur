@@ -20,5 +20,9 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Compile
         run: python -m compileall -q termokontur
+      - name: Check installers and browser script
+        run: |
+          bash -n scripts/install-debian.sh scripts/termokontur-apply-update
+          node --check termokontur/static/app.js
       - name: Test
         run: python -m pytest -q

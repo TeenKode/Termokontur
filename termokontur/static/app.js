@@ -1,6 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-let rooms = [], overview = [], readings = [], daily = null, selectedTab = "overview", toastTimer;
+let rooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer;
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -33,7 +33,7 @@ function enterLogin() {
 function enterApp() {show("login-screen",false); show("app-root",true);}
 function setTab(name) {
   selectedTab = name;
-  for(const view of ["overview","rooms","readings"]) {
+  for(const view of ["overview","rooms","readings","settings"]) {
     show("view-"+view,view===name);
     document.querySelector('[data-tab="'+view+'"]').classList.toggle("active",view===name);
   }
@@ -192,7 +192,7 @@ $("login-form").addEventListener("submit",async event=>{
 });
 $("logout").addEventListener("click",async()=>{try{await api("/api/logout","POST");}catch{}enterLogin();});
 $("refresh").addEventListener("click",refresh);
-for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{setTab(nav.dataset.tab);if(nav.dataset.tab==="readings")refreshReadings();});
+for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{setTab(nav.dataset.tab);if(nav.dataset.tab==="readings")refreshReadings();if(nav.dataset.tab==="settings")loadSettings();});
 $("search-rooms").addEventListener("input",renderOverview);
 $("building-filter").addEventListener("change",renderOverview);
 $("reading-filter").addEventListener("change",refreshReadings);
@@ -226,3 +226,146 @@ $("reading-form").addEventListener("submit",async event=>{
 });
 window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();});
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp();await refresh();}else enterLogin();}catch{enterLogin();}})();
+
+/* Settings are persisted on the server, not stored in browser or config files. */
+async function loadSettings() {
+  try {
+    settingsCache=await api("/api/settings");
+    $("setting-organization").value=settingsCache.organization_name;
+    $("setting-timezone").value=settingsCache.timezone;
+    $("setting-stale").value=settingsCache.stale_hours;
+    $("setting-enabled").checked=settingsCache.reminders_enabled;
+    $("setting-time").value=settingsCache.reminder_time;
+    $("setting-window").value=settingsCache.reminder_window_minutes;
+    for(const checkbox of document.querySelectorAll('[name="remind-day"]'))
+      checkbox.checked=settingsCache.reminder_days.includes(Number(checkbox.value));
+    $("max-status").textContent=settingsCache.max_token_configured?"Токен MAX настроен":"Токен MAX отсутствует";
+    $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
+    document.title=settingsCache.organization_name+" — Термоконтур";
+    await loadUpdateStatus();
+  } catch(error){toast(error.message,true);}
+}
+$("general-settings-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  try{
+    const data={
+      organization_name:$("setting-organization").value,
+      timezone:$("setting-timezone").value,
+      stale_hours:Number($("setting-stale").value),
+      reminders_enabled:$("setting-enabled").checked,
+      reminder_time:$("setting-time").value,
+      reminder_days:[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value)),
+      reminder_window_minutes:Number($("setting-window").value)
+    };
+    settingsCache=await api("/api/settings","PUT",data);
+    toast("Настройки сохранены");await refresh();
+  }catch(error){toast(error.message,true);}
+});
+$("max-settings-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const value=$("setting-max-token").value.trim();
+  if(!value){toast("Введите токен",true);return;}
+  try{await api("/api/settings/max-token","PUT",{value});$("setting-max-token").value="";await loadSettings();toast("Токен сохранён");}
+  catch(error){toast(error.message,true);}
+});
+$("clear-max-token").addEventListener("click",async()=>{
+  if(!confirm("Отключить MAX-бота? Привязки кабинетов останутся."))return;
+  try{await api("/api/settings/max-token","PUT",{value:null});await loadSettings();toast("MAX отключён");}
+  catch(error){toast(error.message,true);}
+});
+$("rotate-ingest").addEventListener("click",async()=>{
+  if(!confirm("Заменить ключ? Старый перестанет работать во всех датчиках."))return;
+  try{
+    const r=await api("/api/settings/ingest-key","POST");
+    $("ingest-value").textContent=r.key;show("ingest-reveal",true);
+    await loadSettings();toast("Новый ключ создан. Скопируйте его.");
+  }catch(error){toast(error.message,true);}
+});
+$("copy-ingest").addEventListener("click",async()=>{
+  try{await navigator.clipboard.writeText($("ingest-value").textContent);toast("Ключ скопирован");}
+  catch{toast("Скопируйте ключ вручную",true);}
+});
+$("password-settings-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const old=$("old-password").value,pass=$("new-password").value;
+  if(pass!==$("confirm-password").value){toast("Новые пароли не совпадают",true);return;}
+  try{
+    await api("/api/settings/password","POST",{current_password:old,new_password:pass});
+    $("password-settings-form").reset();
+    enterLogin();
+    $("login-error").textContent="Пароль изменён. Войдите с новым паролем.";
+  }catch(error){toast(error.message,true);}
+});
+/* Paste ranges (101-120), commas, lines or spreadsheet cells. */
+function bulkNames(){
+  const prefix=$("bulk-prefix").value;
+  const tokens=$("bulk-list").value.split(/[\n\r\t,;]+/).map(x=>x.trim()).filter(Boolean);
+  const result=[];
+  for(const raw of tokens){
+    const range=raw.match(/^(.*?)(\d{1,5})\s*[-–]\s*(\d{1,5})$/);
+    if(range){
+      const start=Number(range[2]),end=Number(range[3]);
+      if(end<start||end-start>249)throw Error("Неверный диапазон: "+raw);
+      for(let i=start;i<=end;i++)result.push((range[1].trim()?range[1]:prefix)+String(i).padStart(range[2].length,"0"));
+    } else result.push(/^\d{1,5}$/.test(raw)?prefix+raw:raw);
+    if(result.length>250)throw Error("Максимум 250 помещений за один раз");
+  }
+  if(new Set(result).size!==result.length)throw Error("Есть повторяющиеся названия");
+  if(result.some(x=>x.length>100))throw Error("Название слишком длинное");
+  return result;
+}
+function previewBulk(){
+  try{
+    const names=bulkNames();
+    $("bulk-preview").textContent=names.length?"Будет добавлено: "+names.length+" · "+names.slice(0,5).join(", ")+(names.length>5?"…":""):"Укажите кабинеты";
+    $("bulk-preview").classList.remove("invalid");
+  }catch(error){$("bulk-preview").textContent=error.message;$("bulk-preview").classList.add("invalid");}
+}
+$("bulk-rooms").addEventListener("click",()=>{
+  $("bulk-form").reset();
+  $("building-options").replaceChildren();
+  for(const building of [...new Set(rooms.map(r=>r.building))])option($("building-options"),building,building);
+  $("bulk-dialog").showModal();previewBulk();$("bulk-list").focus();
+});
+$("close-bulk").addEventListener("click",()=>$("bulk-dialog").close());
+$("cancel-bulk").addEventListener("click",()=>$("bulk-dialog").close());
+for(const id of ["bulk-list","bulk-prefix"])$(id).addEventListener("input",previewBulk);
+$("bulk-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  try{
+    const names=bulkNames();
+    if(!names.length)throw Error("Укажите кабинеты");
+    const r=await api("/api/rooms/bulk","POST",{
+      building:$("bulk-building").value.trim(),
+      floor:$("bulk-floor").value.trim(),
+      kind:$("bulk-kind").value.trim(),
+      min_temp:Number($("bulk-min").value),
+      max_temp:Number($("bulk-max").value),
+      names
+    });
+    $("bulk-dialog").close();await refresh();
+    toast("Добавлено: "+r.created+"; уже существовали: "+r.skipped.length);
+  }catch(error){toast(error.message,true);}
+});
+async function loadUpdateStatus(){
+  try{
+    const r=await api("/api/update/status");
+    $("update-status-text").textContent=r.message;
+    $("update-version").textContent=r.installed_revision?"Текущая ревизия: "+r.installed_revision.slice(0,12):"";
+    $("install-update").disabled=!r.supported||["queued","installing"].includes(r.state);
+  }catch(error){$("update-status-text").textContent="Ошибка проверки: "+error.message;}
+}
+$("check-update").addEventListener("click",async()=>{
+  $("check-update").disabled=true;
+  try{
+    const r=await api("/api/update/check");
+    $("update-status-text").textContent=r.message;
+    $("install-update").disabled=!r.supported||r.available!==true;
+  }catch(error){toast(error.message,true);}
+  finally{$("check-update").disabled=false;}
+});
+$("install-update").addEventListener("click",async()=>{
+  if(!confirm("Установить обновление с официального GitHub? Панель временно перезапустится."))return;
+  try{const r=await api("/api/update/request","POST",{});toast(r.message);await loadUpdateStatus();}
+  catch(error){toast(error.message,true);}
+});

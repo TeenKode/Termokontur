@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from . import db, daily
+from . import db, daily, settings
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
@@ -141,6 +141,9 @@ async def poll(token: str):
                                  timeout=httpx.Timeout(45, connect=12)) as client:
         backoff = 2
         while True:
+            if token != settings.get("max_token", ""):
+                logger.info("MAX token updated; reconnecting")
+                return
             try:
                 await send_reminders(client)
                 marker = db.get_state("max_marker")
@@ -169,12 +172,18 @@ async def poll(token: str):
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    token = os.getenv("MAX_BOT_TOKEN", "").strip()
-    if not token:
-        logger.info("MAX_BOT_TOKEN is unset; bot service disabled")
-        return
     db.initialize()
-    asyncio.run(poll(token))
+    settings.bootstrap()
+
+    async def worker():
+        while True:
+            token = settings.get("max_token", "") or ""
+            if not token:
+                await asyncio.sleep(10)
+                continue
+            await poll(token)
+
+    asyncio.run(worker())
 
 if __name__ == "__main__":
     main()
