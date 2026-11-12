@@ -11,13 +11,14 @@ import re
 
 import httpx
 
-from . import db
+from . import db, daily
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
 HELP = ("Термоконтур — сбор температуры.\n"
         "/bind КОД — привязать кабинет (код выдаёт администратор)\n"
         "/rooms — мои кабинеты\n"
+        "/today — статус замеров за сегодня\n"
         "/temp 21,5 — отправить температуру для единственного кабинета\n"
         "/temp ID 21,5 — отправить для кабинета с указанным ID\n"
         "/unbind ID — отключить кабинет\n"
@@ -43,6 +44,20 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
             return "Нет привязанных кабинетов. Введите /bind КОД."
         return "Ваши кабинеты:\n" + "\n".join(
             f"ID {r['id']}: {r['building']} / {r['name']}" for r in items)
+    if action == "/today":
+        snapshot = daily.summary()
+        selected_ids = {room["id"] for room in db.bound_rooms(user_id)}
+        if not selected_ids:
+            return "Нет привязанных кабинетов. Введите /bind КОД."
+        selected = [room for room in snapshot["rooms"] if room["id"] in selected_ids]
+        lines = ["Показания за " + snapshot["local_date"] + ":"]
+        for room in selected:
+            name = room["building"] + " / " + room["name"]
+            if room["daily_status"] == "missing":
+                lines.append("Нет показаний — " + name)
+            else:
+                lines.append(f"{room['measured_temp']:g} °C — " + name)
+        return "\n".join(lines) if len(lines) > 1 else "Все привязанные кабинеты отключены."
     if action == "/unbind":
         if len(parts) != 2 or not parts[1].isdigit():
             return "Формат: /unbind ID"
@@ -98,6 +113,28 @@ def process_update(update: dict) -> tuple[str, str] | None:
         return None
     return str(uid), interpret(str(uid), text, str(mid))
 
+async def send_reminders(client: httpx.AsyncClient) -> None:
+    """Send at most one reminder per user and local day, with bounded retries."""
+    if not daily.reminders_due():
+        return
+    snapshot = daily.summary()
+    for uid, missing in daily.pending_users(snapshot).items():
+        if not daily.claim_reminder(snapshot["local_date"], uid):
+            continue
+        try:
+            response = await client.post(
+                "/messages", params={"user_id": uid},
+                json={"text": daily.reminder_text(missing)},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            daily.mark_reminder(snapshot["local_date"], uid, False)
+            logger.warning("Cannot send reminder to MAX user %s: %s", uid, exc)
+        else:
+            daily.mark_reminder(snapshot["local_date"], uid, True)
+        await asyncio.sleep(0.15)  # under MAX's global request-rate limit
+
+
 async def poll(token: str):
     headers = {"Authorization": token}
     async with httpx.AsyncClient(base_url=API, headers=headers,
@@ -105,6 +142,7 @@ async def poll(token: str):
         backoff = 2
         while True:
             try:
+                await send_reminders(client)
                 marker = db.get_state("max_marker")
                 params = {"timeout": 30, "limit": 100}
                 if marker:

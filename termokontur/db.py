@@ -74,6 +74,14 @@ def initialize() -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS reminder_deliveries (
+            local_day TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'sent', 'failed')),
+            attempts INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(local_day, user_id)
+        );
         """)
 
 def room_list(active_only: bool = True) -> list[dict]:

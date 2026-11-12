@@ -76,3 +76,14 @@ def test_example_admin_secrets_cannot_start(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError):
         with TestClient(app):
             pass
+
+def test_daily_requires_auth_and_counts(admin, client, monkeypatch):
+    monkeypatch.setenv("TERMOKONTUR_TZ", "UTC")
+    assert client.get("/api/daily").status_code == 200  # same authenticated client
+    room_id = admin.post("/api/rooms", json=room_payload()).json()["id"]
+    before = admin.get("/api/daily").json()
+    assert before["counts"]["missing"] == 1
+    assert before["counts"]["measured"] == 0
+    admin.post("/api/readings", json={"room_id":room_id,"value":17.5})
+    after = admin.get("/api/daily").json()
+    assert after["counts"] == {"measured":1,"missing":0,"out_of_range":1}

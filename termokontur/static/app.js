@@ -1,6 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-let rooms = [], overview = [], readings = [], selectedTab = "overview", toastTimer;
+let rooms = [], overview = [], readings = [], daily = null, selectedTab = "overview", toastTimer;
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -60,6 +60,21 @@ function renderFilters() {
     option($("reading-room"),String(room.id),label);
   }
   $("reading-filter").value=oldReading;
+}
+function renderDaily() {
+  if(!daily) return;
+  $("daily-date").textContent = "На " + daily.local_date + " · " + daily.timezone;
+  $("daily-counts").textContent = daily.counts.measured + " из " + daily.rooms.length;
+  const missing = daily.rooms.filter(r=>r.daily_status === "missing");
+  const area = $("daily-missing"); area.replaceChildren();
+  if(!missing.length) {
+    area.append(el("p","daily-complete",daily.rooms.length ? "Все помещения сдали показания за сегодня." : "Добавьте кабинеты, чтобы начать контроль."));
+    return;
+  }
+  area.append(el("p","daily-heading","Нет измерений: " + missing.length));
+  const list = el("div","daily-tags");
+  for(const room of missing) list.append(el("span","daily-tag",room.building + " · " + room.name));
+  area.append(list);
 }
 function renderOverview() {
   const counts={normal:0,below:0,above:0,missing:0};
@@ -141,9 +156,9 @@ async function refresh() {
   try {
     const selected=$("reading-filter").value;
     const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
-    const [dash,allRooms,items]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params)]);
-    overview=dash.rooms;rooms=allRooms;readings=items;
-    renderFilters();renderOverview();renderRooms();renderReadings();
+    const [dash,allRooms,items,day]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily")]);
+    overview=dash.rooms;rooms=allRooms;readings=items;daily=day;
+    renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();
     $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
   } catch(error) {toast(error.message,true);}
 }

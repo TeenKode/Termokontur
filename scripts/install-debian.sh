@@ -31,6 +31,11 @@ with open(sys.argv[1], "x", encoding="utf-8") as fp:
     fp.write("TERMOKONTUR_SECRET=" + secrets.token_urlsafe(48) + "\n")
     fp.write("TERMOKONTUR_INGEST_KEY=" + secrets.token_urlsafe(32) + "\n")
     fp.write("TERMOKONTUR_STALE_HOURS=26\n")
+    fp.write("TERMOKONTUR_TZ=Asia/Vladivostok\n")
+    fp.write("TERMOKONTUR_REMINDERS_ENABLED=0\n")
+    fp.write("TERMOKONTUR_REMINDER_TIME=09:00\n")
+    fp.write("TERMOKONTUR_REMINDER_DAYS=0,1,2,3,4\n")
+    fp.write("TERMOKONTUR_REMINDER_WINDOW_MINUTES=120\n")
     fp.write("TERMOKONTUR_SECURE_COOKIE=0\n")
     fp.write("MAX_BOT_TOKEN=\n")
 PY
