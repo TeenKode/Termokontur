@@ -111,7 +111,8 @@ def test_change_password_and_revoke_sessions(admin):
 def test_manage_runtime_settings_and_secrets(admin, monkeypatch):
     cfg = admin.get("/api/settings")
     assert cfg.status_code == 200
-    assert "ingest_key" not in cfg.json()\n    assert "this-is-a-long-device-ingest-key-1234567890" not in cfg.text
+    assert "ingest_key" not in cfg.json()
+    assert "this-is-a-long-device-ingest-key-1234567890" not in cfg.text
     payload = cfg.json()
     payload = {k:v for k,v in payload.items() if not k.endswith("_configured")}
     payload.update({"organization_name":"ЦО Открытие",
