@@ -27,6 +27,7 @@ def test_seven_characters_still_rejected(admin):
 def test_eight_character_bootstrap(monkeypatch, tmp_path):
     monkeypatch.setenv("TERMOKONTUR_DB", str(tmp_path / "bootstrap.sqlite3"))
     monkeypatch.setenv("TERMOKONTUR_ADMIN_PASSWORD", "abcdefgh")
+    monkeypatch.setenv("TERMOKONTUR_SECRET", "this-is-a-new-bootstrap-secret-over-32-characters")
     with TestClient(app) as client:
         assert client.post("/api/login", json={"password": "abcdefgh"}).status_code == 200
 
