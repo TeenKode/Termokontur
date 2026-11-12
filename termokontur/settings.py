@@ -29,6 +29,8 @@ def _valid_secret(value: str) -> bool:
 def bootstrap() -> None:
     """One-time import from older .env deployments without overriding UI changes."""
     with db.connect() as conn:
+        if conn.execute("SELECT 1 FROM settings WHERE key='__bootstrapped'").fetchone():
+            return
         for key, (env, default) in ENV_DEFAULTS.items():
             value = os.environ.get(env, default)
             conn.execute(
@@ -39,6 +41,7 @@ def bootstrap() -> None:
             value = os.environ.get(env, "")
             if _valid_secret(value):
                 conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
+        conn.execute("INSERT INTO settings(key, value) VALUES ('__bootstrapped', '1')")
         # A generated token is not automatically provisioned when env was empty:
         # the administrator creates it from the panel only when required.
 

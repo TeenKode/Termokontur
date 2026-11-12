@@ -8,7 +8,7 @@ CONFIG_DIR="/etc/termokontur"
 CONFIG_FILE="${CONFIG_DIR}/termokontur.env"
 echo "[1/6] Installing Python system packages..."
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip ca-certificates
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv python3-pip ca-certificates git curl
 echo "[2/6] Creating restricted service account..."
 if ! id termokontur >/dev/null 2>&1; then
   useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin termokontur
@@ -22,6 +22,8 @@ chown -R termokontur:termokontur "${APP_DIR}"
 echo "[4/6] Installing isolated Python dependencies..."
 python3 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/pip" install --no-cache-dir -r "${APP_DIR}/requirements.txt"
+chown -R root:root "${APP_DIR}"
+chmod -R a+rX "${APP_DIR}"
 echo "[5/6] Preparing configuration..."
 if [ ! -e "${CONFIG_FILE}" ]; then
   python3 - "${CONFIG_FILE}" <<'PY'
@@ -50,11 +52,20 @@ fi
 echo "[6/6] Enabling systemd services..."
 install -m 0644 "${ROOT_DIR}/deploy/systemd/termokontur.service" /etc/systemd/system/termokontur.service
 install -m 0644 "${ROOT_DIR}/deploy/systemd/termokontur-max.service" /etc/systemd/system/termokontur-max.service
+install -m 0644 "${ROOT_DIR}/deploy/systemd/termokontur-update.path" /etc/systemd/system/termokontur-update.path
+install -m 0644 "${ROOT_DIR}/deploy/systemd/termokontur-update.service" /etc/systemd/system/termokontur-update.service
+install -o root -g root -m 0755 "${ROOT_DIR}/scripts/termokontur-apply-update" /usr/local/sbin/termokontur-apply-update
+if git -C "${ROOT_DIR}" rev-parse --verify HEAD >/dev/null 2>&1; then
+  git -C "${ROOT_DIR}" rev-parse HEAD | runuser -u termokontur -- tee /var/lib/termokontur/installed-revision >/dev/null
+  chmod 0600 /var/lib/termokontur/installed-revision
+fi
 systemctl daemon-reload
-systemctl enable --now termokontur.service
+systemctl enable termokontur.service termokontur-max.service termokontur-update.path
 systemctl restart termokontur.service
+systemctl restart termokontur-max.service
+systemctl enable --now termokontur-update.path
 echo
 echo "Installed. Open http://<LXC-IP>:8092/ in your LAN."
 echo "Check: systemctl status termokontur --no-pager"
-echo "To enable MAX after setting MAX_BOT_TOKEN in ${CONFIG_FILE}:"
-echo "  systemctl enable --now termokontur-max"
+echo "Manage MAX, passwords, reminders and updates in the web panel's Settings tab."
+echo "Configuration secrets are imported from ${CONFIG_FILE} once, then managed in SQLite."

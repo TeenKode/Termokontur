@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings
+from . import auth, db, daily, settings, updates
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
@@ -95,7 +95,12 @@ class RoomPatch(BaseModel):
     max_temp: float | None = Field(default=None, ge=-40, le=60, allow_inf_nan=False)
     active: bool | None = None
 
-class RoomsBulkIn(RoomIn):
+class RoomsBulkIn(BaseModel):
+    building: str = Field(min_length=1, max_length=100)
+    floor: str = Field(default="", max_length=30)
+    kind: str = Field(default="Кабинет", min_length=1, max_length=80)
+    min_temp: float = Field(default=18, ge=-40, le=60, allow_inf_nan=False)
+    max_temp: float = Field(default=24, ge=-40, le=60, allow_inf_nan=False)
     names: list[str] = Field(min_length=1, max_length=250)
 
 
@@ -204,6 +209,24 @@ def change_password(payload: PasswordIn, response: Response):
         raise HTTPException(403, "Текущий пароль указан неверно")
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True, "relogin_required": True}
+
+
+@app.get("/api/update/status", dependencies=[Depends(require_admin)])
+def update_status():
+    return updates.status()
+
+
+@app.get("/api/update/check", dependencies=[Depends(require_admin)])
+def check_update():
+    return updates.check()
+
+
+@app.post("/api/update/request", dependencies=[Depends(require_admin)])
+def request_update():
+    try:
+        return updates.request()
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_admin)])

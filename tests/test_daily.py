@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
-from termokontur import daily, db
+from termokontur import daily, db, settings
 from termokontur.bot import send_reminders
 
 
@@ -12,12 +12,12 @@ def utc(value):
 
 
 def test_local_day_boundaries_and_dst(client, monkeypatch):
-    monkeypatch.setenv("TERMOKONTUR_TZ", "Asia/Vladivostok")
+    settings.update({"timezone": "Asia/Vladivostok"})
     day, start, end = daily.daily_bounds(utc("2026-11-12T01:00:00"))
     assert str(day) == "2026-11-12"
     assert start == "2026-11-11T14:00:00+00:00"
     assert end == "2026-11-12T14:00:00+00:00"
-    monkeypatch.setenv("TERMOKONTUR_TZ", "Europe/Berlin")
+    settings.update({"timezone": "Europe/Berlin"})
     day, start, end = daily.daily_bounds(utc("2026-03-29T13:00:00"))
     assert str(day) == "2026-03-29"
     assert start == "2026-03-28T23:00:00+00:00"
@@ -25,7 +25,7 @@ def test_local_day_boundaries_and_dst(client, monkeypatch):
 
 
 def test_daily_coverage_ignores_previous_day(client, monkeypatch):
-    monkeypatch.setenv("TERMOKONTUR_TZ", "UTC")
+    settings.update({"timezone": "UTC"})
     room = db.create_room("Корпус", "2", "201", "Кабинет", 18, 24)
     instant = utc("2026-11-12T10:00:00")
     with db.connect() as conn:
@@ -43,17 +43,17 @@ def test_daily_coverage_ignores_previous_day(client, monkeypatch):
 
 
 def test_reminder_time_weekday_window(client, monkeypatch):
-    monkeypatch.setenv("TERMOKONTUR_TZ", "Asia/Vladivostok")
-    monkeypatch.setenv("TERMOKONTUR_REMINDERS_ENABLED", "1")
-    monkeypatch.setenv("TERMOKONTUR_REMINDER_TIME", "09:00")
-    monkeypatch.setenv("TERMOKONTUR_REMINDER_DAYS", "0,1,2,3,4")
-    monkeypatch.setenv("TERMOKONTUR_REMINDER_WINDOW_MINUTES", "120")
+    settings.update({"timezone": "Asia/Vladivostok"})
+    settings.update({"reminders_enabled": "1"})
+    settings.update({"reminder_time": "09:00"})
+    settings.update({"reminder_days": "0,1,2,3,4"})
+    settings.update({"reminder_window_minutes": "120"})
     # Mon Nov 16, 2026; time in Vladivostok is UTC+10
     assert not daily.reminders_due(utc("2026-11-15T22:59:00"))
     assert daily.reminders_due(utc("2026-11-15T23:15:00"))
     assert not daily.reminders_due(utc("2026-11-16T01:00:00"))  # window ends at 11
     assert not daily.reminders_due(utc("2026-11-14T23:15:00"))  # Sunday
-    monkeypatch.setenv("TERMOKONTUR_REMINDERS_ENABLED", "0")
+    settings.update({"reminders_enabled": "0"})
     assert not daily.reminders_due(utc("2026-11-15T23:15:00"))
 
 
@@ -70,7 +70,7 @@ def test_one_claim_per_day_and_retry(client):
 
 
 def test_pending_groups_and_bot_sends_only_missing(client, monkeypatch):
-    monkeypatch.setenv("TERMOKONTUR_TZ", "UTC")
+    settings.update({"timezone": "UTC"})
     r1 = db.create_room("Старшая", "1", "101", "Кабинет", 18, 24)
     r2 = db.create_room("Старшая", "1", "102", "Кабинет", 18, 24)
     for room in (r1, r2):
