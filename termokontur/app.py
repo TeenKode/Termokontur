@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import asyncio
+import tempfile
 import hashlib
 import json
 import hmac
@@ -22,20 +24,44 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates, max_delivery
+from . import auth, db, daily, settings, updates, max_delivery, maintenance
 
 ROOT = Path(__file__).resolve().parent
 app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 FAILED_LOGINS: dict[str, list[float]] = {}
 
+async def scheduled_maintenance():
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await asyncio.to_thread(maintenance.schedule)
+        except Exception:
+            import logging
+            logging.getLogger("termokontur.maintenance").exception("Scheduled maintenance failed")
+        await asyncio.sleep(3600)
+
+
 @app.on_event("startup")
-def startup():
+async def startup():
     if len(os.environ.get("TERMOKONTUR_SECRET", "")) < 32 or os.environ["TERMOKONTUR_SECRET"].startswith("REPLACE_WITH_"):
         raise RuntimeError("Set a unique TERMOKONTUR_SECRET (at least 32 characters)")
     db.initialize()
     auth.bootstrap()
     settings.bootstrap()
+    app.state.maintenance_task = asyncio.create_task(scheduled_maintenance())
+
+
+@app.on_event("shutdown")
+async def stop_maintenance():
+    task = getattr(app.state, "maintenance_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -123,6 +149,16 @@ class SettingsIn(BaseModel):
     reminder_time: str
     reminder_days: list[int] = Field(min_length=1, max_length=7)
     reminder_window_minutes: int = Field(ge=1, le=240)
+    backup_interval_days: int = Field(default=1, ge=0, le=30)
+    backup_keep: int = Field(default=30, ge=1, le=100)
+    retention_days: int = Field(default=0, ge=0, le=3650)
+    alerts_enabled: bool = False
+    alert_cooldown_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class RestoreBackupIn(BaseModel):
+    name: str
+    password: str
 
 
 class MaxWebhookIn(BaseModel):
@@ -335,6 +371,94 @@ def request_update():
         return updates.request()
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+
+@app.get("/api/backups", dependencies=[Depends(require_admin)])
+def backups():
+    return maintenance.list_backups()
+
+
+@app.post("/api/backups", dependencies=[Depends(require_admin)])
+def backup_now():
+    return maintenance.create_backup()
+
+
+@app.get("/api/backups/{name}", dependencies=[Depends(require_admin)])
+def download_backup(name: str):
+    try:
+        path = maintenance.backup_path(name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, filename=name, media_type="application/octet-stream",
+                        headers={"Cache-Control":"no-store"})
+
+
+@app.delete("/api/backups/{name}", dependencies=[Depends(require_admin)])
+def remove_backup(name: str):
+    try:
+        maintenance.delete_backup(name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/backups/restore", dependencies=[Depends(require_admin)])
+def restore_backup(payload: RestoreBackupIn, response: Response):
+    if not auth.check_password(payload.password):
+        raise HTTPException(403, "Неверный пароль администратора")
+    try:
+        result = maintenance.restore(payload.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (OSError, Exception) as exc:
+        import logging
+        logging.getLogger("termokontur.backups").exception("Restore failed")
+        raise HTTPException(500, "Не удалось восстановить резервную копию") from exc
+    response.delete_cookie("tk_session", path="/", samesite="strict")
+    return result
+
+
+@app.post("/api/backups/import", dependencies=[Depends(require_admin)])
+async def import_backup(request: Request):
+    length = request.headers.get("content-length")
+    if length is not None and (not length.isdigit() or int(length) > maintenance.MAX_IMPORT_BYTES):
+        raise HTTPException(413, "Размер файла превышает 100 МБ")
+    destination = maintenance.backup_dir()
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=".incoming-", dir=destination,
+                                         delete=False) as tmp:
+            temp_path = Path(tmp.name)
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > maintenance.MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "Размер файла превышает 100 МБ")
+                tmp.write(chunk)
+        temp_path.chmod(0o600)
+        maintenance.inspect(temp_path)
+        name = maintenance._filename("import")
+        temp_path.rename(destination / name)
+        return {"name": name, "size": size}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+@app.post("/api/maintenance/prune", dependencies=[Depends(require_admin)])
+def prune_readings(payload: RestoreBackupIn):
+    if not auth.check_password(payload.password):
+        raise HTTPException(403, "Неверный пароль администратора")
+    interval = int(settings.get("retention_days", "0"))
+    if not interval:
+        raise HTTPException(422, "В настройках отключено удаление старых измерений")
+    # Create a safety copy before irreversible cleanup.
+    snapshot = maintenance.create_backup("manual")
+    result = maintenance.prune_data(interval)
+    return {"deleted": result["readings"], "backup": snapshot["name"]}
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_admin)])

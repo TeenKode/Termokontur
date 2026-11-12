@@ -1,6 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer;
+let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
 const selectedMaxRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
@@ -174,6 +174,8 @@ function drawChart(){
   if(data.length>1)ctx.fillText(when(data[data.length-1].observed_at),rectWidth-right-55,height-8);
 }
 async function refresh() {
+  if(refreshBusy)return;
+  refreshBusy=true;
   try {
     const selected=$("reading-filter").value;
     const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
@@ -182,6 +184,7 @@ async function refresh() {
     renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();
     $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
   } catch(error) {toast(error.message,true);}
+  finally {refreshBusy=false;}
 }
 async function refreshReadings(){
   try{const room=$("reading-filter").value;readings=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));renderReadings();}
@@ -267,6 +270,11 @@ async function loadSettings() {
     $("setting-enabled").checked=settingsCache.reminders_enabled;
     $("setting-time").value=settingsCache.reminder_time;
     $("setting-window").value=settingsCache.reminder_window_minutes;
+    $("setting-backup-interval").value=settingsCache.backup_interval_days;
+    $("setting-backup-keep").value=settingsCache.backup_keep;
+    $("setting-retention").value=settingsCache.retention_days;
+    $("setting-alerts-enabled").checked=settingsCache.alerts_enabled;
+    $("setting-alert-cooldown").value=settingsCache.alert_cooldown_minutes;
     for(const checkbox of document.querySelectorAll('[name="remind-day"]'))
       checkbox.checked=settingsCache.reminder_days.includes(Number(checkbox.value));
     $("max-status").textContent=settingsCache.max_token_configured?"Токен MAX настроен":"Токен MAX отсутствует";
@@ -276,7 +284,7 @@ async function loadSettings() {
     $("activate-webhook").disabled=!settingsCache.max_token_configured;
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
-    await loadUpdateStatus();
+    await Promise.all([loadUpdateStatus(),loadBackups()]);
   } catch(error){toast(error.message,true);}
 }
 $("general-settings-form").addEventListener("submit",async event=>{
@@ -289,7 +297,12 @@ $("general-settings-form").addEventListener("submit",async event=>{
       reminders_enabled:$("setting-enabled").checked,
       reminder_time:$("setting-time").value,
       reminder_days:[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value)),
-      reminder_window_minutes:Number($("setting-window").value)
+      reminder_window_minutes:Number($("setting-window").value),
+      backup_interval_days:settingsCache.backup_interval_days,
+      backup_keep:settingsCache.backup_keep,
+      retention_days:settingsCache.retention_days,
+      alerts_enabled:settingsCache.alerts_enabled,
+      alert_cooldown_minutes:settingsCache.alert_cooldown_minutes
     };
     settingsCache=await api("/api/settings","PUT",data);
     toast("Настройки сохранены");await refresh();
@@ -557,5 +570,110 @@ $("switch-polling").addEventListener("click",async()=>{
     await api("/api/settings/max-polling","POST",{});
     toast("MAX переведён в тестовый режим");
     await loadSettings();
+  }catch(error){toast(error.message,true);}
+});
+
+/* Keep live room status reasonably current without reloading the page. */
+setInterval(()=>{
+  if(!$("app-root").hidden && !document.hidden && !document.querySelector("dialog[open]"))
+    refresh();
+},30000);
+
+function allSettingsPayload(){
+  return {
+    organization_name:$("setting-organization").value,
+    timezone:$("setting-timezone").value,
+    stale_hours:Number($("setting-stale").value),
+    reminders_enabled:$("setting-enabled").checked,
+    reminder_time:$("setting-time").value,
+    reminder_days:[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value)),
+    reminder_window_minutes:Number($("setting-window").value),
+    backup_interval_days:Number($("setting-backup-interval").value),
+    backup_keep:Number($("setting-backup-keep").value),
+    retention_days:Number($("setting-retention").value),
+    alerts_enabled:$("setting-alerts-enabled").checked,
+    alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
+  };
+}
+$("maintenance-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  try{
+    const data=allSettingsPayload();
+    if(data.retention_days>0 && data.retention_days<30)throw Error("Срок хранения: минимум 30 дней или 0");
+    settingsCache=await api("/api/settings","PUT",data);
+    toast("Параметры резервного копирования и оповещений сохранены");
+  }catch(error){toast(error.message,true);}
+});
+const bytesToText=bytes=>bytes>1024*1024?(bytes/1024/1024).toFixed(1)+" МБ":Math.round(bytes/1024)+" КБ";
+async function loadBackups(){
+  try{
+    const backups=await api("/api/backups");
+    const view=$("backup-list");view.replaceChildren();
+    if(!backups.length){view.append(el("p","hint","Резервных копий пока нет."));return;}
+    for(const item of backups){
+      const row=el("div","backup-entry");
+      const info=el("div","backup-entry-info");
+      info.append(el("strong","",item.name),el("small","",when(item.created_at)+" · "+bytesToText(item.size)));
+      const actions=el("div","backup-entry-actions");
+      const download=el("button","btn secondary","Скачать");
+      download.addEventListener("click",()=>{window.location.href="/api/backups/"+encodeURIComponent(item.name);});
+      const restore=el("button","btn secondary","Восстановить");
+      restore.addEventListener("click",()=>{
+        $("restore-filename").value=item.name;
+        $("restore-name").textContent=item.name;
+        $("restore-form").reset();$("restore-confirm").checked=false;
+        $("restore-dialog").showModal();
+      });
+      const remove=el("button","btn secondary","Удалить");
+      remove.addEventListener("click",async()=>{
+        if(!confirm("Безвозвратно удалить резервную копию "+item.name+"?"))return;
+        try{await api("/api/backups/"+encodeURIComponent(item.name),"DELETE");await loadBackups();toast("Копия удалена");}
+        catch(error){toast(error.message,true);}
+      });
+      actions.append(download,restore,remove);row.append(info,actions);view.append(row);
+    }
+  }catch(error){$("backup-list").textContent=error.message;}
+}
+$("backup-create").addEventListener("click",async()=>{
+  $("backup-create").disabled=true;
+  try{
+    const r=await api("/api/backups","POST",{});
+    await loadBackups();
+    toast("Резервная копия сохранена: "+r.name);
+  }catch(error){toast(error.message,true);}
+  finally{$("backup-create").disabled=false;}
+});
+$("backup-import").addEventListener("click",()=>$("backup-upload-file").click());
+$("backup-upload-file").addEventListener("change",async()=>{
+  const file=$("backup-upload-file").files[0];
+  if(!file)return;
+  if(file.size>100*1024*1024){toast("Максимальный размер 100 МБ",true);return;}
+  if(!confirm("Импортировать SQLite-файл "+file.name+" как резервную копию?"))return;
+  try{
+    const response=await fetch("/api/backups/import",{
+      method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/octet-stream"},
+      body:file
+    });
+    if(!response.ok){
+      const error=await response.json();
+      throw Error(typeof error.detail==="string"?error.detail:"Ошибка импорта");
+    }
+    const result=await response.json();await loadBackups();
+    toast("Копия импортирована: "+result.name);
+  }catch(error){toast(error.message,true);}
+  finally{$("backup-upload-file").value="";}
+});
+$("restore-close").addEventListener("click",()=>$("restore-dialog").close());
+$("restore-cancel").addEventListener("click",()=>$("restore-dialog").close());
+$("restore-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(!$("restore-confirm").checked){toast("Подтвердите восстановление",true);return;}
+  try{
+    const r=await api("/api/backups/restore","POST",{
+      name:$("restore-filename").value,password:$("restore-password").value
+    });
+    $("restore-dialog").close();enterLogin();
+    $("login-error").textContent="База восстановлена. Войдите снова.";
   }catch(error){toast(error.message,true);}
 });

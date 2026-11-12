@@ -7,6 +7,7 @@ never force re-running the command merely to resend a confirmation.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -108,6 +109,65 @@ async def drain(client: httpx.AsyncClient) -> None:
             logger.warning("MAX message delivery failed for %s: %s", item["event_id"], exc)
         else:
             mark_sent(item["event_id"])
+        await asyncio.sleep(0.06)
+
+
+def queue_temperature_alerts() -> int:
+    """Queue limited deviation alerts for users assigned to affected rooms."""
+    from . import settings
+    if settings.get("alerts_enabled", "0") != "1" or not settings.get("max_token", ""):
+        return 0
+    interval = int(settings.get("alert_cooldown_minutes", "60"))
+    now = datetime.now(timezone.utc)
+    stamp = now.isoformat(timespec="seconds")
+    count = 0
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute("""
+            SELECT p.id AS room_id, p.name, p.building, p.min_temp, p.max_temp,
+                   b.user_id, x.id AS reading_id, x.value
+            FROM rooms p
+            JOIN max_bindings b ON b.room_id=p.id
+            JOIN readings x ON x.id=(
+                SELECT id FROM readings WHERE room_id=p.id
+                ORDER BY observed_at DESC,id DESC LIMIT 1
+            )
+            WHERE p.active=1
+        """).fetchall()
+        for row in rows:
+            state = ("below" if row["value"] < row["min_temp"]
+                     else "above" if row["value"] > row["max_temp"] else "normal")
+            old=conn.execute("""
+                SELECT last_status,last_at FROM temperature_alert_state
+                WHERE room_id=? AND user_id=?
+            """,(row["room_id"],row["user_id"])).fetchone()
+            if state=="normal":
+                if old and old["last_status"]!="normal":
+                    conn.execute("""UPDATE temperature_alert_state SET last_status='normal'
+                        WHERE room_id=? AND user_id=?""",(row["room_id"],row["user_id"]))
+                continue
+            if old and old["last_status"]==state and old["last_at"]:
+                if now - datetime.fromisoformat(old["last_at"]) < timedelta(minutes=interval):
+                    continue
+            event_raw=f"alert:{row['room_id']}:{row['user_id']}:{row['reading_id']}:{stamp}"
+            key=hashlib.sha256(event_raw.encode("utf-8")).hexdigest()
+            label="ниже минимума" if state=="below" else "выше максимума"
+            msg=(f"Термоконтур: температура {label}!\\n"
+                 f"{row['building']} / {row['name']}: {row['value']:g} °C\\n"
+                 f"Допустимый диапазон: {row['min_temp']:g}–{row['max_temp']:g} °C.")
+            conn.execute("""INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
+                            VALUES(?,'complete',?)""",(key,stamp))
+            conn.execute("""INSERT OR IGNORE INTO max_outbox(event_id,user_id,text,next_retry_at)
+                            VALUES(?,?,?,?)""",(key,row["user_id"],msg,stamp))
+            conn.execute("""
+                INSERT INTO temperature_alert_state(room_id,user_id,last_status,last_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(room_id,user_id) DO UPDATE SET
+                    last_status=excluded.last_status,last_at=excluded.last_at
+            """,(row["room_id"],row["user_id"],state,stamp))
+            count+=1
+    return count
+
 
 def prune(days: int = 30) -> dict:
     """Prune processed message receipts and successfully sent notifications."""

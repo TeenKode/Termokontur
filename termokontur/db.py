@@ -97,6 +97,13 @@ def initialize() -> None:
             next_retry_at TEXT NOT NULL,
             delivered_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS temperature_alert_state (
+            room_id INTEGER NOT NULL REFERENCES rooms(id),
+            user_id TEXT NOT NULL,
+            last_status TEXT NOT NULL DEFAULT 'normal',
+            last_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(room_id, user_id)
+        );
         CREATE TABLE IF NOT EXISTS max_bind_events (
             event_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,

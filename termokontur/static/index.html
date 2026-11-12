@@ -144,6 +144,32 @@
               <p class="hint">От 8 до 256 символов. После смены пароля все сеансы входа будут завершены.</p>
             </form>
           </article>
+
+          <article class="panel settings-panel">
+            <h2>Резервные копии и хранение</h2>
+            <p class="hint">Автоматические копии сохраняются отдельно от базы. Данные не отправляются в облако.</p>
+            <form id="maintenance-form" class="settings-form">
+              <div class="field-grid">
+                <label>Автокопия каждые N дней (0 — выкл.)<input id="setting-backup-interval" type="number" min="0" max="30" required></label>
+                <label>Хранить автокопий<input id="setting-backup-keep" type="number" min="1" max="100" required></label>
+              </div>
+              <label>Удалять измерения старше N дней (0 — никогда)
+                <input id="setting-retention" type="number" min="0" max="3650" required>
+              </label>
+              <p class="hint">Если срок хранения включён, минимум 30 дней. Очистка необратима без резервной копии.</p>
+              <label class="settings-toggle"><input id="setting-alerts-enabled" type="checkbox">Отправлять MAX-уведомления при выходе температуры за границы нормы</label>
+              <label>Минимальный интервал уведомлений (минуты)<input id="setting-alert-cooldown" type="number" min="5" max="1440" required></label>
+              <button type="submit" class="btn primary">Сохранить обслуживание</button>
+            </form>
+            <div class="settings-divider"></div>
+            <div class="heading-actions">
+              <button type="button" id="backup-create" class="btn primary">+ Создать копию</button>
+              <button type="button" id="backup-import" class="btn secondary">Импорт SQLite-файла</button>
+              <input id="backup-upload-file" type="file" accept=".sqlite3,.db,.sqlite" hidden>
+            </div>
+            <p class="hint">Сохранённые резервные копии (содержат настройки и идентификаторы MAX). Храните скачанные файлы безопасно.</p>
+            <div id="backup-list" class="backup-list">Загрузка...</div>
+          </article>
           <article class="panel settings-panel">
             <h2>Обновление системы</h2>
             <p id="update-status-text" class="update-message">Загрузка...</p>
@@ -213,6 +239,18 @@
         <button type="button" id="cancel-max-codes" class="btn secondary">Отмена</button>
         <button type="submit" id="download-max-codes" class="btn primary" disabled>Создать и скачать CSV</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="restore-dialog">
+    <form id="restore-form" class="dialog-form">
+      <div class="dialog-head"><div><h2>Восстановление базы</h2><p>Все текущие данные будут заменены выбранной копией.</p></div><button type="button" id="restore-close" class="x-button" aria-label="Закрыть">×</button></div>
+      <p id="restore-name" class="hint"></p>
+      <input id="restore-filename" type="hidden">
+      <label>Пароль администратора<input id="restore-password" type="password" autocomplete="current-password" required></label>
+      <label class="settings-toggle"><input id="restore-confirm" type="checkbox" required>Понимаю, что база будет заменена, а все сеансы завершены</label>
+      <p class="hint">Перед восстановлением создаётся страховочная копия текущей базы.</p>
+      <div class="dialog-actions"><button type="button" id="restore-cancel" class="btn secondary">Отмена</button><button type="submit" class="btn primary">Восстановить базу</button></div>
     </form>
   </dialog>
 

@@ -21,6 +21,11 @@ ENV_DEFAULTS = {
     "reminder_time": ("TERMOKONTUR_REMINDER_TIME", "09:00"),
     "reminder_days": ("TERMOKONTUR_REMINDER_DAYS", "0,1,2,3,4"),
     "reminder_window_minutes": ("TERMOKONTUR_REMINDER_WINDOW_MINUTES", "120"),
+    "backup_interval_days": ("TERMOKONTUR_BACKUP_INTERVAL_DAYS", "1"),
+    "backup_keep": ("TERMOKONTUR_BACKUP_KEEP", "30"),
+    "retention_days": ("TERMOKONTUR_RETENTION_DAYS", "0"),
+    "alerts_enabled": ("TERMOKONTUR_ALERTS_ENABLED", "0"),
+    "alert_cooldown_minutes": ("TERMOKONTUR_ALERT_COOLDOWN_MINUTES", "60"),
 }
 
 def _valid_secret(value: str) -> bool:
@@ -88,6 +93,11 @@ def public() -> dict:
     data["reminders_enabled"] = data["reminders_enabled"] == "1"
     data["reminder_days"] = [int(x) for x in data["reminder_days"].split(",") if x.strip()]
     data["reminder_window_minutes"] = int(data["reminder_window_minutes"])
+    data["backup_interval_days"] = int(data["backup_interval_days"])
+    data["backup_keep"] = int(data["backup_keep"])
+    data["retention_days"] = int(data["retention_days"])
+    data["alerts_enabled"] = data["alerts_enabled"] == "1"
+    data["alert_cooldown_minutes"] = int(data["alert_cooldown_minutes"])
     data["max_mode"] = get("max_mode", "polling")
     data["max_webhook_url"] = get("max_webhook_url", "")
     data["max_webhook_configured"] = bool(get("max_webhook_secret"))
@@ -119,6 +129,15 @@ def validated(data: dict) -> dict[str, str]:
         window = int(data["reminder_window_minutes"])
         if not 1 <= window <= 240:
             raise ValueError()
+        backup_interval = int(data["backup_interval_days"])
+        backup_keep = int(data["backup_keep"])
+        retention = int(data["retention_days"])
+        alerts = data["alerts_enabled"]
+        cooldown = int(data["alert_cooldown_minutes"])
+        if (not 0 <= backup_interval <= 30 or not 1 <= backup_keep <= 100
+            or not (retention == 0 or 30 <= retention <= 3650)
+            or not isinstance(alerts, bool) or not 5 <= cooldown <= 1440):
+            raise ValueError()
     except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError) as exc:
         raise ValueError("Проверьте название, часовой пояс и параметры расписания") from exc
     return {
@@ -129,6 +148,11 @@ def validated(data: dict) -> dict[str, str]:
         "reminder_time": at,
         "reminder_days": ",".join(map(str, sorted(set(days)))),
         "reminder_window_minutes": str(window),
+        "backup_interval_days": str(backup_interval),
+        "backup_keep": str(backup_keep),
+        "retention_days": str(retention),
+        "alerts_enabled": "1" if alerts else "0",
+        "alert_cooldown_minutes": str(cooldown),
     }
 
 def set_max_webhook(url: str, secret: str) -> None:

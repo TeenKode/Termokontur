@@ -146,6 +146,8 @@ async def poll(token: str):
                 return
             try:
                 await send_reminders(client)
+                max_delivery.queue_temperature_alerts()
+                await max_delivery.drain(client)
                 marker = db.get_state("max_marker")
                 params = {"timeout": 30, "limit": 100}
                 if marker:
@@ -179,6 +181,7 @@ def main():
             if settings.get("max_mode", "polling") == "webhook":
                 async with httpx.AsyncClient(base_url=API, headers={"Authorization": token},
                                              timeout=httpx.Timeout(30, connect=12)) as client:
+                    max_delivery.queue_temperature_alerts()
                     await max_delivery.drain(client)
                     await send_reminders(client)
                 await asyncio.sleep(3)
