@@ -59,3 +59,49 @@ def test_updater_ui_contains_accessible_state_and_version_fields():
     assert 'role="progressbar"' in html
     assert 'setInterval(()=>{' in js
     assert 'updateAvailable=false' in js
+
+
+def test_settings_workspace_has_unique_ids_and_working_category_targets():
+    """Prevent empty panels and missing controls after reorganizing settings."""
+    from html.parser import HTMLParser
+    import re
+
+    class Scan(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = []
+            self.targets = []
+            self.views = []
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "id" in attrs:
+                self.ids.append(attrs["id"])
+            if "data-settings-target" in attrs:
+                self.targets.append(attrs["data-settings-target"])
+            if "data-settings-view" in attrs:
+                self.views.append(attrs["data-settings-view"])
+
+    static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    js = (static / "app.js").read_text(encoding="utf-8")
+    page = Scan()
+    page.feed(html)
+    assert len(page.ids) == len(set(page.ids))
+    assert set(page.targets) == set(page.views) == {
+        "summary", "general", "notifications", "max",
+        "sensors", "backups", "security", "updates"
+    }
+    assert len(page.views) == 8
+    assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', js)) - set(page.ids))
+    for form in (
+        "general-settings-form", "reminders-settings-form",
+        "alerts-settings-form", "maintenance-form",
+        "max-settings-form", "max-webhook-form", "password-settings-form"
+    ):
+        assert form in page.ids
+    assert "saveSettingsPatch" in js
+    assert "settingsDirty" in js
+    assert "data-dirty" in js
+    assert "renderSettingsSummary" in js
+    assert "updateAvailable=false" in js
+    assert "X-Api-Key" in html
