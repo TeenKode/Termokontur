@@ -17,13 +17,15 @@ INSTALL_UNITS=(termokontur.service termokontur-max.service termokontur-update.se
 record() {
   local state="$1" message="$2" phase="${3:-}"
   runuser -u termokontur -- /usr/bin/python3 -c '
-import json,sys
+import json,os,sys
 from pathlib import Path
 p=Path("/var/lib/termokontur/update-status.json")
-p.write_text(json.dumps({
+tmp=p.with_suffix(".json.tmp")
+tmp.write_text(json.dumps({
     "state":sys.argv[1], "message":sys.argv[2], "phase":sys.argv[3]
 },ensure_ascii=False),encoding="utf-8")
-p.chmod(0o600)
+tmp.chmod(0o600)
+os.replace(tmp,p)
 ' "$state" "$message" "$phase"
 }
 health() {
@@ -100,6 +102,7 @@ check_writable_dir "$UNITS_DIR"
 check_writable_dir "/usr/local/sbin"
 STAGE=$(mktemp -d /opt/termokontur-stage.XXXXXXXX)
 chown termokontur:termokontur "$STAGE"
+record installing "Загружаем исходный код новой сборки с GitHub…" downloading
 runuser -u termokontur -- git clone --depth 1 --single-branch --branch main \
   https://github.com/TeenKode/Termokontur.git "$STAGE"
 REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)
