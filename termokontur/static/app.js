@@ -18,6 +18,7 @@ function toast(message, isError = false) {
 }
 async function api(path, method = "GET", body) {
   const opts = {method, credentials:"same-origin", headers:{"Accept":"application/json"}};
+  if(path.startsWith("/api/update/"))opts.cache="no-store";
   if(body !== undefined) { opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(body); }
   const response = await fetch(path, opts);
   if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
@@ -428,28 +429,127 @@ $("bulk-form").addEventListener("submit",async event=>{
     toast("Добавлено: "+r.created+"; уже существовали: "+r.skipped.length);
   }catch(error){toast(error.message,true);}
 });
+/* Version and update stage are server-side state, so they survive a panel reload. */
+let updateAvailable=false, updateLatestRevision=null, updateLatestVersion=null;
+let updateInstalledRevision=null, updateState="idle", updateChecking=false;
+let updateRequesting=false, updatePolling=false, updateStartedHere=false;
+const updatePhases=[
+  ["preparing","Подготовка"],["downloading","Загрузка исходного кода"],
+  ["dependencies","Установка зависимостей"],["backup","Резервная копия"],
+  ["switching","Переключение версии"],["verifying","Проверка запуска"],
+  ["finishing","Завершение"]
+];
+const updateStateLabels={
+  idle:"Готово к проверке",queued:"Обновление в очереди",
+  installing:"Выполняется обновление",success:"Обновление завершено",
+  failed:"Ошибка обновления"
+};
+function renderUpdateStatus(r){
+  const state=r.state||"idle", active=state==="queued"||state==="installing";
+  updateState=state;
+  if(!updateInstalledRevision&&r.installed_revision)updateInstalledRevision=r.installed_revision;
+  if(Object.prototype.hasOwnProperty.call(r,"available")){
+    updateAvailable=r.available===true;
+  }
+  if(r.latest_revision)updateLatestRevision=r.latest_revision;
+  if(r.latest_version)updateLatestVersion=r.latest_version;
+  if(updateLatestRevision&&r.installed_revision===updateLatestRevision)updateAvailable=false;
+  const version=r.installed_version||r.version;
+  $("update-current-version").textContent=version?"v"+version:"Версия неизвестна";
+  $("update-current-build").textContent=r.installed_revision?"Сборка "+r.installed_revision.slice(0,12):"Номер сборки неизвестен";
+  if(updateLatestRevision){
+    $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Сборка GitHub";
+    $("update-latest-build").textContent=updateLatestRevision.slice(0,12)+
+      (updateAvailable?" · доступна новая сборка":" · установлена");
+  }
+  $("update-state").dataset.state=state;
+  $("update-state-label").textContent=updateStateLabels[state]||"Состояние обновления";
+  $("update-state-symbol").textContent=({idle:"○",queued:"◷",installing:"↻",success:"✓",failed:"!"})[state]||"○";
+  $("update-status-text").textContent=r.message||"Ожидаем сведения о системе.";
+  $("update-status-time").textContent=r.updated_at?"Последнее событие: "+when(r.updated_at):"";
+  const stepIndex=updatePhases.findIndex(([phase])=>phase===r.phase);
+  const step=state==="queued"?0:Math.max(1,stepIndex+1);
+  show("update-progress",active);
+  $("update-step-label").textContent=state==="queued"?"Ожидаем запуска":stepIndex>=0?updatePhases[stepIndex][1]:"Подготавливаем обновление";
+  $("update-step-count").textContent=state==="queued"?"В очереди":"Этап "+step+" из "+updatePhases.length;
+  const track=$("update-progress").querySelector(".update-track");
+  track.setAttribute("aria-valuenow",String(step));
+  track.setAttribute("aria-valuetext",$("update-step-label").textContent);
+  $("update-progress-fill").style.width=(step/updatePhases.length*100)+"%";
+  const busy=active||updateRequesting;
+  $("check-update").disabled=!r.supported||busy||updateChecking;
+  $("install-update").disabled=!r.supported||!updateAvailable||busy||updateChecking;
+  $("check-update").classList.toggle("busy",updateChecking);
+  $("install-update").classList.toggle("busy",updateRequesting);
+  $("check-update").textContent=updateChecking?"Проверяем…":"Проверить обновления";
+  $("install-update").textContent=updateRequesting?"Отправляем запрос…":active?"Выполняется обновление…":"Установить обновление";
+  show("reload-after-update",state==="success"&&updateStartedHere);
+}
 async function loadUpdateStatus(){
+  if(updatePolling||updateChecking)return;
+  updatePolling=true;
   try{
     const r=await api("/api/update/status");
-    $("update-status-text").textContent=r.message;
-    $("update-version").textContent=r.installed_revision?"Текущая ревизия: "+r.installed_revision.slice(0,12):"";
-    $("install-update").disabled=!r.supported||["queued","installing"].includes(r.state);
-  }catch(error){$("update-status-text").textContent="Ошибка проверки: "+error.message;}
+    if(r.state==="success"&&updateInstalledRevision&&r.installed_revision!==updateInstalledRevision){
+      updateAvailable=false;
+    }
+    renderUpdateStatus(r);
+  }catch(error){
+    $("update-status-text").textContent=
+      ["queued","installing"].includes(updateState)
+        ?"Связь с сервером временно потеряна. Продолжаем проверять состояние…"
+        :"Не удалось получить состояние обновления: "+error.message;
+  }finally{updatePolling=false;}
 }
 $("check-update").addEventListener("click",async()=>{
+  if(updateChecking||updateRequesting||["queued","installing"].includes(updateState))return;
+  updateChecking=true;
+  updateAvailable=false;
+  $("update-state-label").textContent="Проверяем GitHub";
+  $("update-status-text").textContent="Получаем сведения о последней сборке…";
   $("check-update").disabled=true;
+  $("install-update").disabled=true;
+  $("check-update").classList.add("busy");
+  $("check-update").textContent="Проверяем…";
   try{
     const r=await api("/api/update/check");
-    $("update-status-text").textContent=r.message;
-    $("install-update").disabled=!r.supported||r.available!==true;
-  }catch(error){toast(error.message,true);}
-  finally{$("check-update").disabled=false;}
+    renderUpdateStatus(r);
+  }catch(error){
+    $("update-state-label").textContent="Проверка не удалась";
+    $("update-status-text").textContent=error.message;
+    toast(error.message,true);
+  }finally{
+    updateChecking=false;
+    await loadUpdateStatus();
+  }
 });
 $("install-update").addEventListener("click",async()=>{
-  if(!confirm("Установить обновление с официального GitHub? Панель временно перезапустится."))return;
-  try{const r=await api("/api/update/request","POST",{});toast(r.message);await loadUpdateStatus();}
-  catch(error){toast(error.message,true);}
+  if(!updateAvailable||updateRequesting||["queued","installing"].includes(updateState))return;
+  if(!confirm("Установить обновление с GitHub? Панель временно перезапустится; данные будут сохранены."))return;
+  updateRequesting=true;
+  updateStartedHere=true;
+  updateAvailable=false;
+  renderUpdateStatus({supported:true,installed_version:$("update-current-version").textContent.replace(/^v/,""),
+    installed_revision:updateInstalledRevision,state:"queued",phase:"preparing",
+    message:"Отправляем запрос системной службе обновления…"});
+  try{
+    await api("/api/update/request","POST",{});
+    await loadUpdateStatus();
+  }catch(error){
+    // Server restart can interrupt the POST after the request was accepted.
+    $("update-status-text").textContent="Не удалось подтвердить запрос. Проверяем сервер: "+error.message;
+  }finally{
+    updateRequesting=false;
+    await loadUpdateStatus();
+  }
 });
+$("reload-after-update").addEventListener("click",()=>window.location.reload());
+setInterval(()=>{
+  if(!$("app-root").hidden&&(selectedTab==="settings"||
+      updateState==="queued"||updateState==="installing"||updateRequesting)){
+    void loadUpdateStatus();
+  }
+},3000);
 
 /* Bulk MAX onboarding: administrator selects rooms and downloads one-time codes. */
 function maxCodeVisibleRooms(){

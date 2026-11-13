@@ -27,7 +27,9 @@ from pydantic import BaseModel, Field
 from . import auth, db, daily, settings, updates, max_delivery, maintenance
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(title="Termokontur", version="0.1.0", docs_url=None, redoc_url=None)
+from . import __version__
+
+app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 FAILED_LOGINS: dict[str, list[float]] = {}
 
