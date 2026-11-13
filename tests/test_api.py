@@ -231,7 +231,7 @@ def test_update_status_reports_version_progress_and_stale_result(admin, monkeypa
 
 
 def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path):
-    from termokontur import updates, db
+    from termokontur import updates, db, __version__
 
     unit = tmp_path / "termokontur-update.path"
     unit.write_text("[Path]\n")
