@@ -191,6 +191,78 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert admin.post("/api/update/request", json={}).status_code == 409
     assert admin.get("/api/update/status").json()["state"] == "queued"
 
+
+
+def test_update_status_reports_version_progress_and_stale_result(admin, monkeypatch, tmp_path):
+    import json
+    import os
+    from termokontur import __version__, updates, db
+
+    unit = tmp_path / "termokontur-update.path"
+    unit.write_text("[Path]\nPathExists=/var/lib/termokontur/update-request\n")
+    monkeypatch.setattr(updates, "SYSTEMD_PATH", unit)
+    data = db.db_path().parent
+    (data / "installed-revision").write_text("a" * 40 + "\n")
+    event = data / "update-status.json"
+    event.write_text(json.dumps({
+        "state": "installing", "phase": "dependencies",
+        "message": "Установка Python-зависимостей…"
+    }), encoding="utf-8")
+    info = admin.get("/api/update/status").json()
+    assert info["state"] == "installing"
+    assert info["phase"] == "dependencies"
+    assert info["installed_version"] == __version__
+    assert info["installed_revision"] == "a" * 40
+    assert info["updated_at"]
+    assert "Python" in info["message"]
+    assert admin.post("/api/update/request", json={}).status_code == 409
+
+    (data / "update-request").touch()
+    assert admin.get("/api/update/status").json()["state"] == "queued"
+    (data / "update-request").unlink()
+
+    monkeypatch.setattr(updates, "STALLED_SECONDS", 10)
+    os.utime(event, (0, 0))
+    stalled = admin.get("/api/update/status").json()
+    assert stalled["state"] == "failed"
+    assert stalled["phase"] == "failed"
+    assert "журнал" in stalled["message"]
+    assert admin.post("/api/update/request", json={}).status_code == 200
+
+
+def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path):
+    from termokontur import updates, db
+
+    unit = tmp_path / "termokontur-update.path"
+    unit.write_text("[Path]\n")
+    monkeypatch.setattr(updates, "SYSTEMD_PATH", unit)
+    (db.db_path().parent / "installed-revision").write_text("a" * 40 + "\n")
+    requested_urls = []
+
+    class Response:
+        def __init__(self, url):
+            self.url = url
+            self.text = '__version__ = "0.2.0"\n'
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"sha": "b" * 40}
+
+    def fake_get(url, **kwargs):
+        requested_urls.append(url)
+        return Response(url)
+
+    monkeypatch.setattr(updates.httpx, "get", fake_get)
+    result = admin.get("/api/update/check").json()
+    assert result["version"] == "0.2.0"
+    assert result["available"] is True
+    assert result["latest_version"] == "0.2.0"
+    assert result["latest_revision"] == "b" * 40
+    assert requested_urls == [
+        updates.GITHUB_HEAD, updates.GITHUB_VERSION.format(sha="b" * 40)
+    ]
+
+
 def test_ha_event_ids_are_namespaced_by_sensor_and_room(admin):
     first=admin.post("/api/rooms",json=room_payload(name="101")).json()
     second=admin.post("/api/rooms",json=room_payload(name="102")).json()
