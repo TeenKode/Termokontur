@@ -25,6 +25,7 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
     path=Path(__file__).resolve().parents[1]/"scripts"/"termokontur-apply-update"
     contents=path.read_text(encoding="utf-8")
     assert "\\nchmod" not in contents
+    assert 'REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)' in contents
     assert "systemctl daemon-reload" in contents
     assert "pre-update-" in contents
     assert 'install -o root -g root -m 0755 "$APP/scripts/termokontur-apply-update"' in contents

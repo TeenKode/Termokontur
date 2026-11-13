@@ -62,7 +62,8 @@ exec /usr/bin/git "$@"
 SH
 chmod 0755 /usr/local/bin/git
 export PATH="/usr/local/bin:$PATH"
-git config --global --add safe.directory '*'
+# Trust only the read-only CI checkout, never every repository.
+git config --global --add safe.directory /src
 
 cd /src
 bash scripts/install-debian.sh
