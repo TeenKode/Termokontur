@@ -12,5 +12,6 @@ TimeoutStartSec=300
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
-ProtectSystem=full
-ReadWritePaths=/opt /var/lib/termokontur /etc/systemd/system /usr/local/sbin
+# This privileged updater must replace systemd unit files and its own helper.
+# Keep home isolation and no-new-privileges, but do not make /etc read-only.
+ProtectSystem=no
