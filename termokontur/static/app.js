@@ -223,7 +223,7 @@ $("login-form").addEventListener("submit",async event=>{
 });
 $("logout").addEventListener("click",async()=>{try{await api("/api/logout","POST");}catch{}enterLogin();});
 $("refresh").addEventListener("click",refresh);
-for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{setTab(nav.dataset.tab);if(nav.dataset.tab==="readings")refreshReadings();if(nav.dataset.tab==="settings")loadSettings();});
+for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{setTab(nav.dataset.tab);if(nav.dataset.tab==="readings")refreshReadings();if(nav.dataset.tab==="settings"&&!settingsDirty())loadSettings();});
 $("search-rooms").addEventListener("input",renderOverview);
 $("building-filter").addEventListener("change",renderOverview);
 $("reading-filter").addEventListener("change",refreshReadings);
@@ -261,9 +261,94 @@ $("reading-form").addEventListener("submit",async event=>{
 window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();});
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp();await refresh();}else enterLogin();}catch{enterLogin();}})();
 
-/* Settings are persisted on the server, not stored in browser or config files. */
+/* Accessible settings workspace: categories, overview and independent saves. */
+const settingsGroups = {
+  general:["general-settings-form"],notifications:["reminders-settings-form","alerts-settings-form"],
+  backups:["maintenance-form"]
+};
+let selectedSettingsCategory="summary",settingsLoaded=false;
+function settingsDirty(){
+  return !!document.querySelector('.settings-pane form[data-dirty="true"]');
+}
+function updateDirtyNavigation(){
+  for(const [category,forms] of Object.entries(settingsGroups)){
+    const dirty=forms.some(id=>$(id).dataset.dirty==="true");
+    for(const button of document.querySelectorAll('.settings-nav-button[data-settings-target="'+category+'"]'))
+      button.classList.toggle("is-dirty",dirty);
+  }
+}
+function markSettingsSaved(form,message){
+  form.dataset.dirty="false";
+  const feedback=form.querySelector(".settings-save-feedback");
+  if(feedback){feedback.textContent=message;feedback.dataset.state="saved";}
+  updateDirtyNavigation();
+}
+function markSettingsDirty(form){
+  form.dataset.dirty="true";
+  const feedback=form.querySelector(".settings-save-feedback");
+  if(feedback){feedback.textContent="Есть несохранённые изменения";feedback.dataset.state="unsaved";}
+  updateDirtyNavigation();
+}
+for(const formIds of Object.values(settingsGroups))for(const id of formIds){
+  const form=$(id);
+  for(const type of ["input","change"])form.addEventListener(type,()=>markSettingsDirty(form));
+}
+function setSettingsCategory(category){
+  if(!document.querySelector('.settings-pane[data-settings-view="'+category+'"]'))return;
+  selectedSettingsCategory=category;
+  for(const pane of document.querySelectorAll("[data-settings-view]"))
+    pane.hidden=pane.dataset.settingsView!==category;
+  for(const button of document.querySelectorAll(".settings-nav-button")){
+    const active=button.dataset.settingsTarget===category;
+    button.classList.toggle("active",active);
+    if(active)button.setAttribute("aria-current","page");
+    else button.removeAttribute("aria-current");
+  }
+  if(category==="backups")void loadBackups();
+  if(category==="updates")void loadUpdateStatus();
+  if(category==="max")void loadMaxDiagnostics();
+  if(window.matchMedia("(max-width:900px)").matches){
+    document.querySelector(".settings-content").scrollIntoView({
+      block:"start",behavior:window.matchMedia("(prefers-reduced-motion:reduce)").matches?"auto":"smooth"
+    });
+  }
+}
+for(const button of document.querySelectorAll("[data-settings-target]")){
+  button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
+}
+function renderSettingsSummary(){
+  if(!settingsCache)return;
+  $("settings-summary-org").textContent=settingsCache.organization_name;
+  $("settings-summary-timezone").textContent=settingsCache.timezone+" · "+settingsCache.stale_hours+" ч до устаревания";
+  $("settings-summary-max").textContent=settingsCache.max_token_configured?"Подключён":"Не настроен";
+  $("settings-summary-max-mode").textContent=settingsCache.max_token_configured
+    ?(settingsCache.max_mode==="webhook"?"Webhook HTTPS":"Тестовый Long Polling")
+    :"Токен MAX отсутствует";
+  $("settings-summary-sensors").textContent=settingsCache.ingest_key_configured?"Ключ настроен":"Ключ отсутствует";
+  $("settings-summary-backup").textContent=settingsCache.backup_interval_days
+    ?"Автокопия каждые "+settingsCache.backup_interval_days+" дн.":"Автокопии выключены";
+  $("settings-summary-reminders").textContent=settingsCache.reminders_enabled?"Включены":"Выключены";
+  $("settings-summary-alerts").textContent=settingsCache.alerts_enabled
+    ?"Предупреждения о температуре включены":"Предупреждения о температуре выключены";
+}
+function syncNotificationControls(){
+  for(const [container,toggle] of [["reminder-options","setting-enabled"],["alert-options","setting-alerts-enabled"]]){
+    const inactive=!$(toggle).checked;
+    $(container).classList.toggle("is-inactive",inactive);
+    for(const field of $(container).querySelectorAll("input,select,textarea"))
+      field.disabled=inactive;
+  }
+}
+$("setting-enabled").addEventListener("change",syncNotificationControls);
+$("setting-alerts-enabled").addEventListener("change",syncNotificationControls);
 async function loadSettings() {
   try {
+    const pending=new Map();
+    for(const id of Object.values(settingsGroups).flat()){
+      const form=$(id);
+      if(form.dataset.dirty==="true")pending.set(id,
+        [...form.querySelectorAll("input,select,textarea")].map(input=>({value:input.value,checked:input.checked})));
+    }
     settingsCache=await api("/api/settings");
     $("setting-organization").value=settingsCache.organization_name;
     $("setting-timezone").value=settingsCache.timezone;
@@ -285,30 +370,79 @@ async function loadSettings() {
     $("activate-webhook").disabled=!settingsCache.max_token_configured;
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
+    settingsLoaded=true;
+    for(const id of Object.values(settingsGroups).flat()){
+      const form=$(id),values=pending.get(id);
+      if(values){
+        [...form.querySelectorAll("input,select,textarea")].forEach((input,i)=>{
+          input.value=values[i].value;
+          if(input.type==="checkbox"||input.type==="radio")input.checked=values[i].checked;
+        });
+      }else form.dataset.dirty="false";
+    }
+    syncNotificationControls();
+    renderSettingsSummary();
+    updateDirtyNavigation();
     await Promise.all([loadUpdateStatus(),loadBackups()]);
-    void loadMaxDiagnostics();
+    if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
+}
+/* Merge only the current form's fields into fresh settings from the server.
+   Other categories and secrets are not inadvertently overwritten. */
+async function saveSettingsPatch(form,patch,message){
+  const button=form.querySelector('button[type="submit"]');
+  if(button.disabled)return;
+  button.disabled=true;
+  const originalText=button.textContent;
+  button.textContent="Сохраняем…";
+  try{
+    const latest=await api("/api/settings");
+    const data={...latest,...patch};
+    if(data.retention_days>0 && data.retention_days<30)
+      throw Error("Срок хранения: минимум 30 дней или 0");
+    if(!Array.isArray(data.reminder_days)||data.reminder_days.length===0)
+      throw Error("Выберите хотя бы один день для расписания");
+    settingsCache=await api("/api/settings","PUT",data);
+    renderSettingsSummary();
+    document.title=settingsCache.organization_name+" — Термоконтур";
+    markSettingsSaved(form,message);
+    toast(message);
+    return true;
+  }catch(error){
+    const feedback=form.querySelector(".settings-save-feedback");
+    if(feedback){feedback.textContent="Не сохранено: "+error.message;feedback.dataset.state="error";}
+    toast(error.message,true);
+    return false;
+  }finally{
+    button.disabled=false;
+    button.textContent=originalText;
+  }
 }
 $("general-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
-  try{
-    const data={
-      organization_name:$("setting-organization").value,
-      timezone:$("setting-timezone").value,
-      stale_hours:Number($("setting-stale").value),
-      reminders_enabled:$("setting-enabled").checked,
-      reminder_time:$("setting-time").value,
-      reminder_days:[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value)),
-      reminder_window_minutes:Number($("setting-window").value),
-      backup_interval_days:settingsCache.backup_interval_days,
-      backup_keep:settingsCache.backup_keep,
-      retention_days:settingsCache.retention_days,
-      alerts_enabled:settingsCache.alerts_enabled,
-      alert_cooldown_minutes:settingsCache.alert_cooldown_minutes
-    };
-    settingsCache=await api("/api/settings","PUT",data);
-    toast("Настройки сохранены");await refresh();
-  }catch(error){toast(error.message,true);}
+  const saved=await saveSettingsPatch(event.currentTarget,{
+    organization_name:$("setting-organization").value.trim(),
+    timezone:$("setting-timezone").value.trim(),
+    stale_hours:Number($("setting-stale").value)
+  },"Параметры организации сохранены");
+  if(saved)await refresh();
+});
+$("reminders-settings-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const days=[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value));
+  await saveSettingsPatch(event.currentTarget,{
+    reminders_enabled:$("setting-enabled").checked,
+    reminder_time:$("setting-time").value,
+    reminder_days:days.length?days:($("setting-enabled").checked?[]:settingsCache.reminder_days),
+    reminder_window_minutes:Number($("setting-window").value)
+  },"Расписание напоминаний сохранено");
+});
+$("alerts-settings-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  await saveSettingsPatch(event.currentTarget,{
+    alerts_enabled:$("setting-alerts-enabled").checked,
+    alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
+  },"Температурные уведомления сохранены");
 });
 $("max-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
@@ -456,6 +590,8 @@ function renderUpdateStatus(r){
   if(updateLatestRevision&&r.installed_revision===updateLatestRevision)updateAvailable=false;
   const version=r.installed_version||r.version;
   $("update-current-version").textContent=version?"v"+version:"Версия неизвестна";
+  $("settings-summary-version").textContent=version?"v"+version:"Версия неизвестна";
+  $("settings-summary-build").textContent=r.installed_revision?"Сборка "+r.installed_revision.slice(0,12):"Сборка неизвестна";
   $("update-current-build").textContent=r.installed_revision?"Сборка "+r.installed_revision.slice(0,12):"Номер сборки неизвестен";
   if(updateLatestRevision){
     $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Сборка GitHub";
@@ -704,36 +840,21 @@ setInterval(()=>{
     refresh();
 },30000);
 
-function allSettingsPayload(){
-  return {
-    organization_name:$("setting-organization").value,
-    timezone:$("setting-timezone").value,
-    stale_hours:Number($("setting-stale").value),
-    reminders_enabled:$("setting-enabled").checked,
-    reminder_time:$("setting-time").value,
-    reminder_days:[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value)),
-    reminder_window_minutes:Number($("setting-window").value),
-    backup_interval_days:Number($("setting-backup-interval").value),
-    backup_keep:Number($("setting-backup-keep").value),
-    retention_days:Number($("setting-retention").value),
-    alerts_enabled:$("setting-alerts-enabled").checked,
-    alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
-  };
-}
 $("maintenance-form").addEventListener("submit",async event=>{
   event.preventDefault();
-  try{
-    const data=allSettingsPayload();
-    if(data.retention_days>0 && data.retention_days<30)throw Error("Срок хранения: минимум 30 дней или 0");
-    settingsCache=await api("/api/settings","PUT",data);
-    toast("Параметры резервного копирования и оповещений сохранены");
-  }catch(error){toast(error.message,true);}
+  await saveSettingsPatch(event.currentTarget,{
+    backup_interval_days:Number($("setting-backup-interval").value),
+    backup_keep:Number($("setting-backup-keep").value),
+    retention_days:Number($("setting-retention").value)
+  },"Параметры резервного копирования и хранения сохранены");
 });
 const bytesToText=bytes=>bytes>1024*1024?(bytes/1024/1024).toFixed(1)+" МБ":Math.round(bytes/1024)+" КБ";
 async function loadBackups(){
   try{
     const backups=await api("/api/backups");
     const view=$("backup-list");view.replaceChildren();
+    $("settings-summary-last-backup").textContent=backups.length
+      ?("Последняя копия: "+when(backups.reduce((last,item)=>item.created_at>last.created_at?item:last,backups[0]).created_at)):"Пока нет резервных копий";
     if(!backups.length){view.append(el("p","hint","Резервных копий пока нет."));return;}
     for(const item of backups){
       const row=el("div","backup-entry");
