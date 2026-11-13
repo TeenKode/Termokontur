@@ -34,6 +34,21 @@ health() {
   done
   return 1
 }
+# Fail before stopping services if the updater cannot replace system files.
+# This protects the running application from partial upgrades in restricted LXC.
+check_writable_dir() {
+  local directory="$1" probe
+  if ! probe=$(mktemp "$directory/.termokontur-update-probe.XXXXXXXX" 2>/dev/null); then
+    echo "Updater cannot write to $directory; check systemd ProtectSystem and filesystem mount options" >&2
+    return 1
+  fi
+  if ! install -m 0644 /dev/null "$probe"; then
+    rm -f -- "$probe" || true
+    echo "Updater cannot replace files in $directory" >&2
+    return 1
+  fi
+  rm -f -- "$probe"
+}
 restore_db() {
   if [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]]; then
     runuser -u termokontur -- /usr/bin/python3 - "$BACKUP_FILE" "$DATA/termokontur.sqlite3" <<'PY'
@@ -53,7 +68,9 @@ cleanup() {
       if (( SERVICES_SAVED )); then
         for unit in "${INSTALL_UNITS[@]}"; do
           if [[ -f "$OLD_UNITS/$unit" ]]; then
-            install -o root -g root -m 0644 "$OLD_UNITS/$unit" "$UNITS_DIR/$unit"
+            if ! install -o root -g root -m 0644 "$OLD_UNITS/$unit" "$UNITS_DIR/$unit"; then
+              echo "WARNING: could not restore $unit; copy retained in $OLD_UNITS" >&2
+            fi
           fi
         done
         systemctl daemon-reload || true
@@ -77,6 +94,8 @@ trap cleanup EXIT
 [[ -f "$DATA/update-request" ]] || exit 0
 runuser -u termokontur -- rm -f -- "$DATA/update-request"
 record installing "Подготовка версии GitHub main…"
+check_writable_dir "$UNITS_DIR"
+check_writable_dir "/usr/local/sbin"
 STAGE=$(mktemp -d /opt/termokontur-stage.XXXXXXXX)
 chown termokontur:termokontur "$STAGE"
 runuser -u termokontur -- git clone --depth 1 --single-branch --branch main \

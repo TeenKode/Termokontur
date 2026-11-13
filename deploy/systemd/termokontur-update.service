@@ -12,5 +12,7 @@ TimeoutStartSec=300
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
+# Keep /etc protected except for the explicit directories used during updates.
+# The deployed unit must include both paths, even on installations predating this fix.
 ProtectSystem=full
 ReadWritePaths=/opt /var/lib/termokontur /etc/systemd/system /usr/local/sbin
