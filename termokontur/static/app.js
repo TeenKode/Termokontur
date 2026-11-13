@@ -307,6 +307,11 @@ function setSettingsCategory(category){
   if(category==="backups")void loadBackups();
   if(category==="updates")void loadUpdateStatus();
   if(category==="max")void loadMaxDiagnostics();
+  if(window.matchMedia("(max-width:900px)").matches){
+    document.querySelector(".settings-content").scrollIntoView({
+      block:"start",behavior:window.matchMedia("(prefers-reduced-motion:reduce)").matches?"auto":"smooth"
+    });
+  }
 }
 for(const button of document.querySelectorAll("[data-settings-target]")){
   button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
@@ -327,8 +332,12 @@ function renderSettingsSummary(){
     ?"Предупреждения о температуре включены":"Предупреждения о температуре выключены";
 }
 function syncNotificationControls(){
-  $("reminder-options").classList.toggle("is-inactive",!$("setting-enabled").checked);
-  $("alert-options").classList.toggle("is-inactive",!$("setting-alerts-enabled").checked);
+  for(const [container,toggle] of [["reminder-options","setting-enabled"],["alert-options","setting-alerts-enabled"]]){
+    const inactive=!$(toggle).checked;
+    $(container).classList.toggle("is-inactive",inactive);
+    for(const field of $(container).querySelectorAll("input,select,textarea"))
+      field.disabled=inactive;
+  }
 }
 $("setting-enabled").addEventListener("change",syncNotificationControls);
 $("setting-alerts-enabled").addEventListener("change",syncNotificationControls);
