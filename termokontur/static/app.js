@@ -334,6 +334,12 @@ $("setting-enabled").addEventListener("change",syncNotificationControls);
 $("setting-alerts-enabled").addEventListener("change",syncNotificationControls);
 async function loadSettings() {
   try {
+    const pending=new Map();
+    for(const id of Object.values(settingsGroups).flat()){
+      const form=$(id);
+      if(form.dataset.dirty==="true")pending.set(id,
+        [...form.querySelectorAll("input,select,textarea")].map(input=>({value:input.value,checked:input.checked})));
+    }
     settingsCache=await api("/api/settings");
     $("setting-organization").value=settingsCache.organization_name;
     $("setting-timezone").value=settingsCache.timezone;
@@ -356,9 +362,17 @@ async function loadSettings() {
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
     settingsLoaded=true;
+    for(const id of Object.values(settingsGroups).flat()){
+      const form=$(id),values=pending.get(id);
+      if(values){
+        [...form.querySelectorAll("input,select,textarea")].forEach((input,i)=>{
+          input.value=values[i].value;
+          if(input.type==="checkbox"||input.type==="radio")input.checked=values[i].checked;
+        });
+      }else form.dataset.dirty="false";
+    }
     syncNotificationControls();
     renderSettingsSummary();
-    for(const id of Object.values(settingsGroups).flat())$(id).dataset.dirty="false";
     updateDirtyNavigation();
     await Promise.all([loadUpdateStatus(),loadBackups()]);
     if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
