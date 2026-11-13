@@ -92,88 +92,193 @@
         <div class="info-strip"><strong>Как подключить учителя?</strong> Для одного кабинета используйте «Код MAX» (30 минут). Для нескольких — «Коды подключения MAX»: выберите помещения, срок действия и выгрузите CSV для Excel. Каждый код одноразовый, а новый выпуск аннулирует прежние неиспользованные коды выбранных кабинетов.</div>
       </section>
       <section id="view-settings" class="view" hidden>
-        <div class="heading"><div><h1>Настройки</h1><p>Все пользовательские параметры сохраняются в базе и применяются из панели.</p></div></div>
-        <div class="settings-grid">
-          <article class="panel settings-panel">
-            <h2>Общие параметры</h2>
-            <form id="general-settings-form" class="settings-form">
-              <label>Название организации<input id="setting-organization" maxlength="100" required></label>
-              <label>Часовой пояс<input id="setting-timezone" list="timezone-options" required></label>
-              <datalist id="timezone-options"><option value="Asia/Vladivostok"></option><option value="Europe/Moscow"></option><option value="Asia/Yekaterinburg"></option><option value="Asia/Krasnoyarsk"></option><option value="Asia/Irkutsk"></option><option value="Asia/Yakutsk"></option><option value="UTC"></option></datalist>
-              <label>Показания устаревают через (часов)<input id="setting-stale" type="number" min="1" max="168" required></label>
-              <label class="settings-toggle"><input id="setting-enabled" type="checkbox">Напоминать о пропущенных показаниях</label>
-              <div class="field-grid"><label>Время напоминания<input id="setting-time" type="time" required></label><label>Окно отправки, минут<input id="setting-window" type="number" min="1" max="240" required></label></div>
-              <fieldset class="weekdays"><legend>Дни недели</legend><label><input type="checkbox" name="remind-day" value="0">Пн</label><label><input type="checkbox" name="remind-day" value="1">Вт</label><label><input type="checkbox" name="remind-day" value="2">Ср</label><label><input type="checkbox" name="remind-day" value="3">Чт</label><label><input type="checkbox" name="remind-day" value="4">Пт</label><label><input type="checkbox" name="remind-day" value="5">Сб</label><label><input type="checkbox" name="remind-day" value="6">Вс</label></fieldset>
-              <p class="hint">Расписание учитывает часовой пояс, но пока не исключает каникулы и праздники.</p>
-              <button type="submit" class="btn primary">Сохранить настройки</button>
-            </form>
-          </article>
-          <article class="panel settings-panel">
-            <h2>Интеграции MAX и Home Assistant</h2>
-            <form id="max-settings-form" class="settings-form">
-              <p id="max-status" class="hint"></p>
-              <label>Токен бота MAX<input id="setting-max-token" type="password" autocomplete="off" placeholder="Новый токен"></label>
-              <div class="heading-actions"><button type="submit" class="btn primary">Сохранить токен</button><button type="button" id="clear-max-token" class="btn secondary">Отключить MAX</button></div>
-            </form>
-            <div class="settings-divider"></div>
-            <h2>MAX: способ получения сообщений</h2>
-            <p id="max-webhook-mode" class="hint">Тестовый режим: Long Polling.</p>
-            <form id="max-webhook-form" class="settings-form">
-              <label>Публичный HTTPS-адрес webhook
-                <input id="max-webhook-url" type="url" placeholder="https://example.org/api/max/webhook"
-                       autocomplete="url" required>
-              </label>
-              <p class="hint">Для работы за NAT направьте только путь /api/max/webhook через HTTPS-туннель на локальный порт 8092. Доверенный сертификат, порт 443.</p>
-              <div class="heading-actions"><button type="submit" class="btn primary" id="activate-webhook">Включить webhook</button>
-              <button type="button" class="btn secondary" id="switch-polling">Тестовый Long Polling</button></div>
-            </form>
-            <p id="max-diagnostics" class="hint" role="status" aria-live="polite">Проверка состояния MAX ещё не запускалась.</p>
-            <button type="button" id="check-max-diagnostics" class="btn secondary">Проверить подключение MAX</button>
-            <div class="settings-divider"></div>
-            <p id="ingest-status" class="hint"></p>
-            <button type="button" id="rotate-ingest" class="btn secondary">Создать новый ключ датчиков</button>
-            <div id="ingest-reveal" class="secret-reveal" hidden><p>Скопируйте ключ сейчас. Повторно он не отображается.</p><code id="ingest-value"></code><button type="button" id="copy-ingest" class="btn secondary">Копировать ключ</button></div>
-            <p class="hint">При смене ключа нужно обновить настройки всех подключённых датчиков.</p>
-          </article>
-          <article class="panel settings-panel">
-            <h2>Безопасность</h2>
-            <form id="password-settings-form" class="settings-form">
-              <label>Текущий пароль<div class="password-field"><input id="old-password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-password-target="old-password" aria-pressed="false" aria-label="Показать текущий пароль">Показать</button></div></label>
-              <label>Новый пароль (от 8 символов)<div class="password-field"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="new-password" aria-pressed="false" aria-label="Показать новый пароль">Показать</button></div></label>
-              <label>Повтор нового пароля<div class="password-field"><input id="confirm-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="confirm-password" aria-pressed="false" aria-label="Показать подтверждение пароля">Показать</button></div></label>
-              <p class="password-hint" id="password-feedback" role="status" aria-live="polite">Можно использовать только буквы или цифры — спецсимволы не обязательны.</p>
-              <button type="submit" class="btn primary">Изменить пароль</button>
-              <p class="hint">От 8 до 256 символов. После смены пароля все сеансы входа будут завершены.</p>
-            </form>
-          </article>
-
-          <article class="panel settings-panel">
-            <h2>Резервные копии и хранение</h2>
-            <p class="hint">Автоматические копии сохраняются отдельно от базы. Данные не отправляются в облако.</p>
-            <form id="maintenance-form" class="settings-form">
-              <div class="field-grid">
-                <label>Автокопия каждые N дней (0 — выкл.)<input id="setting-backup-interval" type="number" min="0" max="30" required></label>
-                <label>Хранить автокопий<input id="setting-backup-keep" type="number" min="1" max="100" required></label>
+        <div class="heading settings-heading">
+          <div><h1>Настройки</h1><p>Управляйте системой, подключениями, уведомлениями и сохранностью данных.</p></div>
+          <span class="settings-managed">Параметры хранятся на сервере</span>
+        </div>
+        <div class="settings-layout">
+          <nav class="settings-navigation" aria-label="Категории настроек">
+            <span class="settings-nav-caption">УПРАВЛЕНИЕ</span>
+            <button type="button" class="settings-nav-button active" data-settings-target="summary" aria-current="page">Обзор системы</button>
+            <button type="button" class="settings-nav-button" data-settings-target="general">Организация</button>
+            <button type="button" class="settings-nav-button" data-settings-target="notifications">Уведомления</button>
+            <span class="settings-nav-caption">ПОДКЛЮЧЕНИЯ</span>
+            <button type="button" class="settings-nav-button" data-settings-target="max">Бот MAX</button>
+            <button type="button" class="settings-nav-button" data-settings-target="sensors">Датчики и API</button>
+            <span class="settings-nav-caption">ОБСЛУЖИВАНИЕ</span>
+            <button type="button" class="settings-nav-button" data-settings-target="backups">Данные и резервные копии</button>
+            <button type="button" class="settings-nav-button" data-settings-target="security">Безопасность</button>
+            <button type="button" class="settings-nav-button" data-settings-target="updates">Обновление системы</button>
+          </nav>
+          <div class="settings-content">
+            <div class="settings-pane" data-settings-view="summary">
+              <div class="settings-section-heading"><h2>Состояние системы</h2><p>Основные настройки и доступность подключений — в одном месте.</p></div>
+              <div class="settings-summary-grid">
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Организация</span>
+                  <strong id="settings-summary-org">Загрузка…</strong>
+                  <small id="settings-summary-timezone">—</small>
+                  <button type="button" data-settings-target="general">Изменить параметры</button>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Бот MAX</span>
+                  <strong id="settings-summary-max">Проверяем…</strong>
+                  <small id="settings-summary-max-mode">—</small>
+                  <button type="button" data-settings-target="max">Настроить MAX</button>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Приём показаний</span>
+                  <strong id="settings-summary-sensors">Проверяем…</strong>
+                  <small>Home Assistant и Wi-Fi-датчики</small>
+                  <button type="button" data-settings-target="sensors">Ключ и подключение</button>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Резервные копии</span>
+                  <strong id="settings-summary-backup">Проверяем…</strong>
+                  <small id="settings-summary-last-backup">—</small>
+                  <button type="button" data-settings-target="backups">Управление копиями</button>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Напоминания</span>
+                  <strong id="settings-summary-reminders">—</strong>
+                  <small id="settings-summary-alerts">—</small>
+                  <button type="button" data-settings-target="notifications">Изменить расписание</button>
+                </article>
+                <article class="settings-summary-card">
+                  <span class="settings-summary-label">Версия системы</span>
+                  <strong id="settings-summary-version">Проверяем…</strong>
+                  <small id="settings-summary-build">—</small>
+                  <button type="button" data-settings-target="updates">Проверить обновления</button>
+                </article>
               </div>
-              <label>Удалять измерения старше N дней (0 — никогда)
-                <input id="setting-retention" type="number" min="0" max="3650" required>
-              </label>
-              <p class="hint">Если срок хранения включён, минимум 30 дней. Очистка необратима без резервной копии.</p>
-              <label class="settings-toggle"><input id="setting-alerts-enabled" type="checkbox">Отправлять MAX-уведомления при выходе температуры за границы нормы</label>
-              <label>Минимальный интервал уведомлений (минуты)<input id="setting-alert-cooldown" type="number" min="5" max="1440" required></label>
-              <button type="submit" class="btn primary">Сохранить обслуживание</button>
-            </form>
-            <div class="settings-divider"></div>
-            <div class="heading-actions">
-              <button type="button" id="backup-create" class="btn primary">+ Создать копию</button>
-              <button type="button" id="backup-import" class="btn secondary">Импорт SQLite-файла</button>
-              <input id="backup-upload-file" type="file" accept=".sqlite3,.db,.sqlite" hidden>
+              <div class="settings-guidance">
+                <h3>Быстрая проверка после настройки</h3>
+                <p>Убедитесь, что у сотрудников выпущены коды подключения MAX, хотя бы один кабинет получает показания, а резервное копирование включено. Секретные токены не отображаются повторно.</p>
+              </div>
             </div>
-            <p class="hint">Сохранённые резервные копии (содержат настройки и идентификаторы MAX). Храните скачанные файлы безопасно.</p>
-            <div id="backup-list" class="backup-list">Загрузка...</div>
-          </article>
+            <div class="settings-pane" data-settings-view="general" hidden>
+              <div class="settings-section-heading"><h2>Организация</h2><p>Название панели, локальное время и актуальность измерений.</p></div>
+              <article class="panel settings-panel">
+                <form id="general-settings-form" class="settings-form">
+                  <label for="setting-organization">Название организации<input id="setting-organization" maxlength="100" required autocomplete="organization"></label>
+                  <label for="setting-timezone">Часовой пояс<input id="setting-timezone" list="timezone-options" required autocomplete="off"></label>
+                  <datalist id="timezone-options"><option value="Asia/Vladivostok"></option><option value="Europe/Moscow"></option><option value="Asia/Yekaterinburg"></option><option value="Asia/Krasnoyarsk"></option><option value="Asia/Irkutsk"></option><option value="Asia/Yakutsk"></option><option value="UTC"></option></datalist>
+                  <p class="hint">Время в журналах и расписание уведомлений рассчитываются в этом часовом поясе. Например, для Комсомольска-на-Амуре — Asia/Vladivostok.</p>
+                  <label for="setting-stale">Считать показания устаревшими через, часов<input id="setting-stale" type="number" min="1" max="168" required></label>
+                  <p class="hint">Если новых измерений нет дольше заданного времени, помещение отображается без актуальных данных.</p>
+                  <div class="settings-save"><span class="settings-save-feedback" id="general-save-feedback" role="status" aria-live="polite">Изменения сохраняются после нажатия кнопки.</span><button type="submit" class="btn primary">Сохранить</button></div>
+                </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="notifications" hidden>
+              <div class="settings-section-heading"><h2>Уведомления</h2><p>Когда отправлять напоминания и предупреждать об отклонениях температуры.</p></div>
+              <article class="panel settings-panel">
+                <h3>Напоминания о пропущенных измерениях</h3>
+                <form id="reminders-settings-form" class="settings-form">
+                  <label class="settings-toggle"><input id="setting-enabled" type="checkbox">Включить напоминания</label>
+                  <div id="reminder-options" class="settings-dependent">
+                    <div class="field-grid"><label for="setting-time">Время отправки<input id="setting-time" type="time" required></label><label for="setting-window">Окно отправки, минут<input id="setting-window" type="number" min="1" max="240" required></label></div>
+                    <fieldset class="weekdays"><legend>Дни недели</legend><label><input type="checkbox" name="remind-day" value="0">Пн</label><label><input type="checkbox" name="remind-day" value="1">Вт</label><label><input type="checkbox" name="remind-day" value="2">Ср</label><label><input type="checkbox" name="remind-day" value="3">Чт</label><label><input type="checkbox" name="remind-day" value="4">Пт</label><label><input type="checkbox" name="remind-day" value="5">Сб</label><label><input type="checkbox" name="remind-day" value="6">Вс</label></fieldset>
+                  </div>
+                  <p class="hint">Учитывается часовой пояс организации. Исключение каникул и праздников пока не предусмотрено.</p>
+                  <div class="settings-save"><span class="settings-save-feedback" id="reminders-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить напоминания</button></div>
+                </form>
+              </article>
+              <article class="panel settings-panel">
+                <h3>Температурные предупреждения</h3>
+                <form id="alerts-settings-form" class="settings-form">
+                  <label class="settings-toggle"><input id="setting-alerts-enabled" type="checkbox">Уведомлять через MAX при выходе температуры за пределы нормы</label>
+                  <div id="alert-options" class="settings-dependent">
+                    <label for="setting-alert-cooldown">Не повторять предупреждение раньше чем через, минут<input id="setting-alert-cooldown" type="number" min="5" max="1440" required></label>
+                  </div>
+                  <p class="hint">Пределы нормы задаются отдельно для каждого кабинета в разделе «Помещения».</p>
+                  <div class="settings-save"><span class="settings-save-feedback" id="alerts-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить предупреждения</button></div>
+                </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="max" hidden>
+              <div class="settings-section-heading"><h2>Бот MAX</h2><p>Подключение сотрудников, доставка сообщений и диагностика.</p></div>
+              <article class="panel settings-panel">
+                <h3>Доступ бота</h3>
+                <form id="max-settings-form" class="settings-form">
+                  <p id="max-status" class="hint"></p>
+                  <label for="setting-max-token">Новый токен бота MAX<input id="setting-max-token" type="password" autocomplete="off" placeholder="Введите токен для замены"></label>
+                  <p class="hint">Действующий токен скрыт. Для замены сохраните новый токен, старый будет отменён в настройках панели.</p>
+                  <div class="heading-actions"><button type="submit" class="btn primary">Сохранить токен</button><button type="button" id="clear-max-token" class="btn secondary">Отключить MAX</button></div>
+                </form>
+              </article>
+              <article class="panel settings-panel">
+                <h3>Получение сообщений</h3>
+                <p id="max-webhook-mode" class="hint">Тестовый режим: Long Polling.</p>
+                <form id="max-webhook-form" class="settings-form">
+                  <label for="max-webhook-url">Публичный HTTPS-адрес webhook
+                    <input id="max-webhook-url" type="url" placeholder="https://example.org/api/max/webhook" autocomplete="url" required>
+                  </label>
+                  <p class="hint">За NAT направьте только /api/max/webhook через HTTPS-туннель на локальный порт 8092. Нужен действующий сертификат и порт 443.</p>
+                  <div class="heading-actions"><button type="submit" class="btn primary" id="activate-webhook">Включить webhook</button><button type="button" class="btn secondary" id="switch-polling">Тестовый Long Polling</button></div>
+                </form>
+                <div class="settings-divider"></div>
+                <h3>Диагностика доставки</h3>
+                <p id="max-diagnostics" class="hint" role="status" aria-live="polite">Нажмите для проверки подключения MAX.</p>
+                <button type="button" id="check-max-diagnostics" class="btn secondary">Проверить подключение MAX</button>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="sensors" hidden>
+              <div class="settings-section-heading"><h2>Датчики и API</h2><p>Управление общим ключом приёма показаний от датчиков и Home Assistant.</p></div>
+              <article class="panel settings-panel">
+                <h3>Ключ датчиков</h3>
+                <p id="ingest-status" class="hint"></p>
+                <p class="hint">Ключ передаётся в заголовке X-Api-Key при отправке измерений на /api/ingest. Сохраняйте его только в доверенных устройствах.</p>
+                <button type="button" id="rotate-ingest" class="btn secondary">Создать или заменить ключ</button>
+                <div id="ingest-reveal" class="secret-reveal" hidden><p>Скопируйте ключ сейчас. Повторно он не отображается.</p><code id="ingest-value"></code><button type="button" id="copy-ingest" class="btn secondary">Копировать ключ</button></div>
+                <p class="hint">Замена ключа немедленно прекращает приём измерений со старым ключом. Обновите настройки всех подключённых устройств.</p>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="backups" hidden>
+              <div class="settings-section-heading"><h2>Данные и резервные копии</h2><p>Автоматическое резервирование, хранение измерений и восстановление.</p></div>
+              <article class="panel settings-panel">
+                <h3>Автоматическое обслуживание</h3>
+                <form id="maintenance-form" class="settings-form">
+                  <div class="field-grid">
+                    <label for="setting-backup-interval">Создавать копию каждые, дней (0 — выкл.)<input id="setting-backup-interval" type="number" min="0" max="30" required></label>
+                    <label for="setting-backup-keep">Количество автокопий<input id="setting-backup-keep" type="number" min="1" max="100" required></label>
+                  </div>
+                  <label for="setting-retention">Удалять измерения старше, дней (0 — хранить)<input id="setting-retention" type="number" min="0" max="3650" required></label>
+                  <p class="hint">При включении очистки минимум 30 дней. Удаление старых измерений необратимо без резервной копии.</p>
+                  <div class="settings-save"><span class="settings-save-feedback" id="maintenance-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить обслуживание</button></div>
+                </form>
+              </article>
+              <article class="panel settings-panel">
+                <h3>Сохранённые резервные копии</h3>
+                <p class="hint">Копии находятся на сервере отдельно от базы. Для защиты от поломки диска скачивайте резервные копии на другое устройство.</p>
+                <div class="heading-actions">
+                  <button type="button" id="backup-create" class="btn primary">Создать копию</button>
+                  <button type="button" id="backup-import" class="btn secondary">Импорт SQLite</button>
+                  <input id="backup-upload-file" type="file" accept=".sqlite3,.db,.sqlite" hidden>
+                </div>
+                <p class="hint">Файлы содержат настройки и идентификаторы MAX. Храните их в защищённом месте.</p>
+                <div id="backup-list" class="backup-list">Загрузка…</div>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="security" hidden>
+              <div class="settings-section-heading"><h2>Безопасность</h2><p>Смена пароля администратора и защита доступа к панели.</p></div>
+              <article class="panel settings-panel">
+                <h3>Пароль администратора</h3>
+                <form id="password-settings-form" class="settings-form">
+                  <label>Текущий пароль<div class="password-field"><input id="old-password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-password-target="old-password" aria-pressed="false" aria-label="Показать текущий пароль">Показать</button></div></label>
+                  <label>Новый пароль (от 8 символов)<div class="password-field"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="new-password" aria-pressed="false" aria-label="Показать новый пароль">Показать</button></div></label>
+                  <label>Повтор нового пароля<div class="password-field"><input id="confirm-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="confirm-password" aria-pressed="false" aria-label="Показать подтверждение пароля">Показать</button></div></label>
+                  <p class="password-hint" id="password-feedback" role="status" aria-live="polite">Можно использовать только буквы или цифры — спецсимволы не обязательны.</p>
+                  <button type="submit" class="btn primary">Изменить пароль</button>
+                  <p class="hint">От 8 до 256 символов. После смены пароля все активные сеансы будут завершены.</p>
+                </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="updates" hidden>
+              <div class="settings-section-heading"><h2>Обновление системы</h2><p>Установленная версия, GitHub и журнал установки.</p></div>
           <article class="panel settings-panel">
             <h2>Обновление системы</h2>
+            <p class="settings-section-intro">Сравнение версий и безопасное обновление без командной строки.</p>
             <div class="update-versions">
               <div class="update-version-item">
                 <span>Установлено</span>
@@ -208,6 +313,8 @@
             </div>
             <p class="hint">Автообновление доступно для Debian LXC. В Docker обновляйте контейнеры через Docker Compose.</p>
           </article>
+            </div>
+          </div>
         </div>
       </section>
     </main>
