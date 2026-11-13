@@ -28,6 +28,9 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
     assert 'REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)' in contents
     assert "systemctl daemon-reload" in contents
     assert "pre-update-" in contents
+    for phase in ("preparing", "downloading", "dependencies", "backup",
+                  "switching", "verifying", "finishing", "success", "failed"):
+        assert phase in contents
     assert 'check_writable_dir "$UNITS_DIR"' in contents
     assert 'check_writable_dir "/usr/local/sbin"' in contents
     assert contents.index('check_writable_dir "$UNITS_DIR"') < contents.rindex('systemctl stop termokontur.service')
@@ -37,3 +40,22 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
     unit_content = unit.read_text(encoding="utf-8")
     assert "ProtectSystem=full" in unit_content
     assert "ReadWritePaths=/opt /var/lib/termokontur /etc/systemd/system /usr/local/sbin" in unit_content
+
+
+def test_updater_ui_contains_accessible_state_and_version_fields():
+    static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    js = (static / "app.js").read_text(encoding="utf-8")
+    for element_id in (
+        "update-current-version", "update-current-build",
+        "update-latest-version", "update-latest-build",
+        "update-status-text", "update-progress", "update-step-label",
+        "update-step-count", "update-progress-fill", "update-state",
+        "check-update", "install-update", "reload-after-update",
+    ):
+        assert f'id="{element_id}"' in html
+        assert f'"{element_id}"' in js
+    assert 'aria-live="polite"' in html
+    assert 'role="progressbar"' in html
+    assert 'setInterval(()=>{' in js
+    assert 'updateAvailable=false' in js
