@@ -30,7 +30,7 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
     assert "pre-update-" in contents
     assert 'check_writable_dir "$UNITS_DIR"' in contents
     assert 'check_writable_dir "/usr/local/sbin"' in contents
-    assert contents.index('check_writable_dir "$UNITS_DIR"') < contents.index('systemctl stop termokontur.service')
+    assert contents.index('check_writable_dir "$UNITS_DIR"') < contents.index('\\nsystemctl stop termokontur.service\\n')
     assert 'if ! install -o root -g root -m 0644 "$OLD_UNITS/$unit"' in contents
     assert 'install -o root -g root -m 0755 "$APP/scripts/termokontur-apply-update"' in contents
     unit=Path(__file__).resolve().parents[1]/"deploy"/"systemd"/"termokontur-update.service"
