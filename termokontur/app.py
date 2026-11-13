@@ -20,7 +20,7 @@ import httpx
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,12 @@ from . import auth, db, daily, settings, updates, max_delivery, maintenance
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
+
+# A content fingerprint changes whenever JavaScript OR CSS changes, even between
+# deployments using the same semantic version number.
+_ASSET_FINGERPRINT = hashlib.sha256(
+    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "style.css"))
+).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
@@ -75,7 +81,9 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; script-src 'self'; style-src 'self'; "
         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     )
-    if request.url.path.startswith("/api/"):
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/static/"):
+        # Static assets changed during a native update must never be mixed with
+        # a newer index.html through stale browser/intermediary caches.
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -186,7 +194,10 @@ class IngestIn(ReadingIn):
 
 @app.get("/")
 def index():
-    return FileResponse(ROOT / "static" / "index.html")
+    # Never cache the HTML shell: each request must fetch the correct assets.
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__ASSET_FINGERPRINT__", _ASSET_FINGERPRINT)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 @app.get("/health")
 def health():

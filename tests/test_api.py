@@ -231,7 +231,7 @@ def test_update_status_reports_version_progress_and_stale_result(admin, monkeypa
 
 
 def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path):
-    from termokontur import updates, db
+    from termokontur import updates, db, __version__
 
     unit = tmp_path / "termokontur-update.path"
     unit.write_text("[Path]\n")
@@ -254,7 +254,7 @@ def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path
 
     monkeypatch.setattr(updates.httpx, "get", fake_get)
     result = admin.get("/api/update/check").json()
-    assert result["version"] == "0.2.0"
+    assert result["version"] == __version__
     assert result["available"] is True
     assert result["latest_version"] == "0.2.0"
     assert result["latest_revision"] == "b" * 40
@@ -274,3 +274,32 @@ def test_ha_event_ids_are_namespaced_by_sensor_and_room(admin):
     assert admin.post("/api/ingest",json={**base,"device":"sensor.b"},headers=headers).json()["inserted"]
     assert admin.post("/api/ingest",json={**base,"room_id":second["id"]},headers=headers).json()["inserted"]
     assert len(admin.get("/api/readings").json())==3
+
+
+def test_dashboard_assets_bust_cache_and_match_html(client):
+    """Avoid old JS trying to access removed DOM nodes after native updates."""
+    from hashlib import sha256
+    from pathlib import Path
+    from termokontur.app import _ASSET_FINGERPRINT
+
+    static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
+    expected = sha256(b"".join(
+        (static / name).read_bytes() for name in ("app.js", "style.css")
+    )).hexdigest()[:16]
+    assert _ASSET_FINGERPRINT == expected
+    page = client.get("/")
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-store"
+    assert "__ASSET_FINGERPRINT__" not in page.text
+    assert f'/static/app.js?v={expected}' in page.text
+    assert f'/static/style.css?v={expected}' in page.text
+
+    for filename in ("app.js", "style.css"):
+        asset = client.get(f"/static/{filename}?v={expected}")
+        assert asset.status_code == 200
+        assert asset.headers["cache-control"] == "no-store"
+
+    js = client.get(f"/static/app.js?v={expected}").text
+    assert '"update-current-version"' in js
+    assert '"update-version"' not in js
+    assert 'id="update-current-version"' in page.text
