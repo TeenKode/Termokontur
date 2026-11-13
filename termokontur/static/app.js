@@ -398,10 +398,12 @@ async function saveSettingsPatch(form,patch,message){
     document.title=settingsCache.organization_name+" — Термоконтур";
     markSettingsSaved(form,message);
     toast(message);
+    return true;
   }catch(error){
     const feedback=form.querySelector(".settings-save-feedback");
     if(feedback){feedback.textContent="Не сохранено: "+error.message;feedback.dataset.state="error";}
     toast(error.message,true);
+    return false;
   }finally{
     button.disabled=false;
     button.textContent=originalText;
@@ -409,12 +411,12 @@ async function saveSettingsPatch(form,patch,message){
 }
 $("general-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
-  await saveSettingsPatch(event.currentTarget,{
+  const saved=await saveSettingsPatch(event.currentTarget,{
     organization_name:$("setting-organization").value.trim(),
     timezone:$("setting-timezone").value.trim(),
     stale_hours:Number($("setting-stale").value)
   },"Параметры организации сохранены");
-  await refresh();
+  if(saved)await refresh();
 });
 $("reminders-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
@@ -422,7 +424,7 @@ $("reminders-settings-form").addEventListener("submit",async event=>{
   await saveSettingsPatch(event.currentTarget,{
     reminders_enabled:$("setting-enabled").checked,
     reminder_time:$("setting-time").value,
-    reminder_days:days,
+    reminder_days:days.length?days:($("setting-enabled").checked?[]:settingsCache.reminder_days),
     reminder_window_minutes:Number($("setting-window").value)
   },"Расписание напоминаний сохранено");
 });
