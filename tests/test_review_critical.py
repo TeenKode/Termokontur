@@ -34,4 +34,6 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
     assert 'if ! install -o root -g root -m 0644 "$OLD_UNITS/$unit"' in contents
     assert 'install -o root -g root -m 0755 "$APP/scripts/termokontur-apply-update"' in contents
     unit=Path(__file__).resolve().parents[1]/"deploy"/"systemd"/"termokontur-update.service"
-    assert "ProtectSystem=no" in unit.read_text(encoding="utf-8")
+    unit_content = unit.read_text(encoding="utf-8")
+    assert "ProtectSystem=full" in unit_content
+    assert "ReadWritePaths=/opt /var/lib/termokontur /etc/systemd/system /usr/local/sbin" in unit_content
