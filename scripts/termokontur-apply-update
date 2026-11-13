@@ -81,7 +81,7 @@ STAGE=$(mktemp -d /opt/termokontur-stage.XXXXXXXX)
 chown termokontur:termokontur "$STAGE"
 runuser -u termokontur -- git clone --depth 1 --single-branch --branch main \
   https://github.com/TeenKode/Termokontur.git "$STAGE"
-REVISION=$(git -C "$STAGE" rev-parse HEAD)
+REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)
 [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
 if [[ -f "$DATA/installed-revision" ]] && [[ "$(cat "$DATA/installed-revision")" == "$REVISION" ]]; then
   record success "Уже установлена актуальная версия."
