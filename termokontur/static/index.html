@@ -174,10 +174,39 @@
           </article>
           <article class="panel settings-panel">
             <h2>Обновление системы</h2>
-            <p id="update-status-text" class="update-message">Загрузка...</p>
-            <p id="update-version" class="hint"></p>
-            <div class="heading-actions"><button type="button" id="check-update" class="btn secondary">Проверить обновления</button><button type="button" id="install-update" class="btn primary" disabled>Установить обновление</button></div>
-            <p class="hint">Автообновление доступно для Debian LXC. Для Docker используется Docker Compose.</p>
+            <div class="update-versions">
+              <div class="update-version-item">
+                <span>Установлено</span>
+                <strong id="update-current-version">—</strong>
+                <small id="update-current-build">Сборка неизвестна</small>
+              </div>
+              <div class="update-version-item">
+                <span>На GitHub</span>
+                <strong id="update-latest-version">Не проверено</strong>
+                <small id="update-latest-build">Проверьте наличие обновлений</small>
+              </div>
+            </div>
+            <div id="update-state" class="update-state" data-state="idle" role="status" aria-live="polite" aria-atomic="true">
+              <span id="update-state-symbol" class="update-state-symbol" aria-hidden="true">○</span>
+              <div>
+                <strong id="update-state-label">Проверяем состояние</strong>
+                <p id="update-status-text">Загрузка состояния…</p>
+                <small id="update-status-time"></small>
+              </div>
+            </div>
+            <div id="update-progress" class="update-progress" hidden>
+              <div class="update-step-head"><span id="update-step-label">Подготовка</span><span id="update-step-count">Этап 1 из 7</span></div>
+              <div class="update-track" role="progressbar" aria-label="Этап обновления" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0">
+                <div id="update-progress-fill" class="update-progress-fill"></div>
+              </div>
+              <p class="hint">Индикатор показывает этап, а не процент загрузки. При перезапуске сервера соединение может временно пропасть.</p>
+            </div>
+            <div class="heading-actions">
+              <button type="button" id="check-update" class="btn secondary">Проверить обновления</button>
+              <button type="button" id="install-update" class="btn primary" disabled>Установить обновление</button>
+              <button type="button" id="reload-after-update" class="btn secondary" hidden>Перезагрузить панель</button>
+            </div>
+            <p class="hint">Автообновление доступно для Debian LXC. В Docker обновляйте контейнеры через Docker Compose.</p>
           </article>
         </div>
       </section>
