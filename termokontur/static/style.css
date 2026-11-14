@@ -155,3 +155,36 @@
 }
 @media(max-width:600px){.settings-summary-grid{grid-template-columns:1fr}.settings-summary-card{min-height:145px}.settings-pane .settings-panel{padding:17px}.settings-section-heading h2{font-size:19px}.settings-managed{display:none}.settings-save{align-items:stretch;flex-direction:column}.settings-save .btn{width:100%}}
 @media(prefers-reduced-motion:reduce){.settings-pane,.settings-dependent{animation:none;transition:none}}
+
+/* Unified feedback: visible operations, connectivity and an accessible event history. */
+.topbar-actions{position:relative;flex-wrap:wrap;justify-content:flex-end;gap:10px}
+.connection-indicator,.operation-indicator{display:inline-flex;align-items:center;gap:7px;font-size:12px;white-space:nowrap;color:#53677d}
+.connection-indicator .connection-dot{width:8px;height:8px}
+.connection-indicator.pending .connection-dot,.connection-dot.pending{background:#d39b38}
+.connection-indicator.offline{color:#b84553}.connection-indicator.offline .connection-dot,.connection-dot.offline{background:#d85a64}
+.operation-indicator{color:#0b8a72;font-weight:650}
+.ui-spinner{display:inline-block;flex:none;width:14px;height:14px;border:2px solid #b4ded5;border-right-color:#089679;border-radius:50%;animation:update-spin .75s linear infinite}
+button.is-working{cursor:progress!important;opacity:.8}
+button.is-working:not(#check-update):not(#install-update)::before{content:"";display:inline-block;flex:none;width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:update-spin .75s linear infinite}
+.notification-area{position:relative}
+.notification-toggle{position:relative}
+.notification-count{display:inline-grid;place-items:center;min-width:19px;height:19px;border-radius:20px;padding:0 5px;color:white;background:#bf5260;font-size:11px;font-weight:750}
+.notification-panel{position:absolute;right:0;top:calc(100% + 10px);width:min(380px,calc(100vw - 32px));max-height:480px;overflow-y:auto;padding:18px;background:#fff;border:1px solid #dce5ed;box-shadow:0 16px 45px #14294329;border-radius:13px;z-index:20;color:#21364d}
+.notification-panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px}
+.notification-panel-head button{color:#26856f;font-size:12px;flex:none}
+.notification-panel-hint{font-size:11px;color:#8190a3;margin:8px 0 12px}
+.notification-list{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.notification-entry{border:1px solid #e4eaf1;border-left:3px solid #a6b5c6;border-radius:9px;padding:10px 11px;font-size:12px;color:#3d536b;overflow-wrap:anywhere}
+.notification-entry.success{border-left-color:#22a084}.notification-entry.warning{border-left-color:#d99c2a}.notification-entry.error{border-left-color:#d55361}
+.notification-entry strong{display:block;color:#273a51;font-weight:650;line-height:1.4}
+.notification-entry time{display:block;color:#8c9aac;font-size:11px;margin-top:6px}
+.notification-empty{font-size:12px;color:#91a0b3;padding:16px 4px;text-align:center}
+.toast-stack{position:fixed;bottom:18px;right:20px;display:grid;gap:9px;max-width:min(390px,calc(100vw - 24px));z-index:30;pointer-events:none}
+.toast-entry{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#24364f;color:#fff;border-radius:11px;padding:14px 15px;font-size:13px;line-height:1.45;box-shadow:0 12px 42px #19283f44;pointer-events:auto;overflow-wrap:anywhere;animation:toast-appear .18s ease-out}
+.toast-entry.success{background:#167b68}.toast-entry.warning{background:#8b601b}.toast-entry.error{background:#a93849}
+.toast-entry button{background:transparent;color:inherit;border:0;padding:0;font-size:20px;line-height:1;font-weight:400;opacity:.85}
+@keyframes toast-appear{from{opacity:.4;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:1000px){.topbar{align-items:flex-start;padding:16px 0}.topbar-actions{gap:8px}.topbar-actions .muted{flex-basis:100%;text-align:right}.connection-indicator{font-size:11px}}
+@media(max-width:700px){.topbar{align-items:center}.topbar .eyebrow{max-width:100px;line-height:1.5}.topbar-actions .muted{display:none}.connection-indicator #connection-label{display:none}.operation-indicator{flex-basis:100%;justify-content:flex-end;order:3}.notification-toggle{padding:9px 11px}.notification-panel{right:-55px}}
+@media(max-width:420px){.topbar .eyebrow{display:none}.topbar-actions{width:100%;justify-content:space-between}.notification-panel{right:-70px}.toast-stack{right:12px;bottom:12px}}
+@media(prefers-reduced-motion:reduce){.ui-spinner,button.is-working::before,.toast-entry{animation:none}}
