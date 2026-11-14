@@ -579,6 +579,15 @@ def prune_readings(payload: RestoreBackupIn):
 def dashboard():
     return db.dashboard(int(settings.get("stale_hours", "26")))
 
+@app.get("/api/dashboard/history", dependencies=[Depends(require_admin)])
+def dashboard_history(days: Literal[7, 14, 30, 90] = 14,
+                      building: str = Query("", max_length=100)):
+    """Calendar-day aggregates; each cabinet counts once per day."""
+    return db.dashboard_history(
+        days=days, building=building, timezone_name=settings.get("timezone", "UTC")
+    )
+
+
 @app.get("/api/daily", dependencies=[Depends(require_admin)])
 def daily_report():
     return daily.summary()
