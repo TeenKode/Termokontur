@@ -15,6 +15,12 @@ from . import db, daily, settings, max_delivery, max_ui
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
+
+
+def _heartbeat(mode: str) -> None:
+    """Expose whether the MAX background service is alive, without disclosing secrets."""
+    db.set_state("max_worker_heartbeat", f"{db.utc_now()}|{mode}")
+
 HELP = ("Термоконтур — сбор температуры.\n"
         "/bind КОД — привязать кабинет (код выдаёт администратор)\n"
         "/rooms — мои кабинеты\n"
@@ -168,6 +174,7 @@ async def poll(token: str):
                                  timeout=httpx.Timeout(45, connect=12)) as client:
         backoff = 2
         while True:
+            _heartbeat("polling")
             if token != settings.get("max_token", "") or settings.get("max_mode", "polling") != "polling":
                 logger.info("MAX mode or token updated; reconnecting")
                 return
@@ -204,9 +211,11 @@ def main():
         while True:
             token = settings.get("max_token", "") or ""
             if not token:
+                _heartbeat("waiting_for_token")
                 await asyncio.sleep(10)
                 continue
             if settings.get("max_mode", "polling") == "webhook":
+                _heartbeat("webhook")
                 async with httpx.AsyncClient(base_url=API, headers={"Authorization": token},
                                              timeout=httpx.Timeout(30, connect=12)) as client:
                     now = asyncio.get_running_loop().time()
