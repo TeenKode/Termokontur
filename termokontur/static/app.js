@@ -659,7 +659,7 @@ window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if
 /* Accessible settings workspace: categories, overview and independent saves. */
 const settingsGroups = {
   general:["general-settings-form"],notifications:["reminders-settings-form","alerts-settings-form"],
-  backups:["maintenance-form"]
+  backups:["maintenance-form"],tls:["tls-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
 function settingsDirty(){
@@ -704,6 +704,7 @@ function setSettingsCategory(category){
   if(category==="backups")void loadBackups();
   if(category==="updates")void loadUpdateStatus();
   if(category==="max")void loadMaxDiagnostics();
+  if(category==="tls")void loadTlsStatus();
 }
 for(const button of document.querySelectorAll("[data-settings-target]")){
   button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
@@ -765,7 +766,7 @@ async function loadSettings() {
       const form=$(id),values=pending.get(id);
       if(values){
         [...form.querySelectorAll("input,select,textarea")].forEach((input,i)=>{
-          input.value=values[i].value;
+          if(input.type!=="file")input.value=values[i].value;
           if(input.type==="checkbox"||input.type==="radio")input.checked=values[i].checked;
         });
       }else form.dataset.dirty="false";
@@ -777,6 +778,89 @@ async function loadSettings() {
     if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
 }
+/* TLS certificate upload is multipart; never expose key material in JSON. */
+let tlsCache=null;
+async function loadTlsStatus(){
+  try{
+    const state=await api("/api/tls/status");
+    tlsCache=state;
+    $("tls-status").textContent=(
+      state.error?"Ошибка: "+state.error:
+      state.active?"Встроенный HTTPS работает":
+      state.configured?"Сертификат сохранён, ожидает применения":"Встроенный HTTPS выключен"
+    )+(state.restart_pending?" · Требуется перезапуск.":"");
+    const details=[];
+    if(state.details){
+      const d=state.details;
+      details.push("Кому выдан: "+d.subject);
+      details.push("Кем выдан: "+d.issuer);
+      details.push("Домены/IP: "+(d.hosts.length?d.hosts.join(", "):"не указаны"));
+      details.push("Действует до: "+new Date(d.expires_at).toLocaleDateString("ru-RU")+
+        " ("+d.days_left+" дн.)");
+      details.push("Источник: "+(state.source==="upload"?"файлы из панели":"путь из окружения"));
+    }
+    $("tls-details").replaceChildren(...details.map(line=>el("p","",line)));
+    $("tls-details").hidden=details.length===0;
+    $("tls-apply").disabled=!state.managed||!state.restart_pending||!!state.error;
+    $("tls-apply").textContent=state.configured?"Применить HTTPS (перезапуск)":"Применить HTTP (перезапуск)";
+    $("tls-remove").disabled=state.source!=="upload";
+    $("tls-proxy-warning").hidden=!(window.location.protocol==="https:"&&!state.active);
+    const next=new URL(window.location.href);
+    next.protocol=state.configured?"https:":"http:";
+    $("tls-next-link").href=next.href;
+    $("tls-next-link").textContent=next.href;
+    $("tls-next").hidden=!state.restart_pending;
+  }catch(error){
+    $("tls-status").textContent="Не удалось проверить HTTPS: "+error.message;
+  }
+}
+$("tls-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const form=event.currentTarget;
+  if(!$("tls-certificate").files.length&&!$("tls-key").files.length){
+    toast("Выберите сертификат или ключ",true);return;
+  }
+  const finish=beginRequest("/api/tls/certificate","POST");
+  try{
+    const response=await fetch("/api/tls/certificate",{
+      method:"POST",credentials:"same-origin",
+      headers:{"Accept":"application/json"},body:new FormData(form)
+    });
+    if(response.status===401){enterLogin();throw Error("Сеанс завершился. Войдите снова.");}
+    if(!response.ok){
+      const body=await response.json().catch(()=>({}));
+      throw Error(typeof body.detail==="string"?body.detail:"Ошибка загрузки сертификата");
+    }
+    form.reset();
+    markSettingsSaved(form,"Сертификат проверен и сохранён");
+    toast("Сертификат сохранён. Примените настройки.");
+    await loadTlsStatus();
+  }catch(error){
+    $("tls-feedback").textContent="Не сохранено: "+error.message;
+    $("tls-feedback").dataset.state="error";
+    toast(error.message,true);
+  }finally{finish();}
+});
+$("tls-remove").addEventListener("click",async()=>{
+  if(!confirm("Убрать загруженный сертификат? После применения сайт может переключиться на HTTP."))return;
+  try{
+    await api("/api/tls/certificate","DELETE");
+    await loadTlsStatus();
+    toast("Сертификат удалён. Примените настройки.");
+  }catch(error){toast(error.message,true);}
+});
+$("tls-apply").addEventListener("click",async()=>{
+  if(!tlsCache?.restart_pending)return;
+  const mode=tlsCache.configured?"HTTPS":"HTTP";
+  if(!confirm("Перезапустить панель с протоколом "+mode+"? Адрес страницы может измениться."))return;
+  try{
+    await api("/api/tls/apply","POST");
+    $("tls-status").textContent="Веб-панель перезапускается. Используйте новый адрес ниже.";
+    $("tls-apply").disabled=true;
+    $("tls-next").hidden=false;
+    toast("Перезапуск запрошен. Откройте панель по ссылке в настройках.");
+  }catch(error){toast(error.message,true);}
+});
 /* Merge only the current form's fields into fresh settings from the server.
    Other categories and secrets are not inadvertently overwritten. */
 async function saveSettingsPatch(form,patch,message){
