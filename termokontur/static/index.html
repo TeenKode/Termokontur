@@ -266,7 +266,7 @@
               </article>
             </div>
             <div class="settings-pane" data-settings-view="notifications" hidden>
-              <div class="settings-section-heading"><h2>Уведомления</h2><p>Когда отправлять напоминания и предупреждать об отклонениях температуры.</p></div>
+              <div class="settings-section-heading"><h2>Уведомления</h2><p>Напоминания по расписанию, температурные предупреждения и сообщения сотрудникам через MAX.</p></div>
               <article class="panel settings-panel">
                 <h3>Напоминания о пропущенных измерениях</h3>
                 <form id="reminders-settings-form" class="settings-form">
@@ -282,13 +282,56 @@
               <article class="panel settings-panel">
                 <h3>Температурные предупреждения</h3>
                 <form id="alerts-settings-form" class="settings-form">
-                  <label class="settings-toggle"><input id="setting-alerts-enabled" type="checkbox">Уведомлять через MAX при выходе температуры за пределы нормы</label>
+                  <label class="settings-toggle"><input id="setting-alerts-enabled" type="checkbox">Уведомлять через MAX при отклонениях автоматических датчиков</label>
                   <div id="alert-options" class="settings-dependent">
                     <label for="setting-alert-cooldown">Не повторять предупреждение раньше чем через, минут<input id="setting-alert-cooldown" type="number" min="5" max="1440" required></label>
                   </div>
-                  <p class="hint">Пределы нормы задаются отдельно для каждого кабинета в разделе «Помещения».</p>
+                  <p class="hint">Предупреждения отправляются только по автоматическим показаниям датчиков. При ручном вводе сотрудник видит выход за норму сразу в ответе бота. Пределы задаются для каждого кабинета в разделе «Помещения».</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="alerts-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить предупреждения</button></div>
                 </form>
+              </article>
+              <article class="panel settings-panel">
+                <div class="notification-title-row"><div><h3>Написать сотрудникам</h3><p class="hint">Разовые сообщения через MAX. Один сотрудник получает одно сообщение, даже если у него несколько кабинетов.</p></div></div>
+                <form id="notification-compose-form" class="settings-form">
+                  <div class="field-grid">
+                    <label for="notification-audience">Получатели
+                      <select id="notification-audience">
+                        <option value="all">Все подключённые сотрудники</option>
+                        <option value="missing">Без показаний за сегодня</option>
+                        <option value="building">По корпусу</option>
+                        <option value="selected">Выбрать сотрудников</option>
+                      </select>
+                    </label>
+                    <label for="notification-building" id="notification-building-wrap" hidden>Корпус
+                      <select id="notification-building"></select>
+                    </label>
+                  </div>
+                  <div id="notification-selected-wrap" hidden>
+                    <p class="hint">Отметьте сотрудников, которым нужно отправить уведомление:</p>
+                    <div id="notification-selected-users" class="notification-user-list"></div>
+                  </div>
+                  <label for="notification-text">Текст сообщения
+                    <textarea id="notification-text" rows="5" maxlength="2000" required placeholder="Например: Просим отправить показания температуры до 10:00."></textarea>
+                  </label>
+                  <div class="notification-compose-footer">
+                    <label class="settings-toggle"><input id="notification-silent" type="checkbox">Тихая доставка (без push-оповещения)</label>
+                    <span id="notification-text-count" class="hint">0 / 2000</span>
+                  </div>
+                  <div id="notification-recipient-summary" class="notification-recipient-summary" role="status" aria-live="polite">Загружаем получателей…</div>
+                  <p id="notification-recipient-names" class="hint"></p>
+                  <div class="settings-save">
+                    <span id="notification-send-feedback" class="settings-save-feedback" role="status" aria-live="polite"></span>
+                    <button type="button" id="notification-refresh-recipients" class="btn secondary">Обновить список</button>
+                    <button type="submit" id="notification-send" class="btn primary">Отправить уведомление</button>
+                  </div>
+                </form>
+              </article>
+              <article class="panel settings-panel">
+                <div class="notification-title-row">
+                  <div><h3>История отправок</h3><p class="hint">Доставка подтверждается после ответа MAX. При сбоях система повторяет попытки автоматически.</p></div>
+                  <button type="button" id="notification-refresh-history" class="btn secondary">Обновить</button>
+                </div>
+                <div id="notification-history" class="notification-history" aria-live="polite"><p class="hint">Загружаем историю…</p></div>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="max" hidden>
@@ -426,8 +469,18 @@
               <div class="update-track" role="progressbar" aria-label="Этап обновления" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0">
                 <div id="update-progress-fill" class="update-progress-fill"></div>
               </div>
+              <ol id="update-phase-list" class="update-phase-list" aria-label="Этапы установки"></ol>
               <p class="hint">Индикатор показывает этап, а не процент загрузки. При перезапуске сервера соединение может временно пропасть.</p>
             </div>
+            <div id="update-meta" class="update-meta" hidden>
+              <span id="update-elapsed"></span>
+              <span id="update-target"></span>
+            </div>
+            <details id="update-history" class="update-history" hidden>
+              <summary>История установки и диагностика</summary>
+              <ol id="update-history-list"></ol>
+              <p class="hint">При ошибках на Debian LXC: <code>journalctl -u termokontur-update.service -n 100 --no-pager</code>. Резервные копии доступны в разделе «Резервные копии».</p>
+            </details>
             <div class="heading-actions">
               <button type="button" id="check-update" class="btn secondary">Проверить обновления</button>
               <button type="button" id="install-update" class="btn primary" disabled>Установить обновление</button>
