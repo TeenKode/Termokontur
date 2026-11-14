@@ -121,7 +121,7 @@ function scrollToSectionStart(section){
 }
 function setTab(name) {
   const target=$("view-"+name);
-  if(!target || (selectedTab===name && !target.hidden))return;
+  if(!target || (selectedTab===name && !target.hidden))return false;
   scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
   for(const view of ["overview","rooms","readings","settings"]) {
@@ -133,6 +133,7 @@ function setTab(name) {
     else button.removeAttribute("aria-current");
   }
   if(name==="readings") drawChart();
+  return true;
 }
 function cell(row, text, className = "") { const td=el("td",className); td.textContent=text; row.append(td); return td; }
 function when(iso) {
@@ -349,7 +350,12 @@ $("login-form").addEventListener("submit",async event=>{
 });
 $("logout").addEventListener("click",async()=>{try{await api("/api/logout","POST");}catch{}enterLogin();});
 $("refresh").addEventListener("click",refresh);
-for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{setTab(nav.dataset.tab);if(nav.dataset.tab==="readings")refreshReadings();if(nav.dataset.tab==="settings"&&!settingsDirty())loadSettings();});
+for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
+  const name=nav.dataset.tab;
+  if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
+  if(name==="readings")refreshReadings();
+  if(name==="settings"&&!settingsDirty())loadSettings();
+});
 $("search-rooms").addEventListener("input",renderOverview);
 $("building-filter").addEventListener("change",renderOverview);
 $("reading-filter").addEventListener("change",refreshReadings);
