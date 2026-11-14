@@ -225,8 +225,8 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
                 # Keep notices in the same transaction as the corrected value.
                 label = "ниже нормы" if value < room["min_temp"] else "выше нормы"
                 notice = (
-                    f"Термоконтур: температура {label}!\\n"
-                    f"{room['building']} / {room['name']}: {value:g} °C\\n"
+                    f"Термоконтур: температура {label}!\n"
+                    f"{room['building']} / {room['name']}: {value:g} °C\n"
                     f"Норма: {room['min_temp']:g}–{room['max_temp']:g} °C."
                 )
                 colleagues = conn.execute("""
