@@ -113,3 +113,59 @@ def test_history_api_uses_configured_timezone_and_building(admin):
     assert data["series"][-1]["date"] == local_day.isoformat()
     assert data["series"][-1]["average"] == 23
     assert data["series"][-1]["coverage"] == 100
+
+
+def test_building_daily_averages_are_separate_and_room_weighted(admin):
+    """Buildings are averaged from distinct rooms, not raw sensor samples."""
+    a1 = _room(admin, "Старшая школа", "101")
+    a2 = _room(admin, "Старшая школа", "102")
+    b1 = _room(admin, "Начальная школа", "201")
+    now = datetime(2026, 11, 14, 15, tzinfo=timezone.utc)
+    today = datetime(2026, 11, 14, 9, tzinfo=timezone.utc)
+    _reading(a1, 19, today)
+    _reading(a1, 23, today + timedelta(minutes=5))  # room 101 = 21 °C
+    _reading(a2, 23, today)  # room 102 = 23 °C
+    _reading(b1, 18, today)  # school mean = (21 + 23 + 18)/3
+
+    result = db.dashboard_history(days=14, timezone_name="UTC", now=now)
+    assert result["series"][-1]["average"] == 20.67
+    assert result["series"][-1]["rooms_measured"] == 3
+    assert result["series"][-1]["readings_count"] == 4
+    assert [item["name"] for item in result["buildings"]] == [
+        "Начальная школа", "Старшая школа"
+    ]
+    school_a = next(b for b in result["buildings"] if b["name"] == "Старшая школа")
+    school_b = next(b for b in result["buildings"] if b["name"] == "Начальная школа")
+    assert school_a["rooms_total"] == 2
+    assert school_a["series"][-1]["average"] == 22
+    assert school_a["series"][-1]["coverage"] == 100
+    assert school_a["series"][-1]["readings_count"] == 3
+    assert school_b["series"][-1]["average"] == 18
+    assert school_b["series"][-2]["average"] is None
+    assert school_b["series"][-2]["coverage"] == 0
+
+    selected = db.dashboard_history(days=7, timezone_name="UTC",
+                                    building="Старшая школа", now=now)
+    assert len(selected["buildings"]) == 1
+    assert selected["series"][-1]["average"] == 22
+    assert selected["series"][-1]["rooms_total"] == 2
+
+    # The second building has not reported the following day.
+    tomorrow = db.dashboard_history(days=7, timezone_name="UTC",
+                                    now=now + timedelta(days=1))
+    assert tomorrow["series"][-1]["average"] is None
+    assert all(building["series"][-1]["average"] is None for building in tomorrow["buildings"])
+
+
+def test_building_api_returns_local_daily_series(admin):
+    settings.update({"timezone": "UTC"})
+    a = _room(admin, "Корпус А", "1")
+    _room(admin, "Корпус Б", "2")
+    _reading(a, 21, datetime.now(timezone.utc))
+    response = admin.get("/api/dashboard/history?days=7")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["buildings"]) == 2
+    assert len(body["buildings"][0]["series"]) == 7
+    assert sum(b["series"][-1]["rooms_measured"] for b in body["buildings"]) == 1
+    assert sum(b["series"][-1]["readings_count"] for b in body["buildings"]) == 1
