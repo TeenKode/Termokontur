@@ -32,7 +32,7 @@ from . import __version__
 # A content fingerprint changes whenever JavaScript OR CSS changes, even between
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
-    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "style.css"))
+    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "style.css", "theme.js"))
 ).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
