@@ -8,7 +8,9 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/usr/local/sbin/termokontur-apply-update
-TimeoutStartSec=300
+# Python dependency downloads may take considerably longer on slow school networks.
+# The in-panel status keeps reporting the current step while systemd waits.
+TimeoutStartSec=1800
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
