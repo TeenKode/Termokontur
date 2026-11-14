@@ -219,7 +219,7 @@ def test_reminder_or_alert_outbox_has_default_buttons(client):
 
 def test_webhook_subscription_refresh_adds_callback_without_rotating_secret(client):
     from termokontur import settings
-    settings.set_secret("max_token", "max-test-token")
+    settings.set_secret("max_token", "max-test-token-long-enough-123")
     settings.set_max_webhook("https://school.example/api/max/webhook",
                              "the-existing-school-secret")
     calls = []
@@ -252,7 +252,7 @@ def test_webhook_subscription_refresh_adds_callback_without_rotating_secret(clie
 
 def test_webhook_subscription_already_up_to_date_does_not_post(client):
     from termokontur import settings
-    settings.set_secret("max_token", "max-test-token")
+    settings.set_secret("max_token", "max-test-token-long-enough-123")
     settings.set_max_webhook("https://school.example/api/max/webhook",
                              "another-school-secret")
     class Response:
