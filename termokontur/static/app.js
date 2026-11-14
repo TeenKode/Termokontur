@@ -889,18 +889,40 @@ $("switch-polling").addEventListener("click",async()=>{
 async function loadMaxDiagnostics() {
   const target=$("max-diagnostics");
   if(!settingsCache?.max_token_configured) {
-    target.textContent="MAX: токен не задан.";
+    target.textContent="MAX: токен не задан. Сохраните токен, затем проверьте подключение.";
     return;
   }
-  target.textContent="Проверка подключения MAX…";
+  target.textContent="Проверка MAX: токен, служба и способ получения событий…";
   try {
     const state=await api("/api/max/diagnostics");
     const lines=[];
+    if(state.token_valid===true) {
+      lines.push("Токен действителен"+(state.bot_username?" (бот @"+state.bot_username+")":"")+".");
+    } else if(state.token_valid===false) {
+      lines.push("ОШИБКА: MAX отклонил токен (401). Проверьте, от какого бота он получен, и сохраните действующий токен.");
+    } else if(state.api_check_error) {
+      lines.push("Не удалось проверить токен через MAX API. Проверьте интернет, DNS и TLS-сертификаты на сервере.");
+    }
+    if(!state.worker_running) {
+      lines.push("Служба обработки MAX не отвечает. На сервере проверьте: systemctl status termokontur-max и journalctl -u termokontur-max -n 60.");
+    } else if(state.worker_mode==="waiting_for_token") {
+      lines.push("Служба MAX работает, но ещё ожидает токен. Если токен только что сохранён, повторите проверку через несколько секунд.");
+    } else {
+      lines.push("Служба MAX работает ("+(state.worker_mode==="webhook"?"приём через webhook":"Long Polling")+").");
+    }
     if(state.mode==="webhook") {
-      if(state.webhook_check_error) lines.push("Не удалось проверить подписку MAX (проверьте подключение к API).");
+      if(state.webhook_check_error) lines.push("Не удалось проверить подписку webhook в MAX.");
       else if(state.webhook_registered) lines.push("Webhook зарегистрирован в MAX.");
-      else lines.push("ВНИМАНИЕ: webhook отсутствует в MAX. Проверьте HTTPS-туннель и повторно зарегистрируйте подписку.");
-    } else lines.push("Используется тестовый Long Polling.");
+      else if(state.token_valid===true) lines.push("ВНИМАНИЕ: webhook не найден в MAX. Проверьте публичный HTTPS-адрес.");
+    } else {
+      if(state.polling_blocked_by_webhook) {
+        lines.push("ОШИБКА: для этого бота уже зарегистрирован webhook. MAX не передаёт события через Long Polling при активном webhook. Проверьте подписку другого проекта или используйте отдельного бота.");
+      } else if(state.webhook_check_error) {
+        lines.push("Не удалось проверить, нет ли конфликтующей webhook-подписки.");
+      } else if(state.token_valid===true) {
+        lines.push("Long Polling разрешён: конфликтующих webhook-подписок нет.");
+      }
+    }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
     if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");
