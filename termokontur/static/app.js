@@ -268,20 +268,96 @@ function renderHistory(){
   show("history-empty",!hasReadings);
   $("history-chart").hidden=!hasReadings;
   renderHistoryTable();
+  renderBuildingSummary();
+  renderBuildingMatrix();
+  renderHistoryLegend();
   renderHeatmap();
   if(hasReadings)drawHistoryChart();
+}
+const buildingPalette=["#0f9e83","#4d79c7","#e08b3f","#8768c3","#c55a83","#3f9da5","#a0763d","#78883f","#b45855","#6479a2"];
+function buildingColor(index){return buildingPalette[index%buildingPalette.length];}
+function renderHistoryLegend(){
+  const legend=$("history-legend");legend.replaceChildren();
+  if(!historyData)return;
+  const buildings=historyData.buildings||[];
+  buildings.forEach((building,index)=>{
+    const item=el("span","history-key");
+    const line=el("i","history-key-line");line.style.background=buildingColor(index);
+    item.append(line,document.createTextNode(building.name));
+    legend.append(item);
+  });
+  if(buildings.length>1){
+    const item=el("span","history-key");
+    item.append(el("i","history-key-school"),document.createTextNode("Вся школа"));
+    legend.append(item);
+  }
+  legend.append(el("span","legend-muted","Пропуски — дни без показаний"));
+}
+function renderBuildingSummary(){
+  const target=$("building-summary");target.replaceChildren();
+  if(!historyData)return;
+  const buildings=historyData.buildings||[];
+  if(!buildings.length){
+    target.append(el("p","building-summary-empty","Активных зданий пока нет."));
+    return;
+  }
+  buildings.forEach((building,index)=>{
+    const today=building.series[building.series.length-1],yesterday=building.series[building.series.length-2];
+    const card=el("article","building-summary-card");
+    card.style.setProperty("--building-accent",buildingColor(index));
+    const top=el("div","building-card-top");
+    top.append(el("span","building-card-dot"),el("strong","",building.name));
+    card.append(top);
+    card.append(el("div","building-card-value",temperature(today.average)));
+    const diff=today.average==null||yesterday?.average==null?null:today.average-yesterday.average;
+    const change=el("span","building-card-change",
+      diff==null?"Нет данных для сравнения":Math.abs(diff)<0.005?"Без изменений ко вчера":
+      (diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C ко вчера");
+    card.append(change);
+    const meta=el("div","building-card-meta");
+    meta.append(el("span","","Показания: "+today.rooms_measured+" из "+today.rooms_total),
+      el("span","","Отклонения: "+today.out_of_range));
+    card.append(meta);target.append(card);
+  });
+}
+function renderBuildingMatrix(){
+  const head=$("building-matrix-head"),body=$("building-matrix-body");
+  head.replaceChildren();body.replaceChildren();
+  if(!historyData)return;
+  const series=historyData.series,buildings=historyData.buildings||[];
+  const row=el("tr");row.append(el("th","","Здание"));
+  for(const day of series)row.append(el("th","",shortDay(day.date)));
+  row.append(el("th","","Дней с данными"));
+  head.append(row);
+  for(const building of buildings){
+    const tr=el("tr"),name=cell(tr,building.name,"building-matrix-name");
+    name.title="Всего кабинетов: "+building.rooms_total;
+    for(const day of building.series){
+      const hasData=day.average!=null;
+      const status=!hasData?"empty":day.out_of_range?"with-alert":
+        day.rooms_measured<day.rooms_total?"partial":"full";
+      const td=cell(tr,hasData?Number(day.average).toLocaleString("ru-RU",{maximumFractionDigits:1}):"—",
+        "building-day "+status);
+      td.title=building.name+" · "+fullDay(day.date)+": "+temperature(day.average)+
+        "; кабинетов "+day.rooms_measured+"/"+day.rooms_total+
+        "; отклонений "+day.out_of_range+"; измерений "+day.readings_count;
+    }
+    cell(tr,building.series.filter(day=>day.average!=null).length+" / "+series.length);
+    body.append(tr);
+  }
+  show("building-matrix-empty",buildings.length===0);
 }
 function drawHistoryChart(){
   const canvas=$("history-chart");
   if(!historyData||selectedTab!=="overview"||$("history-content").hidden||canvas.hidden)return;
-  const series=historyData.series;
+  const series=historyData.series,buildings=historyData.buildings||[];
   const width=Math.max(280,canvas.parentElement.clientWidth-2),height=310,dpr=window.devicePixelRatio||1;
   canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
   canvas.style.width=width+"px";canvas.style.height=height+"px";
   const ctx=canvas.getContext("2d");if(!ctx)return;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
   const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
-  const observed=series.flatMap(d=>d.minimum==null?[]:[d.minimum,d.maximum]);
+  const observed=[...series,...buildings.flatMap(x=>x.series)].map(x=>x.average).filter(v=>v!==null);
   if(!observed.length)return;
   let minimum=Math.floor(Math.min(...observed)-1),maximum=Math.ceil(Math.max(...observed)+1);
   if(maximum-minimum<4){const mid=(minimum+maximum)/2;minimum=mid-2;maximum=mid+2;}
@@ -293,27 +369,27 @@ function drawHistoryChart(){
     ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();
     ctx.fillText(value.toLocaleString("ru-RU",{maximumFractionDigits:1})+"°",left-8,y+4);
   }
-  // Show the range of room-day averages as a soft band, without filling gaps.
-  ctx.fillStyle="rgba(26, 165, 136, 0.13)";
-  for(let i=1;i<series.length;i++){
-    const a=series[i-1],b=series[i];
-    if(a.average==null||b.average==null)continue;
-    ctx.beginPath();ctx.moveTo(px(i-1),py(a.maximum));ctx.lineTo(px(i),py(b.maximum));
-    ctx.lineTo(px(i),py(b.minimum));ctx.lineTo(px(i-1),py(a.minimum));ctx.closePath();ctx.fill();
+  function line(points,color,dashed=false){
+    ctx.strokeStyle=color;ctx.lineWidth=dashed?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
+    ctx.setLineDash(dashed?[7,5]:[]);
+    // Each segment is drawn separately, so missing calendar dates never bridge.
+    for(let i=0;i<points.length-1;i++){
+      if(points[i].average==null||points[i+1].average==null)continue;
+      ctx.beginPath();ctx.moveTo(px(i),py(points[i].average));
+      ctx.lineTo(px(i+1),py(points[i+1].average));ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    for(let i=0;i<points.length;i++){
+      if(points[i].average==null)continue;
+      ctx.beginPath();ctx.arc(px(i),py(points[i].average),dashed?2.3:3.3,0,Math.PI*2);
+      ctx.fillStyle=dashed?color:"#fff";ctx.fill();
+      if(!dashed){ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();}
+    }
   }
-  // Separate missing-day segments: a missing day never implies 0 °C.
-  ctx.strokeStyle="#0c9b81";ctx.lineWidth=3;ctx.lineJoin="round";ctx.lineCap="round";
-  for(let i=0;i<series.length;i++){
-    if(series[i].average==null)continue;
-    ctx.beginPath();ctx.moveTo(px(i),py(series[i].average));
-    if(i+1<series.length&&series[i+1].average!=null)ctx.lineTo(px(i+1),py(series[i+1].average));
-    ctx.stroke();
-  }
-  for(let i=0;i<series.length;i++){
-    if(series[i].average==null)continue;
-    ctx.beginPath();ctx.arc(px(i),py(series[i].average),3.5,0,Math.PI*2);
-    ctx.fillStyle="#fff";ctx.fill();ctx.lineWidth=2;ctx.strokeStyle="#0c9b81";ctx.stroke();
-  }
+  // On the school-wide view prioritize building lines, with the school mean
+  // as a restrained dashed reference. When one building is selected, draw only it.
+  if(buildings.length>1)line(series,"#6a7b8d",true);
+  buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
   ctx.textAlign="center";ctx.fillStyle="#8090a4";ctx.font="11px system-ui";
   const step=Math.max(1,Math.ceil(series.length/7));
   for(let i=0;i<series.length;i++){
@@ -328,7 +404,15 @@ function hoverHistoryChart(event){
   const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
   const index=Math.round(ratio*(historyData.series.length-1));
   const day=historyData.series[index];if(!day)return;
-  tooltip.textContent=fullDay(day.date)+" · "+temperature(day.average)+" · кабинетов "+day.rooms_measured+"/"+day.rooms_total+" · измерений "+day.readings_count;
+  const buildings=historyData.buildings||[];
+  const lines=[fullDay(day.date)];
+  for(const building of buildings.slice(0,8)){
+    const value=building.series[index];
+    lines.push(building.name+": "+temperature(value.average)+" ("+value.rooms_measured+"/"+value.rooms_total+")");
+  }
+  if(buildings.length>8)lines.push("Ещё зданий: "+(buildings.length-8));
+  if(buildings.length>1)lines.push("Общая: "+temperature(day.average));
+  tooltip.textContent=lines.join(" · ");
   tooltip.hidden=false;
   tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
   tooltip.style.top="6px";
@@ -353,16 +437,19 @@ async function refreshHistory(){
 function exportHistory(){
   if(!historyData){toast("Сначала загрузите данные",true);return;}
   const decimal=v=>v==null?"":String(v).replace(".",",");
-  const rows=[["Дата","Средняя °C","Минимум °C","Максимум °C","Кабинетов с данными","Всего кабинетов","Отклонений","Измерений"]];
-  for(const day of historyData.series)rows.push([day.date,decimal(day.average),decimal(day.minimum),decimal(day.maximum),day.rooms_measured,day.rooms_total,day.out_of_range,day.readings_count]);
+  const rows=[["Дата","Здание","Средняя °C","Минимум °C","Максимум °C","Кабинетов с данными","Всего кабинетов","Отклонений","Измерений"]];
+  const add=(label,series)=>{
+    // Escape CSV cells to keep names and semicolons harmless in spreadsheets.
+    const safe=String(label).replace(/^[=+\-@\t\r]/,"'$&").replace(/"/g,'""');
+    const quoted='"'+safe+'"';
+    for(const day of series)rows.push([day.date,quoted,decimal(day.average),decimal(day.minimum),decimal(day.maximum),day.rooms_measured,day.rooms_total,day.out_of_range,day.readings_count]);
+  };
+  add("Вся школа",historyData.series);
+  for(const building of historyData.buildings||[])add(building.name,building.series);
   const csv="\ufeff"+rows.map(row=>row.join(";")).join("\r\n");
   const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
-  const link=document.createElement("a");link.href=url;link.download="termokontur-daily-"+historyData.days+"d.csv";
+  const link=document.createElement("a");link.href=url;link.download="termokontur-buildings-"+historyData.days+"d.csv";
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
-function maxUserName(user){
-  return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
-    (user.username ? "@"+user.username : "MAX ID "+user.user_id);
 }
 function maxUserName(user){
   return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
