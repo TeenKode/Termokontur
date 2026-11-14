@@ -24,6 +24,7 @@ jobs:
         run: |
           bash -n scripts/install-debian.sh scripts/termokontur-apply-update
           node --check termokontur/static/app.js
+          node --test tests/navigation-stability.test.cjs
       - name: Test
         run: python -m pytest -q
 
