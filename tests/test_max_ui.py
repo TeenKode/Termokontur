@@ -446,3 +446,29 @@ def test_simultaneous_employees_cannot_create_duplicate_daily_max_readings(clien
     assert sum("Сохранено" in reply for reply in answers) == 1
     assert sum("уже передано" in reply for reply in answers) == 3
     assert len(db.recent_readings()) == 1
+
+
+def test_manual_max_deviation_pushes_once_to_other_assigned_colleagues(client):
+    from termokontur import settings
+    room = _room()
+    _bind(7, room)
+    _bind(8, room)
+    settings.update({"alerts_enabled": "1"})
+    settings.set_secret("max_token", "testing-alerts-to-colleagues-123")
+    first = max_ui._write("7", room["id"], "s", "16", "max:message:abnormal-1")
+    assert "вне установленной нормы" in first
+    queued = max_delivery.pending()
+    assert len(queued) == 1
+    assert queued[0]["user_id"] == "8"
+    assert queued[0]["delivery_mode"] == "notice"
+    assert queued[0]["notify"] == 1
+    assert "16" in queued[0]["text"]
+    assert "\n" in queued[0]["text"]
+
+    # Correcting another person's reading produces at most one notice per
+    # recipient and day. The correcting employee sees a direct warning.
+    other = max_ui._write("8", room["id"], "c", "17", "max:callback:abnormal-2")
+    assert "вне установленной нормы" in other
+    assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]
+    max_ui._write("7", room["id"], "c", "15", "max:callback:abnormal-3")
+    assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]
