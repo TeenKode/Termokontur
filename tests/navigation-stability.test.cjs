@@ -46,9 +46,9 @@ function harness(){
     querySelector:(selector)=>{
       if(selector===".topbar")return topbar;
       if(selector===".settings-layout")return layout;
-      const tab=selector.match(/^\\[data-tab="(.+)"\\]$/);
+      const tab=selector.match(/^\[data-tab="(.+)"\]$/);
       if(tab)return nav[tab[1]];
-      const pane=selector.match(/^\\.settings-pane\\[data-settings-view="(.+)"\\]$/);
+      const pane=selector.match(/^\.settings-pane\[data-settings-view="(.+)"\]$/);
       if(pane)return panes[pane[1]];
       throw Error("Unexpected selector: "+selector);
     },
@@ -66,8 +66,8 @@ function harness(){
     loadUpdateStatus:()=>calls.updates++,
     loadMaxDiagnostics:()=>calls.max++
   });
-  vm.runInContext('let selectedTab="overview",selectedSettingsCategory="summary";\\n'+
-    ["scrollToSectionStart","setTab","setSettingsCategory"].map(extractFunction).join("\\n"),ctx);
+  vm.runInContext('let selectedTab="overview",selectedSettingsCategory="summary";\n'+
+    ["scrollToSectionStart","setTab","setSettingsCategory"].map(extractFunction).join("\n"),ctx);
   return {ctx,views,nav,panes,buttons,calls};
 }
 test("main navigation scrolls to top before hiding a long section",()=>{
@@ -102,10 +102,10 @@ test("settings categories keep scroll steady and skip repeated data loads",()=>{
   assert.equal(viewport.scrollY,185,"near the settings header do not force-scroll");
 });
 test("global feedback and busy indicators never change layout size",()=>{
-  assert.match(styles,/html\\{scrollbar-gutter:stable\\}/);
-  assert.match(styles,/\\.operation-status\\{position:fixed;/);
-  assert.match(styles,/button\\.operation-busy::before\\{content:"";position:absolute;/);
+  assert.match(styles,/html\{scrollbar-gutter:stable\}/);
+  assert.match(styles,/\.operation-status\{position:fixed;/);
+  assert.match(styles,/button\.operation-busy::before\{content:"";position:absolute;/);
   assert.doesNotMatch(styles,/scroll-snap-type:x proximity/);
-  assert.doesNotMatch(styles,/transform:translateY\\(4px\\)/);
-  assert.match(source,/button\\.matches\\("\\[data-tab\\], \\[data-settings-target\\]"\\)/);
+  assert.doesNotMatch(styles,/transform:translateY\(4px\)/);
+  assert.match(source,/button\.matches\("\[data-tab\], \[data-settings-target\]"\)/);
 });
