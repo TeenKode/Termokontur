@@ -200,6 +200,7 @@ def main():
     settings.bootstrap()
 
     async def worker():
+        next_webhook_sync = 0.0
         while True:
             token = settings.get("max_token", "") or ""
             if not token:
@@ -208,6 +209,14 @@ def main():
             if settings.get("max_mode", "polling") == "webhook":
                 async with httpx.AsyncClient(base_url=API, headers={"Authorization": token},
                                              timeout=httpx.Timeout(30, connect=12)) as client:
+                    now = asyncio.get_running_loop().time()
+                    if now >= next_webhook_sync:
+                        try:
+                            verified = await max_delivery.ensure_webhook_subscription(client)
+                        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                            logger.warning("MAX webhook subscription check failed: %s", exc)
+                            verified = False
+                        next_webhook_sync = now + (3600 if verified else 120)
                     max_delivery.queue_temperature_alerts()
                     await max_delivery.drain(client)
                     await send_reminders(client)
