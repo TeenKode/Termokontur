@@ -128,7 +128,7 @@ def initialize() -> None:
         CREATE TABLE IF NOT EXISTS max_reading_corrections (
             event_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
-            reading_id INTEGER NOT NULL REFERENCES readings(id),
+            reading_id INTEGER NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
             old_value REAL NOT NULL,
             new_value REAL NOT NULL,
             old_observed_at TEXT NOT NULL,
