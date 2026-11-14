@@ -592,12 +592,18 @@ def export_rooms(include_inactive: bool = True):
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     writer.writerow(("ID", "Корпус", "Этаж", "Кабинет", "Тип помещения",
-                     "Мин. °C", "Макс. °C", "Состояние"))
+                     "Мин. °C", "Макс. °C", "Состояние", "Привязка MAX",
+                     "Пользователи MAX"))
     for room in db.room_list(active_only=not include_inactive):
         writer.writerow([room["id"], clean_cell(room["building"]),
                          clean_cell(room["floor"]), clean_cell(room["name"]),
                          clean_cell(room["kind"]), room["min_temp"],
-                         room["max_temp"], "Активен" if room["active"] else "Отключён"])
+                         room["max_temp"], "Активен" if room["active"] else "Отключён",
+                         "Есть" if room["max_users"] else "Нет",
+                         clean_cell("; ".join(
+                             " ".join(filter(None, (user["first_name"], user["last_name"])))
+                             or ("MAX ID " + user["user_id"])
+                             for user in room["max_users"]))])
     return Response(
         content="\ufeff" + output.getvalue(),
         media_type="text/csv; charset=utf-8",
@@ -655,6 +661,26 @@ def patch_room(room_id: int, payload: RoomPatch):
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Кабинет с таким названием уже существует")
 
+@app.get("/api/max/pairing-codes", dependencies=[Depends(require_admin)])
+def active_max_codes():
+    return JSONResponse(
+        db.list_pairing_codes(),
+        headers={"Cache-Control": "no-store, no-cache, max-age=0"},
+    )
+
+
+@app.post("/api/max/pairing-codes", dependencies=[Depends(require_admin)])
+def issue_max_codes(payload: BulkPairingCodesIn):
+    try:
+        codes = db.issue_codes_bulk(payload.room_ids, payload.validity_minutes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse(
+        {"codes": codes},
+        headers={"Cache-Control": "no-store, no-cache, max-age=0"},
+    )
+
+
 @app.post("/api/max/pairing-codes.csv", dependencies=[Depends(require_admin)])
 def export_bulk_max_codes(payload: BulkPairingCodesIn):
     try:
@@ -681,6 +707,22 @@ def export_bulk_max_codes(payload: BulkPairingCodesIn):
             "Pragma": "no-cache",
         },
     )
+
+
+@app.delete("/api/rooms/{room_id}/pairing", dependencies=[Depends(require_admin)])
+def revoke_room_pairing(room_id: int):
+    if not db.room_get(room_id):
+        raise HTTPException(404, "Кабинет не найден")
+    return {"revoked": db.revoke_pairing_code(room_id)}
+
+
+@app.delete("/api/rooms/{room_id}/max-bindings/{user_id}", dependencies=[Depends(require_admin)])
+def unbind_room_max_user(room_id: int, user_id: str):
+    if not db.room_get(room_id):
+        raise HTTPException(404, "Кабинет не найден")
+    if not db.unbind(user_id, room_id):
+        raise HTTPException(404, "Привязка MAX не найдена")
+    return {"removed": True}
 
 
 @app.post("/api/rooms/{room_id}/pairing", dependencies=[Depends(require_admin)])

@@ -70,6 +70,13 @@ def initialize() -> None:
             room_id INTEGER NOT NULL REFERENCES rooms(id),
             PRIMARY KEY(user_id, room_id)
         );
+        CREATE TABLE IF NOT EXISTS max_users (
+            user_id TEXT PRIMARY KEY,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            username TEXT NOT NULL DEFAULT '',
+            seen_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -151,9 +158,26 @@ def initialize() -> None:
             conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN origin_mid TEXT")
 
 def room_list(active_only: bool = True) -> list[dict]:
+    """Admin room catalog with MAX assignments, fetched without N+1 queries."""
     with connect() as conn:
         sql = "SELECT * FROM rooms" + (" WHERE active=1" if active_only else "") + " ORDER BY building, name"
-        return [dict(x) for x in conn.execute(sql)]
+        rooms = [dict(row) for row in conn.execute(sql)]
+        users_by_room: dict[int, list[dict]] = {}
+        for row in conn.execute("""
+            SELECT b.room_id, b.user_id,
+                   COALESCE(u.first_name, '') AS first_name,
+                   COALESCE(u.last_name, '') AS last_name,
+                   COALESCE(u.username, '') AS username
+            FROM max_bindings b LEFT JOIN max_users u ON u.user_id=b.user_id
+            ORDER BY CASE WHEN COALESCE(u.first_name, '')='' AND COALESCE(u.last_name, '')=''
+                          THEN 1 ELSE 0 END,
+                     u.last_name COLLATE NOCASE, u.first_name COLLATE NOCASE, b.user_id
+        """):
+            user = dict(row)
+            users_by_room.setdefault(user.pop("room_id"), []).append(user)
+        for room in rooms:
+            room["max_users"] = users_by_room.get(room["id"], [])
+        return rooms
 
 def room_get(room_id: int) -> dict | None:
     with connect() as conn:
@@ -288,6 +312,24 @@ def dashboard(stale_hours: int = 26) -> dict:
             result.append(item)
     return {"counts": counts, "rooms": result, "generated_at": utc_now()}
 
+def list_pairing_codes() -> list[dict]:
+    """Active pairing codes metadata only: the secret is intentionally unrecoverable."""
+    with connect() as conn:
+        return [dict(row) for row in conn.execute("""
+            SELECT p.room_id, r.building, r.floor, r.name, p.expires_at
+              FROM pairing_codes p JOIN rooms r ON r.id=p.room_id
+             WHERE p.expires_at>? AND r.active=1
+             ORDER BY r.building, r.name
+        """, (utc_now(),))]
+
+
+def revoke_pairing_code(room_id: int) -> bool:
+    """Invalidate an unused code without affecting existing MAX bindings."""
+    with connect() as conn:
+        result = conn.execute("DELETE FROM pairing_codes WHERE room_id=?", (room_id,))
+        return result.rowcount > 0
+
+
 def issue_codes_bulk(room_ids: list[int], validity_minutes: int = 1440) -> list[dict]:
     """Issue new one-time MAX codes atomically for 1..250 active rooms.
 
@@ -365,6 +407,32 @@ def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | No
                 (event_id, str(user_id), found["room_id"], utc_now()),
             )
         return dict(found)
+
+def remember_max_user(user: dict) -> None:
+    """Record MAX's own profile fields from a verified private-chat update.
+
+    Missing/empty fields in later updates must not erase a previously known name.
+    """
+    if not isinstance(user, dict) or user.get("is_bot") or user.get("user_id") is None:
+        return
+    user_id = str(user["user_id"])
+    if not user_id or len(user_id) > 64:
+        return
+    def profile_field(name: str) -> str:
+        value = user.get(name)
+        return value.strip()[:120] if isinstance(value, str) else ""
+    with connect() as conn:
+        conn.execute("""
+            INSERT INTO max_users(user_id, first_name, last_name, username, seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+              first_name=COALESCE(NULLIF(excluded.first_name, ''), max_users.first_name),
+              last_name=COALESCE(NULLIF(excluded.last_name, ''), max_users.last_name),
+              username=COALESCE(NULLIF(excluded.username, ''), max_users.username),
+              seen_at=excluded.seen_at
+        """, (user_id, profile_field("first_name"),
+              profile_field("last_name"), profile_field("username"), utc_now()))
+
 
 def bound_rooms(user_id: str) -> list[dict]:
     with connect() as conn:
