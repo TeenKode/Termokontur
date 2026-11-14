@@ -7,10 +7,11 @@ record, rather than introducing another daily measurement.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 
-from . import daily, db
+from . import daily, db, settings
 
 TEMPERATURES = [18 + n * 0.5 for n in range(17)]
 NUMBER = re.compile(r"[-+]?\d{1,2}(?:[.,]\d{1,2})?")
@@ -156,9 +157,11 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     if room is None:
         _set(uid)
         return "Нет доступа к этому кабинету. Выберите действие в меню."
-    _, start, end = _today()
+    local_day, start, end = _today()
     now = db.utc_now()
     reporter = "MAX:" + str(uid)
+    notify_others = (settings.get("alerts_enabled", "0") == "1"
+                     and bool(settings.get("max_token", "")))
     message = None
     next_mode = ""
     with db.connect() as conn:
@@ -214,6 +217,38 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
                     INSERT INTO readings(room_id, value, source, reporter, observed_at, external_id)
                     VALUES (?, ?, 'max', ?, ?, ?)
                 """, (room_id, value, reporter, now, event_id))
+            if message is None and notify_others and (
+                value < room["min_temp"] or value > room["max_temp"]
+            ):
+                # The author already sees an immediate MAX reply. Push only to
+                # their colleagues, at most once per room/local-day/person.
+                # Keep notices in the same transaction as the corrected value.
+                label = "ниже нормы" if value < room["min_temp"] else "выше нормы"
+                notice = (
+                    f"Термоконтур: температура {label}!\\n"
+                    f"{room['building']} / {room['name']}: {value:g} °C\\n"
+                    f"Норма: {room['min_temp']:g}–{room['max_temp']:g} °C."
+                )
+                colleagues = conn.execute("""
+                    SELECT user_id FROM max_bindings
+                    WHERE room_id=? AND user_id<>?
+                """, (room_id, str(uid))).fetchall()
+                for colleague in colleagues:
+                    recipient = colleague["user_id"]
+                    token = f"max-room-deviation:{room_id}:{local_day}:{recipient}"
+                    alert_id = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                    conn.execute("""
+                        INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
+                        VALUES(?,'complete',?)
+                    """, (alert_id, now))
+                    conn.execute("""
+                        INSERT OR IGNORE INTO max_outbox(event_id,user_id,text,next_retry_at)
+                        VALUES(?,?,?,?)
+                    """, (alert_id, recipient, notice, now))
+                    conn.execute("""
+                        INSERT OR IGNORE INTO max_outbox_ui(event_id,delivery_mode,notify)
+                        VALUES(?,'notice',1)
+                    """, (alert_id,))
     # Session changes must happen after the transaction to avoid SQLite locks.
     _set(uid, next_mode, room_id if next_mode else None)
     if message is not None:
