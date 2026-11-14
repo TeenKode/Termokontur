@@ -169,7 +169,9 @@ def room_list(active_only: bool = True) -> list[dict]:
                    COALESCE(u.last_name, '') AS last_name,
                    COALESCE(u.username, '') AS username
             FROM max_bindings b LEFT JOIN max_users u ON u.user_id=b.user_id
-            ORDER BY u.last_name COLLATE NOCASE, u.first_name COLLATE NOCASE, b.user_id
+            ORDER BY CASE WHEN COALESCE(u.first_name, '')='' AND COALESCE(u.last_name, '')=''
+                          THEN 1 ELSE 0 END,
+                     u.last_name COLLATE NOCASE, u.first_name COLLATE NOCASE, b.user_id
         """):
             user = dict(row)
             users_by_room.setdefault(user.pop("room_id"), []).append(user)
