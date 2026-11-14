@@ -65,7 +65,7 @@ systemctl restart termokontur.service
 systemctl restart termokontur-max.service
 systemctl enable --now termokontur-update.path
 echo
-echo "Installed. Open http://<LXC-IP>:8092/ in your LAN."
+echo "Installed. HTTP: http://<LXC-IP>:8092/ ; HTTPS (with certificate): https://<LXC-IP>/ on port 443."
 echo "Check: systemctl status termokontur --no-pager"
 echo "Manage MAX, passwords, reminders and updates in the web panel's Settings tab."
 echo "Configuration secrets are imported from ${CONFIG_FILE} once, then managed in SQLite."

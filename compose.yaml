@@ -7,6 +7,10 @@ services:
       TERMOKONTUR_DB: /data/termokontur.sqlite3
     ports:
       - "8092:8092"
+      - "443:443"
+    # Keep the service unprivileged while allowing internal HTTPS port 443.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
     volumes:
       - app-data:/data
     healthcheck:

@@ -7,5 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt && \
     mkdir -p /data && chown termokontur:termokontur /data
 COPY termokontur ./termokontur
 USER termokontur
-EXPOSE 8092
+EXPOSE 8092 443
 CMD ["python", "-m", "termokontur.server"]

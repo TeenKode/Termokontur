@@ -436,7 +436,7 @@
                   <button type="button" id="tls-remove" class="btn secondary" disabled>Убрать сертификат</button>
                 </div>
                 <p id="tls-next" class="hint" hidden>После перезапуска откройте сайт: <a id="tls-next-link" href="#" rel="noopener"></a>. Для внутреннего УЦ понадобится доверие к нему на компьютерах.</p>
-                <p class="hint">HTTP и HTTPS используют тот же порт 8092. Если включён reverse-proxy, его upstream должен соответствовать выбранному протоколу.</p>
+                <p class="hint">До настройки сертификата HTTP работает на порту 8092. После применения сертификата HTTPS работает на стандартном порту 443 (без указания порта в адресе). Если включён reverse-proxy, проверьте его upstream и свободен ли порт 443.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="updates" hidden>

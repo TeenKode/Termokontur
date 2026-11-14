@@ -53,6 +53,7 @@ health() {
   local attempt
   for attempt in $(seq 1 25); do
     if curl --fail --silent --max-time 2 http://127.0.0.1:8092/health >/dev/null || \
+       curl --insecure --fail --silent --max-time 2 https://127.0.0.1:443/health >/dev/null || \
        curl --insecure --fail --silent --max-time 2 https://127.0.0.1:8092/health >/dev/null; then
       return 0
     fi
@@ -168,11 +169,8 @@ mv "$APP" "$PREV"
 SWAPPED=1
 mv "$STAGE" "$APP"
 STAGE=
-systemctl start termokontur.service
-record installing "Приложение запущено. Проверяем его доступность…" verifying
-health || { echo "Web health check failed after version swap" >&2; exit 1; }
-
-# Updated service units are installed only after the new app passes the first check.
+# The new HTTPS listener needs CAP_NET_BIND_SERVICE on port 443.
+# Install and retain rollback copies of systemd units before starting new code.
 if [[ -d "$OLD_UNITS" ]]; then rm -rf -- "$OLD_UNITS"; fi
 install -d -o root -g root -m 0700 "$OLD_UNITS"
 for unit in "${INSTALL_UNITS[@]}"; do
@@ -183,8 +181,9 @@ for unit in "${INSTALL_UNITS[@]}"; do
   install -o root -g root -m 0644 "$APP/deploy/systemd/$unit" "$UNITS_DIR/$unit"
 done
 systemctl daemon-reload
-systemctl restart termokontur.service
-health || { echo "Web health check failed with updated service units" >&2; exit 1; }
+systemctl start termokontur.service
+record installing "Приложение запущено. Проверяем его доступность…" verifying
+health || { echo "Web health check failed after version swap" >&2; exit 1; }
 systemctl start termokontur-max.service || true
 systemctl enable --now termokontur-update.path
 
