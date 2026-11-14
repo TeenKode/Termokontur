@@ -248,6 +248,7 @@ def save_settings(payload: SettingsIn):
 def set_max_token(payload: SecretIn):
     if settings.get("max_mode", "polling") == "webhook":
         raise HTTPException(409, "Сначала отключите webhook MAX, чтобы изменить токен")
+    old_token = settings.get("max_token", "") or ""
     if payload.value is not None and payload.value.strip():
         try:
             settings.set_secret("max_token", payload.value.strip())
@@ -255,7 +256,12 @@ def set_max_token(payload: SecretIn):
             raise HTTPException(422, str(exc)) from exc
     else:
         settings.set_secret("max_token", None)
-    return {"configured": bool(settings.get("max_token"))}
+    configured_token = settings.get("max_token", "") or ""
+    if configured_token != old_token:
+        # MAX markers belong to an individual bot. An old bot's marker can
+        # silently skip events or make polling fail after a token replacement.
+        db.set_state("max_marker", "")
+    return {"configured": bool(configured_token)}
 
 
 def _validate_max_webhook_url(value: str) -> str:
@@ -360,34 +366,77 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
 
 @app.get("/api/max/diagnostics", dependencies=[Depends(require_admin)])
 def max_diagnostics():
-    """Check local delivery backlog and MAX's actual webhook subscription."""
+    """Live MAX checks plus local worker status; no token or message content returned."""
     result = max_delivery.diagnostics()
     mode = settings.get("max_mode", "polling")
     token = settings.get("max_token", "") or ""
     result.update({
         "mode": mode,
         "token_configured": bool(token),
+        "token_valid": None,
+        "api_check_error": False,
+        "bot_username": None,
+        "worker_running": False,
+        "worker_mode": None,
+        "worker_last_seen": None,
         "webhook_registered": None,
         "webhook_check_error": False,
+        "polling_blocked_by_webhook": False,
+        "subscription_count": None,
     })
-    if mode != "webhook" or not token:
-        return result
-    url = settings.get("max_webhook_url", "")
+    heartbeat = db.get_state("max_worker_heartbeat") or ""
     try:
-        response = httpx.get(
-            "https://platform-api2.max.ru/subscriptions",
-            headers={"Authorization": token},
-            timeout=8.0,
-        )
+        timestamp, worker_mode = heartbeat.split("|", 1)
+        last = datetime.fromisoformat(timestamp)
+        seconds = (datetime.now(timezone.utc) - last).total_seconds()
+        if last.tzinfo is not None and -30 <= seconds < 120:
+            result["worker_running"] = True
+        result["worker_last_seen"] = timestamp
+        result["worker_mode"] = worker_mode
+    except (ValueError, TypeError):
+        pass
+    if not token:
+        return result
+
+    headers = {"Authorization": token}
+    try:
+        response = httpx.get("https://platform-api2.max.ru/me", headers=headers, timeout=8.0)
         response.raise_for_status()
-        payload = response.json()
-        subscriptions = payload["subscriptions"]
+        identity = response.json()
+        if not isinstance(identity, dict) or not identity.get("is_bot"):
+            raise ValueError("Invalid MAX bot identity")
+        result["token_valid"] = True
+        username = identity.get("username")
+        if isinstance(username, str):
+            result["bot_username"] = username[:128]
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            result["token_valid"] = False
+        else:
+            result["api_check_error"] = True
+        return result
+    except (httpx.HTTPError, ValueError, TypeError):
+        result["api_check_error"] = True
+        return result
+
+    try:
+        response = httpx.get("https://platform-api2.max.ru/subscriptions",
+                             headers=headers, timeout=8.0)
+        response.raise_for_status()
+        subscriptions = response.json()["subscriptions"]
         if not isinstance(subscriptions, list):
             raise ValueError("Invalid subscriptions response")
-        result["webhook_registered"] = any(
-            isinstance(item, dict) and item.get("url") == url
-            for item in subscriptions
-        )
+        result["subscription_count"] = len(subscriptions)
+        if mode == "polling":
+            # MAX does not deliver updates via long polling while any webhook
+            # subscription is registered for this bot, even on another server.
+            result["polling_blocked_by_webhook"] = bool(subscriptions)
+        else:
+            url = settings.get("max_webhook_url", "")
+            result["webhook_registered"] = any(
+                isinstance(item, dict) and item.get("url") == url
+                for item in subscriptions
+            )
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         result["webhook_check_error"] = True
     return result
