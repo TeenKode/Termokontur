@@ -1,6 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
+let historyData = null, historyRequestId = 0;
 const selectedMaxRooms = new Set();
 let activeMaxCodes = [], issuedMaxCodes = [];
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
@@ -159,41 +160,296 @@ function renderFilters() {
 }
 function renderDaily() {
   if(!daily) return;
-  $("daily-date").textContent = "На " + daily.local_date + " · " + daily.timezone;
-  $("daily-counts").textContent = daily.counts.measured + " из " + daily.rooms.length;
-  const missing = daily.rooms.filter(r=>r.daily_status === "missing");
-  const area = $("daily-missing"); area.replaceChildren();
-  if(!missing.length) {
-    area.append(el("p","daily-complete",daily.rooms.length ? "Все помещения сдали показания за сегодня." : "Добавьте кабинеты, чтобы начать контроль."));
+  const building=$("building-filter").value;
+  const selected=daily.rooms.filter(r=>!building||r.building===building);
+  const missing=selected.filter(r=>r.daily_status==="missing");
+  $("daily-date").textContent="На "+daily.local_date+" · "+daily.timezone+(building?" · "+building:"");
+  $("daily-counts").textContent=(selected.length-missing.length)+" из "+selected.length;
+  const area=$("daily-missing");area.replaceChildren();
+  if(!missing.length){
+    area.append(el("p","daily-complete",selected.length?"Все помещения сдали показания за сегодня.":"Нет помещений в выбранном корпусе."));
     return;
   }
-  area.append(el("p","daily-heading","Нет измерений: " + missing.length));
-  const list = el("div","daily-tags");
-  for(const room of missing) list.append(el("span","daily-tag",room.building + " · " + room.name));
+  area.append(el("p","daily-heading","Нет измерений: "+missing.length));
+  const list=el("div","daily-tags");
+  for(const room of missing)list.append(el("span","daily-tag",room.building+" · "+room.name));
   area.append(list);
 }
 function renderOverview() {
+  const building=$("building-filter").value;
+  const selected=overview.filter(r=>!building||r.building===building);
   const counts={normal:0,below:0,above:0,missing:0};
-  for(const item of overview) counts[item.status] = (counts[item.status]||0)+1;
-  $("count-total").textContent=overview.length;
+  for(const item of selected)counts[item.status]=(counts[item.status]||0)+1;
+  $("count-total").textContent=selected.length;
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
   const search=$("search-rooms").value.toLocaleLowerCase("ru");
-  const building=$("building-filter").value;
-  const filtered=overview.filter(r=>(!building || r.building===building) &&
-    (r.name+" "+r.building+" "+r.kind).toLocaleLowerCase("ru").includes(search));
+  const filtered=selected.filter(r=>(r.name+" "+r.building+" "+r.kind).toLocaleLowerCase("ru").includes(search));
   const tbody=$("overview-table");tbody.replaceChildren();
   for(const item of filtered){
     const tr=el("tr");cell(tr,item.name);cell(tr,item.building);
     const val=cell(tr,temperature(item.last_temp),"temp"+(item.status==="below"?" low":item.status==="above"?" high":""));
-    val.title=item.last_source ? "Источник: "+(sources[item.last_source]||item.last_source) : "";
+    val.title=item.last_source?"Источник: "+(sources[item.last_source]||item.last_source):"";
     cell(tr,Number(item.min_temp).toLocaleString("ru-RU")+"–"+Number(item.max_temp).toLocaleString("ru-RU")+" °C");
     cell(tr,when(item.last_at));
     const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,statuses[item.status]||item.status));
     tbody.append(tr);
   }
-  show("overview-empty", filtered.length===0);
+  show("overview-empty",filtered.length===0);
+  $("overview-empty").textContent=overview.length?"По заданному фильтру помещений нет.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
+}
+function shortDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7):"—";}
+function fullDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4):"—";}
+function renderHistoryTable(){
+  const tbody=$("history-table");tbody.replaceChildren();
+  if(!historyData)return;
+  for(const day of [...historyData.series].reverse()){
+    const tr=el("tr");
+    cell(tr,fullDay(day.date));cell(tr,temperature(day.average));
+    cell(tr,temperature(day.minimum));cell(tr,temperature(day.maximum));
+    cell(tr,day.rooms_measured+" из "+day.rooms_total);
+    cell(tr,String(day.out_of_range));cell(tr,String(day.readings_count));
+    tbody.append(tr);
+  }
+}
+function renderHeatmap(){
+  const head=$("heatmap-head"),body=$("heatmap-body");
+  head.replaceChildren();body.replaceChildren();
+  if(!historyData)return;
+  const shown=historyData.series.slice(-Math.min(historyData.days,14)).map(x=>x.date);
+  $("heatmap-description").textContent="Среднее за день по каждому кабинету · последние "+shown.length+" дней · "+historyData.timezone+".";
+  const header=el("tr");header.append(el("th","","Корпус · кабинет"));
+  for(const day of shown){
+    const th=el("th","",shortDay(day));th.title=fullDay(day);header.append(th);
+  }
+  header.append(el("th","","Средняя за период"),el("th","","Дней с данными"));
+  head.append(header);
+  const search=$("heatmap-search").value.trim().toLocaleLowerCase("ru");
+  const matching=historyData.rooms.filter(r=>(r.name+" "+r.building).toLocaleLowerCase("ru").includes(search));
+  for(const room of matching){
+    const tr=el("tr");
+    const label=cell(tr,room.name,"heatmap-room");
+    label.append(el("small","",room.building));
+    for(const day of shown){
+      const datum=room.daily[day];
+      const value=datum?.average;
+      const status=value==null?"no-data":value<room.min_temp?"low":value>room.max_temp?"high":"normal";
+      const td=cell(tr,value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1}),"heatmap-value "+status);
+      td.title=room.building+" · "+room.name+" · "+fullDay(day)+": "+temperature(value)+(datum?", измерений: "+datum.count:"");
+    }
+    cell(tr,temperature(room.average),"heatmap-summary");
+    cell(tr,room.days_reported+" / "+historyData.days);
+    body.append(tr);
+  }
+  show("heatmap-empty",matching.length===0);
+}
+function renderHistory(){
+  if(!historyData)return;
+  const series=historyData.series;
+  const today=series[series.length-1],yesterday=series[series.length-2];
+  $("avg-today").textContent=temperature(today.average);
+  $("avg-today-desc").textContent=today.average==null?
+    "Сегодня пока нет показаний. Средняя появится после первого измерения.":
+    "По "+today.rooms_measured+" из "+today.rooms_total+" кабинетов · "+historyData.timezone;
+  const change=$("avg-change");
+  change.className="dashboard-change";
+  if(today.average!=null&&yesterday?.average!=null){
+    const diff=today.average-yesterday.average;
+    change.textContent=(Math.abs(diff)<0.005?"Без изменений":(diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C")+" к предыдущему дню";
+    if(diff>0.005)change.classList.add("rise");
+    if(diff< -0.005)change.classList.add("fall");
+  }else change.textContent="Для сравнения нужны показания за сегодня и вчера";
+  $("today-coverage").textContent=today.coverage+"%";
+  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" кабинетов с данными";
+  $("coverage-progress").value=today.coverage;
+  $("today-alerts").textContent="Отклонения по среднесуточной: "+today.out_of_range;
+  const hasReadings=series.some(x=>x.average!=null);
+  show("history-empty",!hasReadings);
+  $("history-chart").hidden=!hasReadings;
+  renderHistoryTable();
+  renderBuildingSummary();
+  renderBuildingMatrix();
+  renderHistoryLegend();
+  renderHeatmap();
+  if(hasReadings)drawHistoryChart();
+}
+const buildingPalette=["#0f9e83","#4d79c7","#e08b3f","#8768c3","#c55a83","#3f9da5","#a0763d","#78883f","#b45855","#6479a2"];
+function buildingColor(index){return buildingPalette[index%buildingPalette.length];}
+function renderHistoryLegend(){
+  const legend=$("history-legend");legend.replaceChildren();
+  if(!historyData)return;
+  const buildings=historyData.buildings||[];
+  buildings.forEach((building,index)=>{
+    const item=el("span","history-key");
+    const line=el("i","history-key-line");line.style.background=buildingColor(index);
+    item.append(line,document.createTextNode(building.name));
+    legend.append(item);
+  });
+  if(buildings.length>1){
+    const item=el("span","history-key");
+    item.append(el("i","history-key-school"),document.createTextNode("Вся школа"));
+    legend.append(item);
+  }
+  legend.append(el("span","legend-muted","Пропуски — дни без показаний"));
+}
+function renderBuildingSummary(){
+  const target=$("building-summary");target.replaceChildren();
+  if(!historyData)return;
+  const buildings=historyData.buildings||[];
+  if(!buildings.length){
+    target.append(el("p","building-summary-empty","Активных зданий пока нет."));
+    return;
+  }
+  buildings.forEach((building,index)=>{
+    const today=building.series[building.series.length-1],yesterday=building.series[building.series.length-2];
+    const card=el("article","building-summary-card");
+    card.style.setProperty("--building-accent",buildingColor(index));
+    const top=el("div","building-card-top");
+    top.append(el("span","building-card-dot"),el("strong","",building.name));
+    card.append(top);
+    card.append(el("div","building-card-value",temperature(today.average)));
+    const diff=today.average==null||yesterday?.average==null?null:today.average-yesterday.average;
+    const change=el("span","building-card-change",
+      diff==null?"Нет данных для сравнения":Math.abs(diff)<0.005?"Без изменений ко вчера":
+      (diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C ко вчера");
+    card.append(change);
+    const meta=el("div","building-card-meta");
+    meta.append(el("span","","Показания: "+today.rooms_measured+" из "+today.rooms_total),
+      el("span","","Отклонения: "+today.out_of_range));
+    card.append(meta);target.append(card);
+  });
+}
+function renderBuildingMatrix(){
+  const head=$("building-matrix-head"),body=$("building-matrix-body");
+  head.replaceChildren();body.replaceChildren();
+  if(!historyData)return;
+  const series=historyData.series,buildings=historyData.buildings||[];
+  const row=el("tr");row.append(el("th","","Здание"));
+  for(const day of series)row.append(el("th","",shortDay(day.date)));
+  row.append(el("th","","Дней с данными"));
+  head.append(row);
+  for(const building of buildings){
+    const tr=el("tr"),name=cell(tr,building.name,"building-matrix-name");
+    name.title="Всего кабинетов: "+building.rooms_total;
+    for(const day of building.series){
+      const hasData=day.average!=null;
+      const status=!hasData?"empty":day.out_of_range?"with-alert":
+        day.rooms_measured<day.rooms_total?"partial":"full";
+      const td=cell(tr,hasData?Number(day.average).toLocaleString("ru-RU",{maximumFractionDigits:1}):"—",
+        "building-day "+status);
+      td.title=building.name+" · "+fullDay(day.date)+": "+temperature(day.average)+
+        "; кабинетов "+day.rooms_measured+"/"+day.rooms_total+
+        "; отклонений "+day.out_of_range+"; измерений "+day.readings_count;
+    }
+    cell(tr,building.series.filter(day=>day.average!=null).length+" / "+series.length);
+    body.append(tr);
+  }
+  show("building-matrix-empty",buildings.length===0);
+}
+function drawHistoryChart(){
+  const canvas=$("history-chart");
+  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||canvas.hidden)return;
+  const series=historyData.series,buildings=historyData.buildings||[];
+  const width=Math.max(280,canvas.parentElement.clientWidth-2),height=310,dpr=window.devicePixelRatio||1;
+  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
+  canvas.style.width=width+"px";canvas.style.height=height+"px";
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
+  const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
+  const observed=[...series,...buildings.flatMap(x=>x.series)].map(x=>x.average).filter(v=>v!==null);
+  if(!observed.length)return;
+  let minimum=Math.floor(Math.min(...observed)-1),maximum=Math.ceil(Math.max(...observed)+1);
+  if(maximum-minimum<4){const mid=(minimum+maximum)/2;minimum=mid-2;maximum=mid+2;}
+  const px=i=>left+(series.length===1?graphWidth/2:graphWidth*i/(series.length-1));
+  const py=v=>top+(maximum-v)/(maximum-minimum)*graphHeight;
+  ctx.font="12px system-ui";ctx.strokeStyle="#eaf0f4";ctx.fillStyle="#8594a6";ctx.textAlign="right";ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const value=minimum+(maximum-minimum)*(4-i)/4,y=top+graphHeight*i/4;
+    ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();
+    ctx.fillText(value.toLocaleString("ru-RU",{maximumFractionDigits:1})+"°",left-8,y+4);
+  }
+  function line(points,color,dashed=false){
+    ctx.strokeStyle=color;ctx.lineWidth=dashed?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
+    ctx.setLineDash(dashed?[7,5]:[]);
+    // Each segment is drawn separately, so missing calendar dates never bridge.
+    for(let i=0;i<points.length-1;i++){
+      if(points[i].average==null||points[i+1].average==null)continue;
+      ctx.beginPath();ctx.moveTo(px(i),py(points[i].average));
+      ctx.lineTo(px(i+1),py(points[i+1].average));ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    for(let i=0;i<points.length;i++){
+      if(points[i].average==null)continue;
+      ctx.beginPath();ctx.arc(px(i),py(points[i].average),dashed?2.3:3.3,0,Math.PI*2);
+      ctx.fillStyle=dashed?color:"#fff";ctx.fill();
+      if(!dashed){ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();}
+    }
+  }
+  // On the school-wide view prioritize building lines, with the school mean
+  // as a restrained dashed reference. When one building is selected, draw only it.
+  if(buildings.length>1)line(series,"#6a7b8d",true);
+  buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
+  ctx.textAlign="center";ctx.fillStyle="#8090a4";ctx.font="11px system-ui";
+  const step=Math.max(1,Math.ceil(series.length/7));
+  for(let i=0;i<series.length;i++){
+    if(i%step!==0&&i!==series.length-1)continue;
+    ctx.fillText(shortDay(series[i].date),px(i),height-15);
+  }
+}
+function hoverHistoryChart(event){
+  const canvas=$("history-chart"),tooltip=$("history-tooltip");
+  if(!historyData||canvas.hidden)return;
+  const rect=canvas.getBoundingClientRect(),width=rect.width,left=51,right=18;
+  const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
+  const index=Math.round(ratio*(historyData.series.length-1));
+  const day=historyData.series[index];if(!day)return;
+  const buildings=historyData.buildings||[];
+  const lines=[fullDay(day.date)];
+  for(const building of buildings.slice(0,8)){
+    const value=building.series[index];
+    lines.push(building.name+": "+temperature(value.average)+" ("+value.rooms_measured+"/"+value.rooms_total+")");
+  }
+  if(buildings.length>8)lines.push("Ещё зданий: "+(buildings.length-8));
+  if(buildings.length>1)lines.push("Общая: "+temperature(day.average));
+  tooltip.textContent=lines.join(" · ");
+  tooltip.hidden=false;
+  tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
+  tooltip.style.top="6px";
+}
+async function refreshHistory(){
+  const sequence=++historyRequestId,building=$("building-filter").value,days=$("history-period").value;
+  $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
+  $("history-content").hidden=true;
+  try{
+    const data=await api("/api/dashboard/history?days="+encodeURIComponent(days)+"&building="+encodeURIComponent(building));
+    if(sequence!==historyRequestId)return;
+    historyData=data;
+    $("history-state").hidden=true;$("history-content").hidden=false;
+    renderHistory();
+  }catch(error){
+    if(sequence!==historyRequestId)return;
+    historyData=null;
+    $("history-state").textContent="Не удалось загрузить историю: "+error.message;
+    $("avg-today").textContent="—";$("today-coverage").textContent="—";
+  }
+}
+function exportHistory(){
+  if(!historyData){toast("Сначала загрузите данные",true);return;}
+  const decimal=v=>v==null?"":String(v).replace(".",",");
+  const rows=[["Дата","Здание","Средняя °C","Минимум °C","Максимум °C","Кабинетов с данными","Всего кабинетов","Отклонений","Измерений"]];
+  const add=(label,series)=>{
+    // Escape CSV cells to keep names and semicolons harmless in spreadsheets.
+    const safe=String(label).replace(/^[=+\-@\t\r]/,"'$&").replace(/"/g,'""');
+    const quoted='"'+safe+'"';
+    for(const day of series)rows.push([day.date,quoted,decimal(day.average),decimal(day.minimum),decimal(day.maximum),day.rooms_measured,day.rooms_total,day.out_of_range,day.readings_count]);
+  };
+  add("Вся школа",historyData.series);
+  for(const building of historyData.buildings||[])add(building.name,building.series);
+  const csv="\ufeff"+rows.map(row=>row.join(";")).join("\r\n");
+  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+  const link=document.createElement("a");link.href=url;link.download="termokontur-buildings-"+historyData.days+"d.csv";
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function maxUserName(user){
   return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
@@ -302,6 +558,7 @@ async function refresh() {
     const [dash,activeRooms,items,day,all]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily"),api("/api/rooms?include_inactive=true")]);
     overview=dash.rooms;rooms=activeRooms;allRooms=all;readings=items;daily=day;
     renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();
+    await refreshHistory();
     $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
   } catch(error) {toast(error.message,true);}
   finally {refreshBusy=false;}
@@ -353,11 +610,17 @@ $("refresh").addEventListener("click",refresh);
 for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
   const name=nav.dataset.tab;
   if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
+  if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
 $("search-rooms").addEventListener("input",renderOverview);
-$("building-filter").addEventListener("change",renderOverview);
+$("building-filter").addEventListener("change",()=>{renderOverview();renderDaily();refreshHistory();});
+$("history-period").addEventListener("change",refreshHistory);
+$("heatmap-search").addEventListener("input",renderHeatmap);
+$("history-export").addEventListener("click",exportHistory);
+$("history-chart").addEventListener("pointermove",hoverHistoryChart);
+$("history-chart").addEventListener("pointerleave",()=>{$("history-tooltip").hidden=true;});
 $("reading-filter").addEventListener("change",refreshReadings);
 $("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
@@ -390,7 +653,7 @@ $("reading-form").addEventListener("submit",async event=>{
     $("reading-dialog").close();await refresh();toast("Показание записано");}
   catch(error){toast(error.message,true);}
 });
-window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();});
+window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();});
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp();await refresh();}else enterLogin();}catch{enterLogin();}})();
 
 /* Accessible settings workspace: categories, overview and independent saves. */
