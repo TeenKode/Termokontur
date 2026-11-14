@@ -121,6 +121,7 @@ def process_update(update: dict) -> tuple[str, str] | None:
         if uid is None or user.get("is_bot"):
             return None
         uid = str(uid)
+        db.remember_max_user(user)
         payload = update.get("payload") or ""
         return uid, max_ui.handle_start(uid, str(payload), f"start:{update.get('timestamp', '')}")
     if kind == "message_callback":
@@ -133,6 +134,7 @@ def process_update(update: dict) -> tuple[str, str] | None:
         if uid is None or user.get("is_bot") or not callback_id or recipient.get("chat_type") != "dialog":
             return None
         uid = str(uid)
+        db.remember_max_user(user)
         return uid, max_ui.handle_callback(uid, str(callback.get("payload") or ""), str(callback_id))
     if kind != "message_created":
         return None
@@ -148,6 +150,7 @@ def process_update(update: dict) -> tuple[str, str] | None:
     if uid is None or not isinstance(text, str) or not mid:
         return None
     uid = str(uid)
+    db.remember_max_user(sender)
     stripped = text.strip()
     if stripped.split(maxsplit=1)[0:1] == ["/start"]:
         payload = stripped.split(maxsplit=1)

@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
 let historyData = null, historyRequestId = 0;
 const selectedMaxRooms = new Set();
+let activeMaxCodes = [], issuedMaxCodes = [];
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -342,12 +343,17 @@ function exportHistory(){
   const link=document.createElement("a");link.href=url;link.download="termokontur-daily-"+historyData.days+"d.csv";
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+function maxUserName(user){
+  return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
+    (user.username ? "@"+user.username : "MAX ID "+user.user_id);
+}
 function renderRooms(){
   const tbody=$("rooms-table");tbody.replaceChildren();
   const search=$("rooms-search").value.trim().toLocaleLowerCase("ru");
   const showInactive=$("show-inactive").checked;
   const matching=allRooms.filter(r=>(showInactive || r.active) &&
-    [r.name,r.building,r.floor,r.kind].some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
+    [r.name,r.building,r.floor,r.kind,...(r.max_users||[]).flatMap(u=>[u.first_name,u.last_name,u.username,u.user_id])]
+      .some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
   for(const room of matching) {
     const row=el("tr", room.active ? "" : "archived-room");
     cell(row,room.name);
@@ -355,6 +361,26 @@ function renderRooms(){
     if(!room.active)building.append(el("span","archived-label","Отключён"));
     cell(row,room.floor||"—");cell(row,room.kind);
     cell(row,room.min_temp+"–"+room.max_temp+" °C");
+    const maxCell=cell(row,"","max-users-cell");
+    const boundUsers=room.max_users||[];
+    if(!boundUsers.length)maxCell.append(el("span","max-unbound","Не привязан"));
+    else{
+      const list=el("div","max-user-list");
+      for(const user of boundUsers){
+        const entry=el("div","max-user-entry"),details=el("div","max-user-details");
+        details.append(el("strong","",maxUserName(user)));
+        details.append(el("small","",[
+          user.username?"@"+user.username:"",
+          "ID "+user.user_id
+        ].filter(Boolean).join(" · ")));
+        const remove=el("button","max-unbind","Отвязать");
+        remove.type="button";
+        remove.title="Отвязать пользователя "+maxUserName(user)+" от "+room.name;
+        remove.addEventListener("click",()=>unbindMax(room,user));
+        entry.append(details,remove);list.append(entry);
+      }
+      maxCell.append(list);
+    }
     const actions=cell(row,"");
     const duplicate=el("button","","Копировать");
     duplicate.title="Создать новый кабинет с теми же параметрами";
@@ -446,6 +472,14 @@ async function pairing(room){
     $("pairing-code").textContent=reply.code;
     $("pairing-dialog").showModal();
   } catch(error){toast(error.message,true);}
+}
+async function unbindMax(room,user){
+  if(!confirm("Отвязать «"+maxUserName(user)+"» от помещения «"+room.name+"»? После отвязки сотрудник не сможет отправлять показания для этого кабинета."))return;
+  try{
+    await api("/api/rooms/"+room.id+"/max-bindings/"+encodeURIComponent(user.user_id),"DELETE");
+    await refresh();
+    toast("Профиль MAX отвязан от помещения");
+  }catch(error){toast(error.message,true);}
 }
 async function restoreRoom(room){
   try{
@@ -932,71 +966,156 @@ setInterval(()=>{
   }
 },3000);
 
-/* Bulk MAX onboarding: administrator selects rooms and downloads one-time codes. */
+/* MAX code management: safe metadata and one-time secret reveal. */
 function maxCodeVisibleRooms(){
   const building=$("max-codes-building").value;
   const needle=$("max-codes-search").value.trim().toLocaleLowerCase("ru");
+  const coded=new Set(activeMaxCodes.map(c=>c.room_id));
   return rooms.filter(r=>(!building||r.building===building) &&
-    [r.building,r.floor,r.name,r.kind].some(value=>
-      String(value).toLocaleLowerCase("ru").includes(needle)));
+    (!$("max-codes-unbound").checked||!(r.max_users||[]).length) &&
+    (!$("max-codes-no-code").checked||!coded.has(r.id)) &&
+    [r.building,r.floor,r.name,r.kind].some(v=>String(v).toLocaleLowerCase("ru").includes(needle)));
 }
 function renderMaxCodes(){
-  const activeIds=new Set(rooms.map(room=>room.id));
-  for(const id of selectedMaxRooms) if(!activeIds.has(id))selectedMaxRooms.delete(id);
-  const visible=maxCodeVisibleRooms();
-  const list=$("max-codes-list");list.replaceChildren();
+  const available=new Set(rooms.map(r=>r.id));
+  for(const id of selectedMaxRooms)if(!available.has(id))selectedMaxRooms.delete(id);
+  const visible=maxCodeVisibleRooms(),list=$("max-codes-list"),coded=new Set(activeMaxCodes.map(c=>c.room_id));
+  list.replaceChildren();
   for(const room of visible){
     const label=el("label","max-codes-room");
     const check=el("input");check.type="checkbox";check.checked=selectedMaxRooms.has(room.id);
     check.addEventListener("change",()=>{
       if(check.checked){
-        if(selectedMaxRooms.size>=250){
-          check.checked=false;toast("Максимум 250 кабинетов за один выпуск",true);return;
-        }
+        if(selectedMaxRooms.size>=250){check.checked=false;toast("Максимум 250 кабинетов за один выпуск",true);return;}
         selectedMaxRooms.add(room.id);
       }else selectedMaxRooms.delete(room.id);
       renderMaxCodes();
     });
     const info=el("span","max-codes-room-text");
     info.append(el("strong","",room.name));
-    info.append(el("small","",room.building+(room.floor?" · этаж "+room.floor:"")));
+    info.append(el("small","",[
+      room.building,room.floor?"этаж "+room.floor:"",
+      (room.max_users||[]).length?"MAX: "+room.max_users.map(maxUserName).join(", "):"Нет привязки MAX",
+      coded.has(room.id)?"Код уже выпущен":""
+    ].filter(Boolean).join(" · ")));
     label.append(check,info);list.append(label);
   }
-  if(!visible.length)list.append(el("p","max-codes-empty","Нет кабинетов для выбранного фильтра."));
-  const selectAll=$("max-codes-select-all");
-  const selectedVisible=visible.filter(room=>selectedMaxRooms.has(room.id)).length;
-  selectAll.checked=!!visible.length&&selectedVisible===visible.length;
-  selectAll.indeterminate=selectedVisible>0&&selectedVisible<visible.length;
-  selectAll.disabled=!visible.length;
-  $("max-codes-count").textContent=
-    "Выбрано: "+selectedMaxRooms.size+" из "+rooms.length+" активных кабинетов. Отображается: "+visible.length+".";
+  if(!visible.length)list.append(el("p","max-codes-empty","Кабинеты не найдены. Попробуйте снять ограничения фильтра."));
+  const toggle=$("max-codes-select-all");
+  const selectedVisible=visible.filter(r=>selectedMaxRooms.has(r.id)).length;
+  toggle.checked=!!visible.length&&selectedVisible===visible.length;
+  toggle.indeterminate=selectedVisible>0&&selectedVisible<visible.length;
+  toggle.disabled=!visible.length;
+  $("max-codes-count").textContent="Выбрано "+selectedMaxRooms.size+" из "+rooms.length+
+    " активных · показано "+visible.length+
+    (selectedMaxRooms.size>selectedVisible?" · скрыто фильтром "+(selectedMaxRooms.size-selectedVisible):"");
   $("download-max-codes").disabled=selectedMaxRooms.size===0;
 }
-$("bulk-max-codes").addEventListener("click",()=>{
-  selectedMaxRooms.clear();
+function renderActiveMaxCodes(){
+  const list=$("max-active-codes-list");list.replaceChildren();
+  if(!activeMaxCodes.length){
+    list.append(el("p","max-codes-empty","Действующих неиспользованных кодов нет."));
+    return;
+  }
+  for(const item of activeMaxCodes){
+    const record=el("div","max-code-record"),details=el("div","max-code-details");
+    details.append(el("strong","",item.building+" / "+item.name));
+    details.append(el("small","","Действует до "+when(item.expires_at)+" · значение не сохраняется"));
+    const revoke=el("button","btn secondary","Отозвать");revoke.type="button";
+    revoke.addEventListener("click",async()=>{
+      if(!confirm("Отозвать код для «"+item.name+"»? Сотрудник больше не сможет использовать этот код."))return;
+      revoke.disabled=true;
+      try{
+        await api("/api/rooms/"+item.room_id+"/pairing","DELETE");
+        issuedMaxCodes=issuedMaxCodes.filter(c=>c.id!==item.room_id);
+        renderIssuedMaxCodes();await loadMaxCodes();toast("Неиспользованный код отозван");
+      }catch(error){revoke.disabled=false;toast(error.message,true);}
+    });
+    record.append(details,revoke);list.append(record);
+  }
+}
+function renderIssuedMaxCodes(){
+  show("max-codes-issued",issuedMaxCodes.length>0);
+  const list=$("max-codes-issued-list");list.replaceChildren();
+  for(const code of issuedMaxCodes){
+    const record=el("div","max-code-record"),details=el("div","max-code-details");
+    details.append(el("strong","",code.building+" / "+code.name));
+    details.append(el("span","max-code-secret",code.code));
+    details.append(el("small","","Истекает "+when(code.expires_at)));
+    const copy=el("button","btn secondary","Копировать /bind");copy.type="button";
+    copy.addEventListener("click",()=>copyMaxText("/bind "+code.code));
+    record.append(details,copy);list.append(record);
+  }
+}
+async function copyMaxText(value){
+  try{
+    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(value);
+    else{
+      const field=document.createElement("textarea");
+      field.value=value;field.style.position="fixed";field.style.opacity="0";
+      document.body.append(field);field.select();
+      const copied=document.execCommand("copy");field.remove();
+      if(!copied)throw Error("clipboard");
+    }
+    toast("Команда скопирована");
+  }catch{toast("Не удалось скопировать. Выделите код вручную.",true);}
+}
+function csvMaxCell(value){
+  let s=String(value??"");
+  if(/^[\s\x00-\x1f]*[=+\-@]/.test(s))s="'"+s;
+  return '"'+s.replace(/"/g,'""')+'"';
+}
+function downloadIssuedMaxCodes(){
+  if(!issuedMaxCodes.length)return;
+  const rows=[
+    ["Корпус","Этаж","Кабинет","ID кабинета","Код MAX","Команда боту","Действует до (UTC)"],
+    ...issuedMaxCodes.map(c=>[c.building,c.floor,c.name,c.id,c.code,"/bind "+c.code,c.expires_at])
+  ];
+  const csv="\uFEFF"+rows.map(r=>r.map(csvMaxCell).join(";")).join("\r\n")+"\r\n";
+  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+  const link=document.createElement("a");
+  link.href=url;link.download="termokontur-max-codes.csv";
+  document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),15000);
+  toast("CSV с кодами сформирован");
+}
+async function loadMaxCodes(){
+  try{
+    activeMaxCodes=await api("/api/max/pairing-codes");
+    renderActiveMaxCodes();renderMaxCodes();
+  }catch(error){
+    $("max-active-codes-list").replaceChildren(el("p","max-codes-empty","Не удалось загрузить список: "+error.message));
+    toast(error.message,true);
+  }
+}
+$("bulk-max-codes").addEventListener("click",async()=>{
+  selectedMaxRooms.clear();issuedMaxCodes=[];activeMaxCodes=[];
   $("max-codes-search").value="";
-  $("max-codes-building").replaceChildren();
-  option($("max-codes-building"),"","Все корпуса");
-  for(const building of [...new Set(rooms.map(room=>room.building))].sort())
+  $("max-codes-unbound").checked=true;$("max-codes-no-code").checked=true;
+  $("max-codes-building").replaceChildren();option($("max-codes-building"),"","Все корпуса");
+  for(const building of [...new Set(rooms.map(r=>r.building))].sort())
     option($("max-codes-building"),building,building);
   $("max-codes-expiry").value="1440";
   $("max-codes-dialog").showModal();
-  renderMaxCodes();
+  $("max-active-codes-list").replaceChildren(el("p","max-codes-empty","Загрузка действующих кодов…"));
+  renderIssuedMaxCodes();renderMaxCodes();await loadMaxCodes();
+});
+$("max-codes-dialog").addEventListener("close",()=>{
+  issuedMaxCodes=[];selectedMaxRooms.clear();renderIssuedMaxCodes();
 });
 $("close-max-codes").addEventListener("click",()=>$("max-codes-dialog").close());
 $("cancel-max-codes").addEventListener("click",()=>$("max-codes-dialog").close());
-$("max-codes-building").addEventListener("change",renderMaxCodes);
+for(const id of ["max-codes-building","max-codes-unbound","max-codes-no-code"])
+  $(id).addEventListener("change",renderMaxCodes);
 $("max-codes-search").addEventListener("input",renderMaxCodes);
-$("max-codes-clear").addEventListener("click",()=>{
-  selectedMaxRooms.clear();renderMaxCodes();
-});
+$("max-codes-reload").addEventListener("click",loadMaxCodes);
+$("max-codes-clear").addEventListener("click",()=>{selectedMaxRooms.clear();renderMaxCodes();});
 $("max-codes-select-all").addEventListener("change",event=>{
   const visible=maxCodeVisibleRooms();
   if(event.target.checked){
-    const toAdd=visible.filter(room=>!selectedMaxRooms.has(room.id));
+    const toAdd=visible.filter(r=>!selectedMaxRooms.has(r.id));
     if(selectedMaxRooms.size+toAdd.length>250){
-      toast("Выберите не более 250 кабинетов за один раз",true);
-      renderMaxCodes();return;
+      toast("Выберите не более 250 кабинетов",true);renderMaxCodes();return;
     }
     for(const room of toAdd)selectedMaxRooms.add(room.id);
   }else for(const room of visible)selectedMaxRooms.delete(room.id);
@@ -1004,46 +1123,29 @@ $("max-codes-select-all").addEventListener("change",event=>{
 });
 $("max-codes-form").addEventListener("submit",async event=>{
   event.preventDefault();
-  if(selectedMaxRooms.size===0){toast("Выберите кабинеты",true);return;}
-  const button=$("download-max-codes");
-  button.disabled=true;
+  if(!selectedMaxRooms.size){toast("Выберите кабинеты",true);return;}
+  const replacing=activeMaxCodes.filter(c=>selectedMaxRooms.has(c.room_id));
+  if(replacing.length&&!confirm("Для "+replacing.length+" кабинетов уже есть действующие коды. Создать новые и отозвать старые?"))return;
+  const assigned=rooms.filter(r=>selectedMaxRooms.has(r.id)&&(r.max_users||[]).length);
+  if(assigned.length&&!confirm("В "+assigned.length+" выбранных кабинетах уже есть привязки MAX. Новые коды разрешат привязать ещё пользователей. Продолжить?"))return;
+  const button=$("download-max-codes");button.disabled=true;
   try{
-    const response=await fetch("/api/max/pairing-codes.csv",{
-      method:"POST",credentials:"same-origin",cache:"no-store",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        room_ids:[...selectedMaxRooms],
-        validity_minutes:Number($("max-codes-expiry").value)
-      })
+    const data=await api("/api/max/pairing-codes","POST",{
+      room_ids:[...selectedMaxRooms],validity_minutes:Number($("max-codes-expiry").value)
     });
-    if(!response.ok){
-      if(response.status===401)enterLogin();
-      let reason="Ошибка выпуска кодов";
-      try{const data=await response.json();reason=typeof data.detail==="string"?data.detail:reason;}
-      catch{}
-      throw Error(reason);
-    }
-    const csv=await response.blob();
-    const url=URL.createObjectURL(csv);
-    const link=document.createElement("a");
-    link.href=url;link.download="termokontur-max-codes.csv";
-    document.body.append(link);link.click();link.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),15000);
-    $("max-codes-dialog").close();
-    toast("Коды созданы. Храните файл в защищённом месте и выдавайте коды индивидуально.");
-    selectedMaxRooms.clear();
+    issuedMaxCodes=data.codes;
+    selectedMaxRooms.clear();renderIssuedMaxCodes();
+    await loadMaxCodes();
+    $("max-codes-issued").scrollIntoView({block:"nearest",behavior:"smooth"});
+    toast("Коды созданы. Скопируйте их или скачайте CSV до закрытия окна.");
   }catch(error){toast(error.message,true);}
   finally{renderMaxCodes();}
 });
-
-$("switch-polling").addEventListener("click",async()=>{
-  if(!confirm("Отключить старый webhook и перейти на Long Polling?"))return;
-  try{
-    await api("/api/settings/max-polling","POST",{});
-    toast("Long Polling включён");
-    await loadSettings();
-  }catch(error){toast(error.message,true);}
+$("max-codes-copy-all").addEventListener("click",()=>{
+  if(issuedMaxCodes.length)copyMaxText(issuedMaxCodes.map(c=>
+    c.building+" / "+c.name+": /bind "+c.code).join("\n"));
 });
+$("max-codes-download-issued").addEventListener("click",downloadIssuedMaxCodes);
 
 /* Live MAX connectivity and queue status: never expose stored credentials. */
 async function loadMaxDiagnostics() {
