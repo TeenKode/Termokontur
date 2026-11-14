@@ -82,8 +82,13 @@ def status() -> dict:
                     start_time = datetime.fromisoformat(started.replace("Z", "+00:00"))
                     if start_time.tzinfo is not None:
                         result["started_at"] = started
+                        end_time = (
+                            datetime.now(timezone.utc)
+                            if result["state"] in ("installing", "queued")
+                            else datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                        )
                         result["duration_seconds"] = max(0, int(
-                            (datetime.now(timezone.utc) - start_time).total_seconds()
+                            (end_time - start_time).total_seconds()
                         ))
                 except ValueError:
                     pass
