@@ -363,6 +363,8 @@ def dashboard_history(days: int = 14, timezone_name: str = "UTC",
     per_day: dict[str, list[tuple[float, float, float, int]]] = {
         day: [] for day in calendar
     }
+    by_building = {name: {day: [] for day in calendar} for name in sorted({r['building'] for r in rooms})}
+    building_counts = {name: sum(r['building'] == name for r in rooms) for name in by_building}
     by_room = []
     for room in rooms:
         samples = {}
@@ -375,6 +377,7 @@ def dashboard_history(days: int = 14, timezone_name: str = "UTC",
             averages.append(mean)
             samples[day] = {"average": round(mean, 2), "count": pair[1]}
             per_day[day].append((mean, room["min_temp"], room["max_temp"], pair[1]))
+            by_building[room["building"]][day].append((mean, room["min_temp"], room["max_temp"], pair[1]))
         by_room.append({
             **room,
             "average": round(sum(averages) / len(averages), 2) if averages else None,
@@ -382,21 +385,32 @@ def dashboard_history(days: int = 14, timezone_name: str = "UTC",
             "daily": samples,
         })
 
-    series = []
-    for day in calendar:
-        samples = per_day[day]
+    def summarize(day: str, samples: list[tuple[float, float, float, int]],
+                  room_count: int) -> dict:
         values = [item[0] for item in samples]
-        series.append({
+        return {
             "date": day,
             "average": round(sum(values) / len(values), 2) if values else None,
             "minimum": round(min(values), 2) if values else None,
             "maximum": round(max(values), 2) if values else None,
             "rooms_measured": len(values),
-            "rooms_total": len(rooms),
-            "coverage": round(100 * len(values) / len(rooms)) if rooms else 0,
+            "rooms_total": room_count,
+            "coverage": round(100 * len(values) / room_count) if room_count else 0,
             "out_of_range": sum(not low <= val <= high for val, low, high, _ in samples),
             "readings_count": sum(item[3] for item in samples),
-        })
+        }
+
+    series = [summarize(day, per_day[day], len(rooms)) for day in calendar]
+    buildings = [
+        {
+            "name": name,
+            "rooms_total": building_counts[name],
+            "series": [
+                summarize(day, days_map[day], building_counts[name]) for day in calendar
+            ],
+        }
+        for name, days_map in by_building.items()
+    ]
 
     return {
         "timezone": timezone_name,
@@ -404,6 +418,7 @@ def dashboard_history(days: int = 14, timezone_name: str = "UTC",
         "building": building,
         "rooms_total": len(rooms),
         "series": series,
+        "buildings": buildings,
         "rooms": by_room,
         "generated_at": utc_now(),
     }
