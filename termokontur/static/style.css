@@ -11,6 +11,7 @@ html{scrollbar-gutter:stable}
 .settings-panel{padding:24px;display:grid;gap:15px;overflow:visible}
 .settings-panel h2{font-size:18px}
 .settings-form{display:grid;gap:14px}
+.tls-details{display:grid;gap:5px;padding:13px 15px;border:1px solid #dbe8e7;border-radius:10px;background:#f2f8f7;font-size:13px;overflow-wrap:anywhere}.tls-details p{margin:0}.tls-actions{display:flex;flex-wrap:wrap;gap:10px}.settings-form input[type=file]{max-width:100%;font-size:13px}
 .settings-form label{display:grid;gap:7px;color:#4d607a;font-size:12px;font-weight:650}
 .settings-form input{font-size:14px}
 .settings-toggle{display:flex!important;flex-direction:row!important;align-items:center;gap:10px!important}
