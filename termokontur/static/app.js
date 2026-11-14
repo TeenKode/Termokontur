@@ -51,6 +51,9 @@ function beginRequest(path,method){
   const userAction=Date.now()-interactionAt<1200 && interactionButton?.isConnected;
   if(!userAction)return ()=>{};
   const button=interactionButton;
+  // Navigation switches are not save operations. Showing a spinner inside
+  // a tab changes its label width and can move adjacent tabs.
+  if(button.matches("[data-tab], [data-settings-target]"))return ()=>{};
   const existing=buttonOperations.get(button);
   if(existing) {
     existing.count++;
@@ -109,11 +112,25 @@ function enterLogin() {
   show("login-screen",true); show("app-root",false); $("password").value="";
 }
 function enterApp() {show("login-screen",false); show("app-root",true);}
+// Move to the beginning of a different section before replacing long content.
+// Otherwise the browser clamps/anchors scroll to the shorter new page and
+// sticky navigation visibly jumps. Never animate this corrective scroll.
+function scrollToSectionStart(section){
+  const top=section.getBoundingClientRect().top+window.scrollY;
+  if(window.scrollY>top+16)window.scrollTo({top:Math.max(0,top-12),behavior:"instant"});
+}
 function setTab(name) {
+  const target=$("view-"+name);
+  if(!target || (selectedTab===name && !target.hidden))return;
+  scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
   for(const view of ["overview","rooms","readings","settings"]) {
-    show("view-"+view,view===name);
-    document.querySelector('[data-tab="'+view+'"]').classList.toggle("active",view===name);
+    const active=view===name;
+    show("view-"+view,active);
+    const button=document.querySelector('[data-tab="'+view+'"]');
+    button.classList.toggle("active",active);
+    if(active)button.setAttribute("aria-current","page");
+    else button.removeAttribute("aria-current");
   }
   if(name==="readings") drawChart();
 }
@@ -403,7 +420,9 @@ for(const formIds of Object.values(settingsGroups))for(const id of formIds){
   for(const type of ["input","change"])form.addEventListener(type,()=>markSettingsDirty(form));
 }
 function setSettingsCategory(category){
-  if(!document.querySelector('.settings-pane[data-settings-view="'+category+'"]'))return;
+  const target=document.querySelector('.settings-pane[data-settings-view="'+category+'"]');
+  if(!target || (selectedSettingsCategory===category && !target.hidden))return;
+  scrollToSectionStart(document.querySelector(".settings-layout"));
   selectedSettingsCategory=category;
   for(const pane of document.querySelectorAll("[data-settings-view]"))
     pane.hidden=pane.dataset.settingsView!==category;
@@ -416,11 +435,6 @@ function setSettingsCategory(category){
   if(category==="backups")void loadBackups();
   if(category==="updates")void loadUpdateStatus();
   if(category==="max")void loadMaxDiagnostics();
-  if(window.matchMedia("(max-width:900px)").matches){
-    document.querySelector(".settings-content").scrollIntoView({
-      block:"start",behavior:window.matchMedia("(prefers-reduced-motion:reduce)").matches?"auto":"smooth"
-    });
-  }
 }
 for(const button of document.querySelectorAll("[data-settings-target]")){
   button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
