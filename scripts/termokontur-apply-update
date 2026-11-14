@@ -31,7 +31,8 @@ os.replace(tmp,p)
 health() {
   local attempt
   for attempt in $(seq 1 25); do
-    if curl --fail --silent --max-time 2 http://127.0.0.1:8092/health >/dev/null; then
+    if curl --fail --silent --max-time 2 http://127.0.0.1:8092/health >/dev/null || \
+       curl --insecure --fail --silent --max-time 2 https://127.0.0.1:8092/health >/dev/null; then
       return 0
     fi
     sleep 1
