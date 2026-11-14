@@ -20,7 +20,8 @@ GITHUB_HEAD = "https://api.github.com/repos/TeenKode/Termokontur/commits/main"
 GITHUB_VERSION = "https://raw.githubusercontent.com/TeenKode/Termokontur/{sha}/termokontur/__init__.py"
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\x27](\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)["\x27]$', re.M)
-STALLED_SECONDS = 600
+STALLED_SECONDS = 2100
+QUEUED_STALLED_SECONDS = 180
 
 
 def directory() -> Path:
@@ -51,6 +52,10 @@ def status() -> dict:
         "phase": None,
         "message": "",
         "updated_at": None,
+        "started_at": None,
+        "duration_seconds": None,
+        "history": [],
+        "target_revision": None,
     }
     if not is_supported:
         result["message"] = (
@@ -62,7 +67,7 @@ def status() -> dict:
     path = directory() / "update-status.json"
     try:
         stat = path.stat()
-        event = json.loads(path.read_text(encoding="utf-8")[:2000])
+        event = json.loads(path.read_text(encoding="utf-8")[:12000])
         if isinstance(event, dict) and event.get("state") in ("success", "failed", "installing", "queued"):
             result["state"] = event["state"]
             result["message"] = str(event.get("message", ""))[:300]
@@ -71,6 +76,32 @@ def status() -> dict:
                          "switching", "verifying", "finishing", "success", "failed"):
                 result["phase"] = phase
             result["updated_at"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+            started = event.get("started_at")
+            if isinstance(started, str):
+                try:
+                    start_time = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    if start_time.tzinfo is not None:
+                        result["started_at"] = started
+                        result["duration_seconds"] = max(0, int(
+                            (datetime.now(timezone.utc) - start_time).total_seconds()
+                        ))
+                except ValueError:
+                    pass
+            history = event.get("history")
+            if isinstance(history, list):
+                result["history"] = [
+                    {"phase": item["phase"], "message": str(item.get("message", ""))[:200],
+                     "at": str(item.get("at", ""))[:40]}
+                    for item in history[-12:]
+                    if isinstance(item, dict)
+                    and item.get("phase") in (
+                        "preparing", "downloading", "dependencies", "backup",
+                        "switching", "verifying", "finishing", "success", "failed"
+                    )
+                ]
+            target = event.get("target_revision")
+            if isinstance(target, str) and SHA_RE.fullmatch(target):
+                result["target_revision"] = target
             if result["state"] == "installing" and time.time() - stat.st_mtime > STALLED_SECONDS:
                 result["state"] = "failed"
                 result["phase"] = "failed"
@@ -82,10 +113,26 @@ def status() -> dict:
         pass
 
     # A new marker always takes priority over results from a previous attempt.
-    if (directory() / "update-request").exists():
-        result["state"] = "queued"
-        result["phase"] = "preparing"
-        result["message"] = "Запрос принят. Ожидаем запуска системной службы."
+    marker = directory() / "update-request"
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        age = None
+    if age is not None:
+        if age > QUEUED_STALLED_SECONDS:
+            result["state"] = "failed"
+            result["phase"] = "failed"
+            result["message"] = (
+                "Системная служба не забрала запрос за 3 минуты. "
+                "Проверьте termokontur-update.path и termokontur-update.service. "
+                "Файл запроса можно удалить только после проверки, что обновление не выполняется."
+            )
+        else:
+            result["state"] = "queued"
+            result["phase"] = "preparing"
+            result["message"] = "Запрос принят. Ожидаем запуска системной службы."
+            result["updated_at"] = datetime.fromtimestamp(
+                time.time() - age, tz=timezone.utc).isoformat()
     if not result["message"]:
         result["message"] = "Можно проверить наличие новой версии."
     return result
