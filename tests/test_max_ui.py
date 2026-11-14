@@ -215,3 +215,69 @@ def test_reminder_or_alert_outbox_has_default_buttons(client):
                     pass
             return Response()
     asyncio.run(max_delivery.drain(Client()))
+
+
+def test_webhook_subscription_refresh_adds_callback_without_rotating_secret(client):
+    from termokontur import settings
+    settings.set_secret("max_token", "max-test-token")
+    settings.set_max_webhook("https://school.example/api/max/webhook",
+                             "the-existing-school-secret")
+    calls = []
+
+    class Response:
+        def __init__(self, result):
+            self.result = result
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self.result
+
+    class Client:
+        async def get(self, route):
+            assert route == "/subscriptions"
+            return Response({"subscriptions": [{
+                "url": "https://school.example/api/max/webhook",
+                "update_types": ["message_created", "bot_started"],
+            }]})
+        async def post(self, route, **kwargs):
+            calls.append((route, kwargs))
+            return Response({"success": True})
+
+    assert asyncio.run(max_delivery.ensure_webhook_subscription(Client()))
+    assert len(calls) == 1
+    assert calls[0][0] == "/subscriptions"
+    assert calls[0][1]["json"]["secret"] == "the-existing-school-secret"
+    assert "message_callback" in calls[0][1]["json"]["update_types"]
+
+
+def test_webhook_subscription_already_up_to_date_does_not_post(client):
+    from termokontur import settings
+    settings.set_secret("max_token", "max-test-token")
+    settings.set_max_webhook("https://school.example/api/max/webhook",
+                             "another-school-secret")
+    class Response:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"subscriptions": [{
+                "url": "https://school.example/api/max/webhook",
+                "update_types": ["message_created", "bot_started", "message_callback"],
+            }]}
+    class Client:
+        async def get(self, route):
+            return Response()
+        async def post(self, *a, **kw):
+            raise AssertionError("No subscription refresh expected")
+    assert asyncio.run(max_delivery.ensure_webhook_subscription(Client()))
+
+
+def test_retention_can_remove_reading_and_its_correction_audit(client):
+    room = _room()
+    _bind(7, room)
+    day = daily.daily_bounds()[0].strftime("%Y%m%d")
+    process_update(_callback(7, f"tk:value:s:{room['id']}:{day}:20", "add"))
+    process_update(_callback(7, f"tk:value:c:{room['id']}:{day}:21", "edit"))
+    reading_id = db.recent_readings()[0]["id"]
+    with db.connect() as conn:
+        conn.execute("DELETE FROM readings WHERE id=?", (reading_id,))
+        assert conn.execute("SELECT count(*) FROM max_reading_corrections").fetchone()[0] == 0
