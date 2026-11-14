@@ -10,6 +10,8 @@ Group=termokontur
 WorkingDirectory=/opt/termokontur
 EnvironmentFile=/etc/termokontur/termokontur.env
 Environment=TERMOKONTUR_DB=/var/lib/termokontur/termokontur.sqlite3
+# HTTPX uses certifi by default; honor administrators' Debian CA additions.
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ExecStart=/opt/termokontur/.venv/bin/python -m termokontur.bot
 Restart=on-failure
 RestartSec=10
