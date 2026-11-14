@@ -124,6 +124,32 @@ html{scrollbar-gutter:stable}
 @media(max-width:520px){.update-versions{grid-template-columns:1fr}.update-state{padding:12px}}
 @media(prefers-reduced-motion:reduce){.update-progress-fill,#check-update.busy::before,#install-update.busy::before{animation:none;transition:none}}
 
+/* Resumable native upgrade: readable stage list and diagnostic timeline. */
+.update-phase-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;list-style:none;padding:0;margin:0}
+.update-phase-item{display:flex;align-items:center;gap:7px;min-width:0;padding:9px 10px;border:1px solid #e1eaf1;border-radius:8px;color:#718296;background:#f9fbfd;font-size:12px}
+.update-phase-item::before{content:"·";display:grid;place-items:center;flex:none;width:17px;height:17px;border-radius:50%;background:#e8eef4;color:#70869b;font-weight:750}
+.update-phase-item.done{color:#24745b;background:#eff9f3;border-color:#cce8d8}
+.update-phase-item.done::before{content:"✓";background:#ccefdc;color:#187852}
+.update-phase-item.current{color:#137b63;border-color:#8fddc7;background:#edfaf5;font-weight:700}
+.update-phase-item.current::before{content:"↻";background:#d7f5e8;color:#168d6a}
+.update-meta{display:flex;gap:10px 20px;flex-wrap:wrap;font-size:12px;color:#63778e}
+.update-history{padding:12px 14px;border:1px solid #e1eaf1;border-radius:10px;background:#f9fbfd;color:#52667b;font-size:12px}
+.update-history summary{cursor:pointer;font-weight:700;color:#3f576b}
+.update-history ol{display:grid;gap:10px;list-style:none;margin:14px 0;padding:0}
+.update-history-entry{display:grid;grid-template-columns:minmax(100px,150px) 1fr auto;gap:8px;align-items:baseline;border-bottom:1px solid #e9eef3;padding-bottom:9px;overflow-wrap:anywhere}
+.update-history-entry:last-child{border-bottom:0}
+.update-history-entry strong{color:#234963}
+.update-history-entry small{color:#798b9e;white-space:nowrap}
+@media(max-width:600px){.update-history-entry{grid-template-columns:1fr}.update-history-entry small{white-space:normal}}
+html[data-theme="dark"] .update-phase-item{background:#1e3044;border-color:#39506a;color:#aebed3}
+html[data-theme="dark"] .update-phase-item::before{background:#32465e;color:#d4e0f0}
+html[data-theme="dark"] .update-phase-item.done,html[data-theme="dark"] .update-phase-item.current{background:#1b4138;border-color:#356d59;color:#adeccc}
+html[data-theme="dark"] .update-meta{color:#bdcde0}
+html[data-theme="dark"] .update-history{background:#1b2b41;border-color:#3b506a;color:#c3d3e5}
+html[data-theme="dark"] .update-history summary,html[data-theme="dark"] .update-history-entry strong{color:#def0ff}
+html[data-theme="dark"] .update-history-entry{border-color:#33485f}
+html[data-theme="dark"] .update-history-entry small{color:#a1b5cc}
+
 /* Settings workspace: compact categorized navigation and readable content. */
 .settings-heading{align-items:center}
 .settings-managed{font-size:11px;color:#288a72;background:#e9f8f1;border:1px solid #caebdb;border-radius:999px;padding:7px 11px;font-weight:690;white-space:normal}
