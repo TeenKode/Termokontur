@@ -14,19 +14,40 @@ UNITS_DIR=/etc/systemd/system
 OLD_UNITS=/opt/termokontur-previous-units
 INSTALL_UNITS=(termokontur.service termokontur-max.service termokontur-update.service termokontur-update.path)
 
+CURRENT_PHASE=preparing
+UPDATE_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 record() {
   local state="$1" message="$2" phase="${3:-}"
-  runuser -u termokontur -- /usr/bin/python3 -c '
-import json,os,sys
+  CURRENT_PHASE="$phase"
+  runuser -u termokontur -- /usr/bin/python3 - "$state" "$message" "$phase" "$UPDATE_STARTED" "${REVISION:-}" "${BACKUP_FILE:-}" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
 from pathlib import Path
-p=Path("/var/lib/termokontur/update-status.json")
-tmp=p.with_suffix(".json.tmp")
-tmp.write_text(json.dumps({
-    "state":sys.argv[1], "message":sys.argv[2], "phase":sys.argv[3]
-},ensure_ascii=False),encoding="utf-8")
+
+p = Path("/var/lib/termokontur/update-status.json")
+tmp = p.with_suffix(".json.tmp")
+state, message, phase, started, revision, backup_file = sys.argv[1:]
+now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+history = []
+if phase != "preparing":
+    try:
+        previous = json.loads(p.read_text(encoding="utf-8"))
+        if previous.get("started_at") == started and isinstance(previous.get("history"), list):
+            history = previous["history"][-11:]
+    except (OSError, ValueError, TypeError):
+        pass
+if not history or history[-1].get("phase") != phase:
+    history.append({"phase": phase, "message": message[:200], "at": now})
+payload = {
+    "state": state, "message": message[:300], "phase": phase,
+    "started_at": started, "updated_at": now, "history": history[-12:],
+    "target_revision": revision if len(revision) == 40 else None,
+    "backup_file": Path(backup_file).name if backup_file else None,
+}
+tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 tmp.chmod(0o600)
-os.replace(tmp,p)
-' "$state" "$message" "$phase"
+os.replace(tmp, p)
+PY
 }
 health() {
   local attempt
@@ -89,7 +110,7 @@ cleanup() {
       if ! health; then echo "WARNING: rollback web health check failed" >&2; fi
       systemctl start termokontur-max.service || true
     fi
-    record failed "Обновление не удалось. Действующая версия сохранена или выполнен откат. См. журнал termokontur-update.service" failed || true
+    record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
   fi
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
   exit "$result"
