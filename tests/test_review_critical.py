@@ -89,14 +89,14 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
     assert len(page.ids) == len(set(page.ids))
     assert set(page.targets) == set(page.views) == {
         "summary", "general", "notifications", "appearance", "max",
-        "sensors", "backups", "security", "updates"
+        "sensors", "backups", "security", "tls", "updates"
     }
-    assert len(page.views) == 9
+    assert len(page.views) == 10
     assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', js)) - set(page.ids))
     for form in (
         "general-settings-form", "reminders-settings-form",
         "alerts-settings-form", "maintenance-form",
-        "max-settings-form", "password-settings-form"
+        "max-settings-form", "password-settings-form", "tls-form"
     ):
         assert form in page.ids
     assert "saveSettingsPatch" in js

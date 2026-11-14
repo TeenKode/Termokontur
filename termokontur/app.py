@@ -9,6 +9,7 @@ import json
 import hmac
 import io
 import os
+import sys
 import secrets
 import sqlite3
 import time
@@ -19,12 +20,12 @@ import ipaddress
 import httpx
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates, max_delivery, maintenance, notifications
+from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
@@ -227,7 +228,7 @@ def login(payload: Login, request: Request, response: Response):
         raise HTTPException(401, "Неверный пароль")
     FAILED_LOGINS.pop(ip, None)
     response.set_cookie("tk_session", session_cookie(), httponly=True, samesite="strict",
-                        secure=os.getenv("TERMOKONTUR_SECURE_COOKIE") == "1",
+                        secure=(os.getenv("TERMOKONTUR_SECURE_COOKIE") == "1" or request.url.scheme == "https"),
                         max_age=8 * 3600, path="/")
     return {"ok": True}
 
@@ -249,6 +250,57 @@ def save_settings(payload: SettingsIn):
         raise HTTPException(422, str(exc)) from exc
     settings.update(data)
     return settings.public()
+
+
+@app.get("/api/tls/status", dependencies=[Depends(require_admin)])
+def get_tls_status():
+    return tls.state()
+
+
+async def _limited_tls_file(file: UploadFile | None) -> bytes | None:
+    if file is None or not file.filename:
+        return None
+    raw = await file.read(tls.MAX_UPLOAD + 1)
+    if len(raw) > tls.MAX_UPLOAD:
+        raise HTTPException(413, "Размер сертификата или ключа превышает 256 КБ.")
+    return raw
+
+
+@app.post("/api/tls/certificate", dependencies=[Depends(require_admin)])
+async def upload_tls_certificate(
+    certificate: UploadFile | None = File(default=None),
+    key: UploadFile | None = File(default=None),
+    password: str = Form(default=""),
+):
+    try:
+        return tls.upload(
+            await _limited_tls_file(certificate),
+            await _limited_tls_file(key),
+            password,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/api/tls/certificate", dependencies=[Depends(require_admin)])
+def remove_tls_certificate():
+    return tls.remove()
+
+
+@app.post("/api/tls/apply", dependencies=[Depends(require_admin)])
+async def apply_tls_settings():
+    state = tls.state()
+    if not state["managed"]:
+        raise HTTPException(409, "Запустите панель через python -m termokontur.server.")
+    if state["error"]:
+        raise HTTPException(422, state["error"])
+    if not state["restart_pending"]:
+        return {"ok": True, "restarting": False}
+    # The HTTP response is flushed before replacing this managed process.
+    # No user-controlled command or argument reaches execv.
+    loop = asyncio.get_running_loop()
+    loop.call_later(1.0, os.execv, sys.executable, [sys.executable, "-m", "termokontur.server"])
+    return {"ok": True, "restarting": True, "https": state["configured"]}
 
 
 @app.put("/api/settings/max-token", dependencies=[Depends(require_admin)])
