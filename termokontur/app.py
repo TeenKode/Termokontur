@@ -292,7 +292,7 @@ def enable_max_webhook(payload: MaxWebhookIn):
         response = httpx.post(
             "https://platform-api2.max.ru/subscriptions",
             headers={"Authorization": token},
-            json={"url": url, "update_types": ["message_created", "bot_started"],
+            json={"url": url, "update_types": ["message_created", "bot_started", "message_callback"],
                   "secret": secret},
             timeout=20,
         )

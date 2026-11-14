@@ -118,6 +118,27 @@ def initialize() -> None:
             updated_at TEXT NOT NULL,
             PRIMARY KEY(local_day, user_id)
         );
+        CREATE TABLE IF NOT EXISTS max_user_sessions (
+            user_id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL DEFAULT '',
+            room_id INTEGER,
+            page INTEGER NOT NULL DEFAULT 0,
+            local_day TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS max_reading_corrections (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            reading_id INTEGER NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
+            old_value REAL NOT NULL,
+            new_value REAL NOT NULL,
+            old_observed_at TEXT NOT NULL,
+            corrected_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS max_outbox_ui (
+            event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
+            buttons_json TEXT,
+            callback_id TEXT
+        );
         """)
 
 def room_list(active_only: bool = True) -> list[dict]:

@@ -7,6 +7,7 @@ never force re-running the command merely to resend a confirmation.
 from __future__ import annotations
 
 import hashlib
+import json
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,10 @@ def event_key(update: dict) -> str | None:
         body = (update.get("message") or {}).get("body") or {}
         mid = body.get("mid")
         return "message:" + str(mid) if mid else None
+    if kind == "message_callback":
+        callback = update.get("callback") or {}
+        callback_id = callback.get("callback_id")
+        return "callback:" + str(callback_id) if callback_id else None
     if kind == "bot_started":
         user = update.get("user") or {}
         uid = user.get("user_id")
@@ -63,6 +68,7 @@ def enqueue(update: dict) -> bool:
         return False
     try:
         from .bot import process_update
+        from .max_ui import keyboard
         response = process_update(update)
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -72,6 +78,12 @@ def enqueue(update: dict) -> bool:
                     INSERT OR IGNORE INTO max_outbox(event_id, user_id, text, next_retry_at)
                     VALUES (?, ?, ?, ?)
                 """, (key, uid, reply[:4000], now))
+                callback_id = ((update.get("callback") or {}).get("callback_id")
+                               if update.get("update_type") == "message_callback" else None)
+                conn.execute("""
+                    INSERT OR IGNORE INTO max_outbox_ui(event_id, buttons_json, callback_id)
+                    VALUES (?, ?, ?)
+                """, (key, json.dumps(keyboard(uid), ensure_ascii=False), callback_id))
             conn.execute("""
                 UPDATE max_inbox SET state='complete', updated_at=?
                 WHERE event_id=?
@@ -108,9 +120,12 @@ def diagnostics() -> dict:
 def pending(limit: int = 20) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("""
-            SELECT event_id, user_id, text, attempts FROM max_outbox
-            WHERE delivered_at IS NULL AND next_retry_at<=?
-            ORDER BY next_retry_at, event_id LIMIT ?
+            SELECT o.event_id, o.user_id, o.text, o.attempts,
+                   u.buttons_json, u.callback_id
+            FROM max_outbox o
+            LEFT JOIN max_outbox_ui u ON u.event_id=o.event_id
+            WHERE o.delivered_at IS NULL AND o.next_retry_at<=?
+            ORDER BY o.next_retry_at, o.event_id LIMIT ?
         """, (db.utc_now(), limit))
         return [dict(row) for row in rows]
 
@@ -133,19 +148,78 @@ def mark_failed(key: str, attempts: int) -> None:
         """, (next_time, key))
 
 async def drain(client: httpx.AsyncClient) -> None:
+    from .max_ui import keyboard
     for item in pending():
+        attachments = (json.loads(item["buttons_json"]) if item["buttons_json"]
+                       else keyboard(item["user_id"]))
+        message = {"text": item["text"], "attachments": attachments}
         try:
-            response = await client.post(
-                "/messages", params={"user_id": item["user_id"]},
-                json={"text": item["text"]},
-            )
-            response.raise_for_status()
+            if item["callback_id"]:
+                # MAX callbacks must be acknowledged via /answers. Editing the
+                # clicked keyboard gives immediate feedback and preserves menu.
+                try:
+                    response = await client.post(
+                        "/answers", params={"callback_id": item["callback_id"]},
+                        json={"message": message},
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code not in (400, 404, 410):
+                        raise
+                    # MAX no longer accepts this callback (e.g. after outage).
+                    # The result still needs to be shown, without re-executing.
+                    response = await client.post(
+                        "/messages", params={"user_id": item["user_id"]}, json=message,
+                    )
+                    response.raise_for_status()
+            else:
+                response = await client.post(
+                    "/messages", params={"user_id": item["user_id"]}, json=message,
+                )
+                response.raise_for_status()
         except httpx.HTTPError as exc:
             mark_failed(item["event_id"], item["attempts"])
             logger.warning("MAX message delivery failed for %s: %s", item["event_id"], exc)
         else:
             mark_sent(item["event_id"])
         await asyncio.sleep(0.06)
+
+
+async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
+    """Refresh a legacy MAX subscription to receive button clicks.
+
+    MAX explicitly supports updating an existing subscription through POST
+    /subscriptions. Do not regenerate the secret: it must continue matching the
+    value validated by the inbound webhook endpoint.
+    Returns True if already current or successfully updated.
+    """
+    from . import settings
+    if settings.get("max_mode", "polling") != "webhook":
+        return False
+    url = settings.get("max_webhook_url", "") or ""
+    secret = settings.get("max_webhook_secret", "") or ""
+    if not url or not secret:
+        return False
+    response = await client.get("/subscriptions")
+    response.raise_for_status()
+    subscriptions = response.json().get("subscriptions", [])
+    if not isinstance(subscriptions, list):
+        raise ValueError("Invalid MAX subscriptions response")
+    current = next((s for s in subscriptions
+                    if isinstance(s, dict) and s.get("url") == url), None)
+    required = ("message_created", "bot_started", "message_callback")
+    # A null set of update types in MAX means all types are subscribed.
+    if current and (current.get("update_types") is None or
+                    set(required).issubset(set(current["update_types"]))):
+        return True
+    response = await client.post("/subscriptions", json={
+        "url": url, "secret": secret, "update_types": list(required),
+    })
+    response.raise_for_status()
+    if response.json().get("success") is not True:
+        raise ValueError("MAX did not accept subscription refresh")
+    logger.info("Updated MAX webhook subscription event types")
+    return True
 
 
 def queue_temperature_alerts() -> int:
