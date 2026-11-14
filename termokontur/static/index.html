@@ -54,7 +54,7 @@
         </div>
         <div class="dashboard-hero">
           <div class="dashboard-hero-main">
-            <span class="dashboard-eyebrow">СРЕДНЯЯ ТЕМПЕРАТУРА СЕГОДНЯ</span>
+            <span class="dashboard-eyebrow">СРЕДНЯЯ ТЕМПЕРАТУРА ПО ЗДАНИЯМ СЕГОДНЯ</span>
             <div class="dashboard-hero-value" id="avg-today">—</div>
             <p id="avg-today-desc">Ожидаем показания кабинетов</p>
             <span id="avg-change" class="dashboard-change">Динамика появится после двух дней измерений</span>
@@ -70,7 +70,7 @@
 
         <div class="panel dashboard-trend-panel">
           <div class="panel-heading dashboard-trend-heading">
-            <div><h2>Средняя температура по дням</h2><p>Каждый кабинет учитывается один раз за день, независимо от числа измерений.</p></div>
+            <div><h2>Среднесуточная температура по зданиям</h2><p>Отдельная линия для каждого здания и общая средняя. Внутри здания каждый кабинет учитывается один раз за день.</p></div>
             <div class="dashboard-controls">
               <label for="building-filter">Корпус
                 <select id="building-filter"><option value="">Все корпуса</option></select>
@@ -92,13 +92,25 @@
               <canvas id="history-chart" width="900" height="310" role="img" aria-label="График средней суточной температуры помещений"></canvas>
               <div id="history-tooltip" class="history-tooltip" hidden></div>
             </div>
-            <div class="history-legend"><span class="legend-line">Средняя по кабинетам</span><span class="legend-band">Разброс средних по кабинетам</span><span class="legend-muted">Дни без данных не соединяются</span></div>
+            <div id="history-legend" class="history-legend" aria-label="Обозначения линий на графике"></div>
             <p id="history-empty" class="history-empty" hidden>За этот период нет показаний. После первого измерения здесь появится график.</p>
             <details class="history-details">
-              <summary>Посмотреть значения по дням</summary>
+              <summary>Посмотреть среднюю по школе за каждый день</summary>
               <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинеты</th><th>Отклонения</th><th>Измерений</th></tr></thead><tbody id="history-table"></tbody></table></div>
             </details>
           </div>
+        </div>
+
+        <div class="panel building-panel">
+          <div class="panel-heading">
+            <div><h2>Сравнение зданий</h2><p>Средняя за сегодня, изменение со вчера и доля кабинетов с показаниями.</p></div>
+          </div>
+          <div id="building-summary" class="building-summary-grid" aria-live="polite"></div>
+          <div class="building-matrix-heading"><h3>Средняя температура зданий по дням</h3><p>Цветом выделены дни с неполным охватом и помещения с температурой за пределами своих нормативов.</p></div>
+          <div class="table-scroll building-matrix-scroll"><table class="building-matrix-table">
+            <thead id="building-matrix-head"></thead><tbody id="building-matrix-body"></tbody>
+          </table></div>
+          <p id="building-matrix-empty" class="empty" hidden>Добавьте здания и показания для сравнения.</p>
         </div>
 
         <div class="metrics overview-metrics">
@@ -108,6 +120,8 @@
           <article class="metric"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">0</strong><small>Требуется измерение</small></article>
         </div>
 
+        <details class="room-drilldown">
+          <summary>Подробнее: средняя температура каждого кабинета по дням</summary>
         <div class="panel dashboard-heatmap-panel">
           <div class="panel-heading">
             <div><h2>Температура по кабинетам</h2><p id="heatmap-description">Среднесуточная температура каждого кабинета за последние дни.</p></div>
@@ -118,6 +132,7 @@
           <p id="heatmap-empty" class="empty" hidden>Нет кабинетов по выбранному фильтру.</p>
         </div>
 
+        </details>
         <div class="panel daily-panel">
           <div class="panel-heading"><div><h2>Сбор показаний за сегодня</h2><p id="daily-date">По времени сервера</p></div><strong id="daily-counts" class="daily-total">—</strong></div>
           <div id="daily-missing" class="daily-missing" aria-live="polite">Загрузка…</div>
