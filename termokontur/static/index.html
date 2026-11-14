@@ -183,6 +183,7 @@
             <span class="settings-nav-caption">ОБСЛУЖИВАНИЕ</span>
             <button type="button" class="settings-nav-button" data-settings-target="backups">Данные и резервные копии</button>
             <button type="button" class="settings-nav-button" data-settings-target="security">Безопасность</button>
+            <button type="button" class="settings-nav-button" data-settings-target="tls">HTTPS-сертификат</button>
             <button type="button" class="settings-nav-button" data-settings-target="updates">Обновление системы</button>
           </nav>
           <div class="settings-content">
@@ -342,6 +343,38 @@
                   <button type="submit" class="btn primary">Изменить пароль</button>
                   <p class="hint">От 8 до 256 символов. После смены пароля все активные сеансы будут завершены.</p>
                 </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="tls" hidden>
+              <div class="settings-section-heading"><h2>HTTPS-сертификат</h2><p>Защищённое подключение без отдельного Nginx.</p></div>
+              <article class="panel settings-panel">
+                <h3>Состояние HTTPS</h3>
+                <p id="tls-status" class="hint" role="status" aria-live="polite">Проверяем настройки HTTPS…</p>
+                <div id="tls-details" class="tls-details" hidden></div>
+                <p id="tls-proxy-warning" class="hint" hidden>Сейчас сайт уже открыт по HTTPS, но встроенный TLS выключен. Возможно, используется обратный прокси. Учитывайте его настройки при переключении.</p>
+                <form id="tls-form" class="settings-form" enctype="multipart/form-data">
+                  <label>Сертификат (PEM, CRT, CER или DER)
+                    <input id="tls-certificate" type="file" name="certificate" accept=".pem,.crt,.cer,.der">
+                  </label>
+                  <p class="hint">Рекомендуется полный сертификат с цепочкой промежуточных УЦ (fullchain.pem).</p>
+                  <label>Закрытый ключ (PEM, KEY или DER)
+                    <input id="tls-key" type="file" name="key" accept=".pem,.key,.der">
+                  </label>
+                  <label>Пароль закрытого ключа (если зашифрован)
+                    <input id="tls-password" type="password" name="password" autocomplete="new-password" placeholder="Для обычного ключа не требуется">
+                  </label>
+                  <p class="hint">Можно заменить только сертификат или ключ — вторая часть будет взята из сохранённой пары. Максимум 256 КБ на файл. Закрытый ключ никогда не показывается в панели. По HTTP загружайте его только через доверенную сеть или SSH-туннель.</p>
+                  <div class="settings-save">
+                    <span id="tls-feedback" class="settings-save-feedback" role="status" aria-live="polite">Выберите один или два файла.</span>
+                    <button type="submit" class="btn primary">Загрузить и проверить</button>
+                  </div>
+                </form>
+                <div class="tls-actions">
+                  <button type="button" id="tls-apply" class="btn primary" disabled>Применить HTTPS (перезапуск)</button>
+                  <button type="button" id="tls-remove" class="btn secondary" disabled>Убрать сертификат</button>
+                </div>
+                <p id="tls-next" class="hint" hidden>После перезапуска откройте сайт: <a id="tls-next-link" href="#" rel="noopener"></a>. Для внутреннего УЦ понадобится доверие к нему на компьютерах.</p>
+                <p class="hint">HTTP и HTTPS используют тот же порт 8092. Если включён reverse-proxy, его upstream должен соответствовать выбранному протоколу.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="updates" hidden>
