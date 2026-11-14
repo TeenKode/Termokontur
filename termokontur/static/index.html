@@ -208,15 +208,10 @@
                 </form>
               </article>
               <article class="panel settings-panel">
-                <h3>Получение сообщений</h3>
-                <p id="max-webhook-mode" class="hint">Тестовый режим: Long Polling.</p>
-                <form id="max-webhook-form" class="settings-form">
-                  <label for="max-webhook-url">Публичный HTTPS-адрес webhook
-                    <input id="max-webhook-url" type="url" placeholder="https://example.org/api/max/webhook" autocomplete="url" required>
-                  </label>
-                  <p class="hint">За NAT направьте только /api/max/webhook через HTTPS-туннель на локальный порт 8092. Нужен действующий сертификат и порт 443.</p>
-                  <div class="heading-actions"><button type="submit" class="btn primary" id="activate-webhook">Включить webhook</button><button type="button" class="btn secondary" id="switch-polling">Тестовый Long Polling</button></div>
-                </form>
+                <h3>Long Polling — получение сообщений</h3>
+                <p id="max-webhook-mode" class="hint" role="status">Long Polling работает без публичного IP, домена и входящих соединений. Служба MAX периодически запрашивает новые события и отправляет ответы.</p>
+                <p class="hint">После сохранения токена отправьте боту <code>/start</code>. Для корректного HTTPS системные сертификаты (включая сертификаты Минцифры, если требуются для API MAX) должны быть добавлены в Debian. Проверяйте состояние ниже.</p>
+                <button type="button" class="btn secondary" id="switch-polling" hidden>Отключить старый webhook и включить Long Polling</button>
                 <div class="settings-divider"></div>
                 <h3>Диагностика доставки</h3>
                 <p id="max-diagnostics" class="hint" role="status" aria-live="polite">Нажмите для проверки подключения MAX.</p>
