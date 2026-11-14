@@ -391,8 +391,18 @@
               <div class="update-track" role="progressbar" aria-label="Этап обновления" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0">
                 <div id="update-progress-fill" class="update-progress-fill"></div>
               </div>
+              <ol id="update-phase-list" class="update-phase-list" aria-label="Этапы установки"></ol>
               <p class="hint">Индикатор показывает этап, а не процент загрузки. При перезапуске сервера соединение может временно пропасть.</p>
             </div>
+            <div id="update-meta" class="update-meta" hidden>
+              <span id="update-elapsed"></span>
+              <span id="update-target"></span>
+            </div>
+            <details id="update-history" class="update-history" hidden>
+              <summary>История установки и диагностика</summary>
+              <ol id="update-history-list"></ol>
+              <p class="hint">При ошибках на Debian LXC: <code>journalctl -u termokontur-update.service -n 100 --no-pager</code>. Резервные копии доступны в разделе «Резервные копии».</p>
+            </details>
             <div class="heading-actions">
               <button type="button" id="check-update" class="btn secondary">Проверить обновления</button>
               <button type="button" id="install-update" class="btn primary" disabled>Установить обновление</button>
