@@ -1,5 +1,5 @@
 [Unit]
-Description=Termokontur MAX bot (experimental long polling)
+Description=Termokontur MAX bot (outbound Long Polling)
 After=network-online.target termokontur.service
 Wants=network-online.target
 
