@@ -68,67 +68,7 @@ git config --global --add safe.directory /src
 cd /src
 bash scripts/install-debian.sh
 test -e /etc/systemd/system/termokontur-update.service
-grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE
-test -x /usr/local/sbin/termokontur-apply-update
-systemctl start termokontur.service
-for i in $(seq 1 30); do
-  if curl -fsS --max-time 2 http://127.0.0.1:8092/health >/dev/null; then break; fi
-  sleep 1
-done
-curl -fsS http://127.0.0.1:8092/health
-set -a
-source /etc/termokontur/termokontur.env
-set +a
-curl --silent --show-error --fail -c /tmp/termokontur-ci-cookies \
-  -H 'Content-Type: application/json' \
-  -d "{\"password\":\"$TERMOKONTUR_ADMIN_PASSWORD\"}" \
-  http://127.0.0.1:8092/api/login >/dev/null
-curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
-  -H 'Content-Type: application/json' \
-  -d '{"building":"CI Test","name":"101","min_temp":18,"max_temp":24}' \
-  http://127.0.0.1:8092/api/rooms >/dev/null
-
-echo "Begin native updater smoke assertions"
-# Force a change to exercise the actual stage/swap path of the updater.
-printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
-runuser -u termokontur -- touch /var/lib/termokontur/update-request
-/usr/local/sbin/termokontur-apply-update
-echo "Updater returned; validating post-update state"
-cat /var/lib/termokontur/update-status.json
-grep -q '"state": "success"' /var/lib/termokontur/update-status.json
-echo "Checking previous application backup"
-test -d /opt/termokontur-previous
-test -d /var/lib/termokontur/backups
-test -n "$(find /var/lib/termokontur/backups -name 'pre-update-*' -print -quit)"
-echo "Comparing installed privileged system components"
-cmp /src/deploy/systemd/termokontur-update.service /etc/systemd/system/termokontur-update.service
-cmp /src/scripts/termokontur-apply-update /usr/local/sbin/termokontur-apply-update
-curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
-  http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
-
-# Inject a startup failure into the staged application; rollback must bring
-# back the previous working files and SQLite data.
-printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
-runuser -u termokontur -- touch /var/lib/termokontur/update-request
-if TEST_BREAK_UPGRADE=1 /usr/local/sbin/termokontur-apply-update; then
-  echo "Broken upgrade unexpectedly succeeded" >&2
-  exit 1
-fi
-grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
-echo "Checking rollback health after process startup"
-recovered=0
-for i in $(seq 1 25); do
-  if curl --silent --show-error --fail http://127.0.0.1:8092/health; then
-    recovered=1
-    break
-  fi
-  sleep 1
-done
-test "$recovered" = 1
-curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
-  http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
-echo "Debian 13 native install, update and rollback smoke succeeded."
- /etc/systemd/system/termokontur.service
+grep -q 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/termokontur.service
 test -x /usr/local/sbin/termokontur-apply-update
 systemctl start termokontur.service
 for i in $(seq 1 30); do
