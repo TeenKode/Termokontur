@@ -181,7 +181,6 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
             if previous is None:
                 return "Показание за сегодня не найдено. Используйте «Отправить за сегодня»."
             if previous["value"] == value:
-                _set(uid)
                 return f"Показание не изменилось: {room['name']} — {value:g} °C."
             conn.execute("""
                 INSERT INTO max_reading_corrections(
