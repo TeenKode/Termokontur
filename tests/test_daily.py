@@ -102,3 +102,55 @@ def test_pending_groups_and_bot_sends_only_missing(client, monkeypatch):
     assert fake.calls[0][1] == {"user_id": "777"}
     assert "102" in fake.calls[0][2]["text"]
     assert "101" not in fake.calls[0][2]["text"]
+
+
+def test_two_colleagues_receive_reminder_only_until_one_reports(client, monkeypatch):
+    room = db.create_room("Корпус", "1", "102", "Кабинет", 18, 24)
+    for user in ("7", "8"):
+        assert db.bind_code(user, db.issue_code(room["id"]))
+    snapshot = daily.summary()
+    assert sorted(daily.pending_users(snapshot)) == ["7", "8"]
+
+    monkeypatch.setattr(daily, "reminders_due", lambda: True)
+    class Response:
+        def raise_for_status(self): pass
+    class FakeClient:
+        def __init__(self):
+            self.posts = []
+        async def post(self, route, params, json):
+            self.posts.append((params["user_id"], json["text"]))
+            return Response()
+
+    sender = FakeClient()
+    asyncio.run(send_reminders(sender))
+    assert sorted(user for user, _ in sender.posts) == ["7", "8"]
+
+    # An accepted reading from either colleague completes the room/day.
+    from termokontur import max_ui
+    assert "Сохранено" in max_ui._write("7", room["id"], "s", "21", "max:message:7")
+    assert daily.pending_users(daily.summary()) == {}
+    before = len(sender.posts)
+    asyncio.run(send_reminders(sender))
+    assert len(sender.posts) == before
+
+
+def test_reminder_rechecks_snapshot_when_colleague_submits_before_send(client, monkeypatch):
+    room = db.create_room("Корпус", "1", "103", "Кабинет", 18, 24)
+    for user in ("7", "8"):
+        assert db.bind_code(user, db.issue_code(room["id"]))
+    monkeypatch.setattr(daily, "reminders_due", lambda: True)
+    original = daily.summary
+    calls = {"count": 0}
+    def summary_with_submit():
+        calls["count"] += 1
+        if calls["count"] == 2:
+            db.add_reading(room["id"], 21, "manual", "Администратор")
+        return original()
+    monkeypatch.setattr(daily, "summary", summary_with_submit)
+
+    class FakeClient:
+        async def post(self, *args, **kwargs):
+            raise AssertionError("Reminder for a room that is now measured")
+    asyncio.run(send_reminders(FakeClient()))
+    assert calls["count"] >= 2
+    assert original()["counts"]["missing"] == 0

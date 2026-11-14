@@ -305,11 +305,45 @@ def recent_readings(room_id: int | None = None, limit: int = 200,
         args.append(until)
     where = (" WHERE " + " AND ".join(parts)) if parts else ""
     sql = ("""SELECT r.*, p.building, p.name AS room_name, p.floor,
-                     p.min_temp, p.max_temp
-              FROM readings r JOIN rooms p ON p.id=r.room_id""" + where +
+                     p.min_temp, p.max_temp,
+                     CASE WHEN r.source='max' THEN
+                       COALESCE(NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' ||
+                                           COALESCE(u.last_name, '')), ''),
+                                'MAX ID ' || SUBSTR(r.reporter, 5))
+                     ELSE COALESCE(NULLIF(r.reporter, ''), '—')
+                     END AS reporter_display,
+                     (SELECT COUNT(*) FROM max_reading_corrections c
+                      WHERE c.reading_id=r.id) AS corrections_count
+              FROM readings r JOIN rooms p ON p.id=r.room_id
+              LEFT JOIN max_users u
+                ON r.source='max' AND r.reporter='MAX:' || u.user_id""" + where +
            " ORDER BY r.observed_at DESC, r.id DESC LIMIT ?")
     with connect() as conn:
         return [dict(x) for x in conn.execute(sql, [*args, limit])]
+
+def reading_corrections(reading_id: int) -> list[dict] | None:
+    """Return the immutable MAX correction trail for an existing reading.
+
+    The original author is kept in readings.reporter; correction authors are
+    stored separately as max_reading_corrections.user_id.
+    """
+    with connect() as conn:
+        exists = conn.execute("SELECT 1 FROM readings WHERE id=?", (reading_id,)).fetchone()
+        if exists is None:
+            return None
+        rows = conn.execute("""
+            SELECT c.user_id, c.old_value, c.new_value, c.old_observed_at,
+                   c.corrected_at,
+                   COALESCE(NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' ||
+                                       COALESCE(u.last_name, '')), ''),
+                            'MAX ID ' || c.user_id) AS actor_display
+            FROM max_reading_corrections c
+            LEFT JOIN max_users u ON u.user_id=c.user_id
+            WHERE c.reading_id=?
+            ORDER BY c.corrected_at, c.event_id
+        """, (reading_id,))
+        return [dict(row) for row in rows]
+
 
 def dashboard(stale_hours: int = 26) -> dict:
     now = datetime.now(timezone.utc)

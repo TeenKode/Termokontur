@@ -304,3 +304,22 @@ def test_max_webhook_stream_has_strict_size_limit(admin):
                         headers={"X-Max-Bot-Api-Secret":secret})
     assert response.status_code==413
     assert not max_delivery.pending()
+
+
+def test_temperature_deviation_notifies_all_bound_employees(client):
+    room = db.create_room("Старшая школа", "1", "108", "Кабинет", 18, 24)
+    for uid in ("7", "8"):
+        assert db.bind_code(uid, db.issue_code(room["id"]))
+    settings.update({"alerts_enabled": "1"})
+    settings.set_secret("max_token", "test-max-token-for-notifications-123")
+    # Out-of-range automatic sensor data generate a push to each assigned user.
+    # Manual MAX readings show an immediate in-chat warning instead.
+    db.add_reading(room["id"], 16.5, "ha", "zigbee:108")
+    assert max_delivery.queue_temperature_alerts() == 2
+    with db.connect() as conn:
+        queued = conn.execute(
+            "SELECT user_id, text FROM max_outbox ORDER BY user_id"
+        ).fetchall()
+    assert [row["user_id"] for row in queued] == ["7", "8"]
+    assert all("ниже минимума" in row["text"] for row in queued)
+    assert max_delivery.queue_temperature_alerts() == 0  # cooldown

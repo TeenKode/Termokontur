@@ -555,3 +555,9 @@ html[data-theme="dark"] .notification-missing{color:var(--dk-gold)}
 html[data-theme="dark"] .tls-details{background:#1c3043;border-color:#34536a;color:#d5e4f2}
 html[data-theme="dark"] .tls-details p{color:#d5e4f2}
 html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
+/* MAX daily-reading audit: immutable author/correction sequence in the journal. */
+.reading-history-list{display:grid;gap:10px;max-height:55vh;overflow:auto}
+.reading-history-item{display:grid;gap:5px;border:1px solid var(--border,#dbe5ea);border-radius:10px;padding:12px 14px}
+.reading-history-item strong{font-size:14px;overflow-wrap:anywhere}
+.reading-history-item small{color:var(--muted,#718096);font-size:12px;overflow-wrap:anywhere}
+#readings-table td:nth-last-child(-n+2){white-space:normal}

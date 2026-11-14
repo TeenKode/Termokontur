@@ -1,8 +1,9 @@
 """Callback-driven daily temperature entry for the MAX messenger.
 
 Buttons are attached to every bot reply; only authorised, active room bindings
-can be written. A correction updates the user's own MAX reading and writes an
-immutable audit record, rather than introducing a second daily measurement.
+can be written. Each room shares a single current daily MAX reading across its
+assigned users. Corrections preserve the original reporter and append an audit
+record, rather than introducing another daily measurement.
 """
 from __future__ import annotations
 
@@ -60,8 +61,14 @@ def menu_buttons(uid: str) -> list[list[dict]]:
     if mode in ("send_room", "change_room"):
         rooms = db.bound_rooms(uid)
         page = s["page"]
+        status = {room["id"]: room for room in daily.summary()["rooms"]}
         for room in rooms[page * PER_PAGE:(page + 1) * PER_PAGE]:
-            label = str(room["name"])[:20]
+            label = f"{room['building']} / {room['name']}"[:42]
+            today = status.get(room["id"])
+            if today and today["daily_status"] != "missing":
+                label += f" · {today['measured_temp']:g}°"
+            else:
+                label += " · Не сдано"
             rows.append([_btn(label, f"tk:room:{'s' if mode == 'send_room' else 'c'}:{room['id']}:{s['local_day']}")])
         navigation = []
         if page:
@@ -87,16 +94,14 @@ def keyboard(uid: str) -> list[dict]:
     return [{"type": "inline_keyboard", "payload": {"buttons": menu_buttons(uid)}}]
 
 
-def _own(uid: str, room_id: int, start: str, end: str) -> dict | None:
-    with db.connect() as conn:
-        row = conn.execute("""
-            SELECT * FROM readings
-            WHERE room_id=? AND source='max' AND reporter=?
-              AND observed_at>=? AND observed_at<?
-            ORDER BY observed_at DESC, id DESC LIMIT 1
-        """, (room_id, "MAX:" + str(uid), start, end)).fetchone()
+def _current(conn, room_id: int, start: str, end: str) -> dict | None:
+    """The current room/day reading, regardless of reporter or source."""
+    row = conn.execute("""
+        SELECT * FROM readings
+        WHERE room_id=? AND observed_at>=? AND observed_at<?
+        ORDER BY observed_at DESC, id DESC LIMIT 1
+    """, (room_id, start, end)).fetchone()
     return dict(row) if row else None
-
 
 def _room(uid: str, room_id: int) -> dict | None:
     return next((room for room in db.bound_rooms(uid) if room["id"] == room_id), None)
@@ -119,19 +124,27 @@ def _choose_room(uid: str, room_id: int, change: bool) -> str:
         _set(uid)
         return "Этот кабинет вам не привязан или отключён. Выберите действие в меню."
     _, start, end = _today()
-    previous = _own(uid, room_id, start, end)
+    with db.connect() as conn:
+        previous = _current(conn, room_id, start, end)
     room_label = f"{room['building']} / {room['name']}"
-    if change and previous is None:
+    if previous is None:
         _set(uid, "send_value", room_id)
-        return f"За сегодня вы ещё не передавали показание для {room_label}.\nВыберите температуру для первого замера или введите её вручную."
-    if not change and previous is not None:
-        _set(uid, "change_value", room_id)
-        return f"За сегодня для {room_label} уже сохранено {previous['value']:g} °C.\nВыберите новую температуру, чтобы исправить показание."
-    _set(uid, "change_value" if change else "send_value", room_id)
-    if change:
-        return f"{room_label}\nТекущее показание: {previous['value']:g} °C.\nВыберите новое значение или нажмите «Ввести вручную»."
-    return f"{room_label}\nВыберите температуру кнопкой или нажмите «Ввести вручную» (например, 21,5)."
-
+        if change:
+            return (f"За сегодня ещё не передавали показание для {room_label}.\n"
+                    "Выберите температуру для первого замера или введите её вручную.")
+        return f"{room_label}\nВыберите температуру кнопкой или нажмите «Ввести вручную» (например, 21,5)."
+    source_label = {"max": "сотрудником через MAX", "manual": "администратором",
+                    "ha": "датчиком"}.get(previous["source"], "другим способом")
+    if previous["source"] != "max":
+        _set(uid)
+        return (f"Сегодня для {room_label} уже передано {previous['value']:g} °C "
+                f"({source_label}).\nЭто измерение нельзя изменять через MAX. "
+                "При необходимости обратитесь к администратору.")
+    _set(uid, "change_value", room_id)
+    return (f"Сегодня для {room_label} уже передано {previous['value']:g} °C "
+            f"({source_label}).\n"
+            "Вы можете исправить общее показание кнопкой или нажать «Ввести вручную». "
+            "В истории сохранятся первоначальный автор и автор исправления.")
 
 def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     if not NUMBER.fullmatch(raw.strip()):
@@ -146,60 +159,72 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     _, start, end = _today()
     now = db.utc_now()
     reporter = "MAX:" + str(uid)
+    message = None
+    next_mode = ""
     with db.connect() as conn:
+        # Serialize readers and writers for the whole room/day. Two employees
+        # pressing «Send» concurrently must not create two MAX readings.
         conn.execute("BEGIN IMMEDIATE")
-        # Recheck inside the transaction: a binding may have been revoked.
-        ok = conn.execute("""
+        bound = conn.execute("""
             SELECT 1 FROM max_bindings b JOIN rooms r ON r.id=b.room_id
             WHERE b.user_id=? AND b.room_id=? AND r.active=1
         """, (str(uid), room_id)).fetchone()
-        if not ok:
-            return "Доступ к кабинету отозван."
-        if mode == "s":
-            duplicate = conn.execute("SELECT room_id, reporter FROM readings WHERE external_id=?",
-                                     (event_id,)).fetchone()
-            if duplicate:
-                return "Это показание уже обработано."
-        else:
-            duplicate = conn.execute("SELECT user_id, reading_id FROM max_reading_corrections WHERE event_id=?",
-                                     (event_id,)).fetchone()
-            if duplicate:
-                return "Это исправление уже сохранено."
-        previous = conn.execute("""
-            SELECT * FROM readings WHERE room_id=? AND source='max' AND reporter=?
-              AND observed_at>=? AND observed_at<?
-            ORDER BY observed_at DESC, id DESC LIMIT 1
-        """, (room_id, reporter, start, end)).fetchone()
-        if mode == "s":
-            if previous is not None:
-                return "За сегодня показание уже есть. Нажмите «Изменить за сегодня» для исправления."
-            conn.execute("""
-                INSERT INTO readings(room_id, value, source, reporter, observed_at, external_id)
-                VALUES (?, ?, 'max', ?, ?, ?)
-            """, (room_id, value, reporter, now, event_id))
-        elif mode == "c":
-            if previous is None:
-                return "Показание за сегодня не найдено. Используйте «Отправить за сегодня»."
-            if previous["value"] == value:
-                return f"Показание не изменилось: {room['name']} — {value:g} °C."
-            conn.execute("""
-                INSERT INTO max_reading_corrections(
-                    event_id, user_id, reading_id, old_value, new_value, old_observed_at, corrected_at
-                ) VALUES(?,?,?,?,?,?,?)
-            """, (event_id, str(uid), previous["id"], previous["value"], value,
-                  previous["observed_at"], now))
-            conn.execute("UPDATE readings SET value=?, observed_at=? WHERE id=?",
-                         (value, now, previous["id"]))
-        else:
+        if not bound:
+            message = "Доступ к кабинету отозван."
+        elif mode not in ("s", "c"):
             raise ValueError("Unknown MAX temperature action")
-    _set(uid)
+        elif mode == "s" and conn.execute(
+            "SELECT 1 FROM readings WHERE external_id=?", (event_id,)
+        ).fetchone():
+            message = "Это измерение уже записано."
+        elif mode == "c" and conn.execute(
+            "SELECT 1 FROM max_reading_corrections WHERE event_id=?", (event_id,)
+        ).fetchone():
+            message = "Это исправление уже сохранено."
+        else:
+            previous = _current(conn, room_id, start, end)
+            if mode == "s" and previous is not None:
+                if previous["source"] == "max":
+                    next_mode = "change_value"
+                    message = (f"Сегодня для {room['building']} / {room['name']} уже передано "
+                               f"{previous['value']:g} °C. Чтобы исправить общее показание, "
+                               "выберите новое значение.")
+                else:
+                    message = (f"Сегодня для {room['building']} / {room['name']} уже есть "
+                               f"показание {previous['value']:g} °C от датчика или администратора. "
+                               "Изменить его через MAX нельзя.")
+            elif mode == "c" and previous is None:
+                next_mode = "send_value"
+                message = "Показание за сегодня не найдено. Выберите температуру для первого замера."
+            elif mode == "c" and previous["source"] != "max":
+                message = "Текущее показание получено не через MAX. Через MAX изменить его нельзя: используйте соответствующий источник."
+            elif mode == "c" and previous["value"] == value:
+                message = f"Показание не изменилось: {room['name']} — {value:g} °C."
+            elif mode == "c":
+                conn.execute("""
+                    INSERT INTO max_reading_corrections(
+                        event_id, user_id, reading_id, old_value, new_value, old_observed_at, corrected_at
+                    ) VALUES(?,?,?,?,?,?,?)
+                """, (event_id, str(uid), previous["id"], previous["value"], value,
+                      previous["observed_at"], now))
+                conn.execute("UPDATE readings SET value=?, observed_at=? WHERE id=?",
+                             (value, now, previous["id"]))
+            else:
+                conn.execute("""
+                    INSERT INTO readings(room_id, value, source, reporter, observed_at, external_id)
+                    VALUES (?, ?, 'max', ?, ?, ?)
+                """, (room_id, value, reporter, now, event_id))
+    # Session changes must happen after the transaction to avoid SQLite locks.
+    _set(uid, next_mode, room_id if next_mode else None)
+    if message is not None:
+        return message
     verb = "Исправлено" if mode == "c" else "Сохранено"
     result = f"{verb}: {room['building']} / {room['name']} — {value:g} °C."
     if value < room["min_temp"] or value > room["max_temp"]:
         result += (f"\nВнимание: температура вне установленной нормы "
                    f"({room['min_temp']:g}–{room['max_temp']:g} °C).")
-    return result + "\nВ любой момент можно изменить сегодняшний замер кнопкой в меню."
-
+    return (result + "\nПоказание общее для всех сотрудников кабинета. "
+            "При исправлении сохраняется история изменений.")
 
 def handle_callback(uid: str, payload: str, event_id: str) -> str:
     parts = payload.split(":")

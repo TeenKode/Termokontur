@@ -316,3 +316,28 @@ def test_brand_favicon_and_logo(client):
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/png")
         assert response.content.startswith(bytes.fromhex("89504e470d0a1a0a"))
+
+def test_reading_corrections_api_and_authentication(client):
+    from termokontur import max_ui
+    room = db.create_room("Школа", "1", "101", "Кабинет", 18, 24)
+    for user in ("7", "8"):
+        assert db.bind_code(user, db.issue_code(room["id"]))
+    db.remember_max_user({"user_id": 7, "first_name": "Анна", "last_name": "Иванова"})
+    db.remember_max_user({"user_id": 8, "first_name": "Пётр", "last_name": "Сидоров"})
+    assert "Сохранено" in max_ui._write("7", room["id"], "s", "21", "max:message:created")
+    assert "Исправлено" in max_ui._write("8", room["id"], "c", "22", "max:callback:corrected")
+
+    # User IDs and correction history are not exposed before admin login.
+    reading_id = db.recent_readings()[0]["id"]
+    path = f"/api/readings/{reading_id}/corrections"
+    assert client.get(path).status_code == 401
+    assert client.post("/api/login", json={"password": "this-is-a-test-admin-password"}).status_code == 200
+    current = client.get("/api/readings").json()[0]
+    assert current["reporter_display"] == "Анна Иванова"
+    assert current["corrections_count"] == 1
+    changes = client.get(path).json()
+    assert len(changes) == 1
+    assert changes[0]["actor_display"] == "Пётр Сидоров"
+    assert changes[0]["old_value"] == 21
+    assert changes[0]["new_value"] == 22
+    assert client.get("/api/readings/999999/corrections").status_code == 404

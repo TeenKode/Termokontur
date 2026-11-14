@@ -101,19 +101,9 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
             raw = values[1]
         else:
             return "Формат: /temp 21,5 или /temp ID 21,5"
-        try:
-            value = float(raw.replace(",", "."))
-            entry, created = db.add_reading(room["id"], value, "max",
-                                            f"MAX:{user_id}", f"max:{event_id}")
-        except ValueError:
-            return "Введите корректную температуру, например /temp 21,5"
-        if not created:
-            return "Это измерение уже записано."
-        result = f"Сохранено: {room['building']} / {room['name']} — {value:g} °C."
-        if value < room["min_temp"] or value > room["max_temp"]:
-            result += (f"\nВнимание: температура вне установленной нормы "
-                       f"({room['min_temp']:g}–{room['max_temp']:g} °C).")
-        return result
+        # Use the same transaction and shared room/day rule as callback buttons.
+        # Legacy /temp commands must never bypass the common daily MAX entry.
+        return max_ui._write(user_id, room["id"], "s", raw, f"max:message:{event_id}")
     return HELP
 
 def process_update(update: dict) -> tuple[str, str] | None:
@@ -173,12 +163,19 @@ async def send_reminders(client: httpx.AsyncClient) -> None:
         return
     snapshot = daily.summary()
     for uid, missing in daily.pending_users(snapshot).items():
+        # Another assigned employee may have submitted since the initial snapshot.
+        current = daily.summary()
+        missing_now = {room["id"] for room in current["rooms"]
+                       if room["daily_status"] == "missing"}
+        still_missing = [room for room in missing if room["id"] in missing_now]
+        if not still_missing or current["local_date"] != snapshot["local_date"]:
+            continue
         if not daily.claim_reminder(snapshot["local_date"], uid):
             continue
         try:
             response = await client.post(
                 "/messages", params={"user_id": uid},
-                json={"text": daily.reminder_text(missing), "attachments": max_ui.keyboard(uid)},
+                json={"text": daily.reminder_text(still_missing), "attachments": max_ui.keyboard(uid)},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:

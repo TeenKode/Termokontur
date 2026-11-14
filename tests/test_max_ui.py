@@ -275,15 +275,78 @@ def test_replayed_delivery_cannot_repeat_callback_effect(client):
     assert db.recent_readings()[0]["value"] == 21
 
 
-def test_change_own_reading_only(client):
+def test_shared_room_day_one_reading_and_other_employee_can_correct(client):
     room = _room()
     _bind(7, room)
     _bind(8, room)
     day = daily.daily_bounds()[0].strftime("%Y%m%d")
+    assert "Сохранено" in process_update(
+        _callback(7, f"tk:value:s:{room['id']}:{day}:21", "7send")
+    )[1]
+    # This is the same room/day, not a new record for a different person.
+    duplicate = process_update(_callback(8, f"tk:value:s:{room['id']}:{day}:22", "8send"))[1]
+    assert "уже передано 21" in duplicate
+    assert len(db.recent_readings()) == 1
+    assert "21" in process_update(_callback(8, "tk:send", "8menu"))[1]
+    assert "tk:value:c:" + str(room["id"]) in " ".join(_payloads(8))
+
+    changed = process_update(
+        _callback(8, f"tk:value:c:{room['id']}:{day}:19", "8change")
+    )[1]
+    assert "Исправлено" in changed
+    stored = db.recent_readings()[0]
+    assert stored["value"] == 19
+    assert stored["reporter"] == "MAX:7"  # Original author remains.
+    assert stored["corrections_count"] == 1
+    changes = db.reading_corrections(stored["id"])
+    assert len(changes) == 1
+    assert changes[0]["user_id"] == "8"
+    assert changes[0]["old_value"] == 21
+    assert changes[0]["new_value"] == 19
+    assert len(db.recent_readings()) == 1
+    assert daily.pending_users(daily.summary()) == {}
+
+    # Replay of the same correction must not duplicate the audit.
+    assert "уже" in process_update(
+        _callback(8, f"tk:value:c:{room['id']}:{day}:19", "8change")
+    )[1]
+    assert len(db.reading_corrections(stored["id"])) == 1
+
+
+def test_unbound_person_cannot_change_someone_elses_reading(client):
+    room = _room()
+    _bind(7, room)
+    day = daily.daily_bounds()[0].strftime("%Y%m%d")
     process_update(_callback(7, f"tk:value:s:{room['id']}:{day}:21", "7send"))
-    result = process_update(_callback(8, f"tk:value:c:{room['id']}:{day}:19", "8change"))[1]
-    assert "не найдено" in result
+    assert "Нет доступа" in process_update(
+        _callback(9, f"tk:value:c:{room['id']}:{day}:18", "9change")
+    )[1]
     assert db.recent_readings()[0]["value"] == 21
+    assert db.reading_corrections(db.recent_readings()[0]["id"]) == []
+
+
+def test_automatic_reading_is_not_overwritten_through_max(client):
+    room = _room()
+    _bind(7, room)
+    db.add_reading(room["id"], 21, "ha", "sensor-1")
+    day = daily.daily_bounds()[0].strftime("%Y%m%d")
+    assert "датчиком" in process_update(_callback(7, "tk:send", "status"))[1]
+    assert "нельзя" in process_update(
+        _callback(7, f"tk:value:c:{room['id']}:{day}:19", "wrong-source")
+    )[1]
+    assert len(db.recent_readings()) == 1
+    assert db.recent_readings()[0]["value"] == 21
+
+
+def test_legacy_temp_command_uses_same_shared_daily_guard(client):
+    from termokontur.bot import interpret
+    room = _room()
+    _bind(7, room)
+    _bind(8, room)
+    assert "Сохранено" in interpret("7", "/temp 20", "legacy-one")
+    assert "уже передано" in interpret("8", "/temp 22", "legacy-two")
+    assert len(db.recent_readings()) == 1
+    assert db.recent_readings()[0]["value"] == 20
 
 
 def test_reminder_or_alert_outbox_has_default_buttons(client):
@@ -368,3 +431,18 @@ def test_retention_can_remove_reading_and_its_correction_audit(client):
     with db.connect() as conn:
         conn.execute("DELETE FROM readings WHERE id=?", (reading_id,))
         assert conn.execute("SELECT count(*) FROM max_reading_corrections").fetchone()[0] == 0
+
+
+def test_simultaneous_employees_cannot_create_duplicate_daily_max_readings(client):
+    from concurrent.futures import ThreadPoolExecutor
+    room = _room()
+    for uid in (7, 8, 9, 10):
+        _bind(uid, room)
+    def submit(uid):
+        return max_ui._write(str(uid), room["id"], "s", str(18 + uid % 4),
+                             f"max:message:concurrent-{uid}")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        answers = list(executor.map(submit, (7, 8, 9, 10)))
+    assert sum("Сохранено" in reply for reply in answers) == 1
+    assert sum("уже передано" in reply for reply in answers) == 3
+    assert len(db.recent_readings()) == 1
