@@ -139,7 +139,16 @@ def initialize() -> None:
             buttons_json TEXT,
             callback_id TEXT
         );
+        CREATE TABLE IF NOT EXISTS max_menu_messages (
+            user_id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL
+        );
         """)
+        # Add optional callback source ID without changing existing installations.
+        if "origin_mid" not in {
+            col["name"] for col in conn.execute("PRAGMA table_info(max_outbox_ui)")
+        }:
+            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN origin_mid TEXT")
 
 def room_list(active_only: bool = True) -> list[dict]:
     with connect() as conn:
