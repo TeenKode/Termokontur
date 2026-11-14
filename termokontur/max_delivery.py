@@ -126,7 +126,9 @@ def pending(limit: int = 20) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("""
             SELECT o.event_id, o.user_id, o.text, o.attempts,
-                   u.buttons_json, u.callback_id, u.origin_mid
+                   u.buttons_json, u.callback_id, u.origin_mid,
+                   COALESCE(u.delivery_mode, 'menu') AS delivery_mode,
+                   COALESCE(u.notify, 1) AS notify
             FROM max_outbox o
             LEFT JOIN max_outbox_ui u ON u.event_id=o.event_id
             WHERE o.delivered_at IS NULL AND o.next_retry_at<=?
@@ -135,10 +137,15 @@ def pending(limit: int = 20) -> list[dict]:
         return [dict(row) for row in rows]
 
 def mark_sent(key: str) -> None:
+    stamp = db.utc_now()
     with db.connect() as conn:
         conn.execute(
             "UPDATE max_outbox SET delivered_at=? WHERE event_id=?",
-            (db.utc_now(), key),
+            (stamp, key),
+        )
+        conn.execute(
+            "UPDATE notification_recipients SET delivered_at=? WHERE event_id=?",
+            (stamp, key),
         )
 
 def mark_failed(key: str, attempts: int) -> None:
@@ -212,11 +219,22 @@ async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> N
 async def drain(client: httpx.AsyncClient) -> None:
     from .max_ui import keyboard
     for item in pending():
-        attachments = (json.loads(item["buttons_json"]) if item["buttons_json"]
-                       else keyboard(item["user_id"]))
-        message = {"text": item["text"], "attachments": attachments}
+        if item["delivery_mode"] == "notice":
+            message = {"text": item["text"]}
+        else:
+            attachments = (json.loads(item["buttons_json"]) if item["buttons_json"]
+                           else keyboard(item["user_id"]))
+            message = {"text": item["text"], "attachments": attachments}
         try:
-            if item["callback_id"]:
+            if item["delivery_mode"] == "notice":
+                # Administrative notices and deviation alerts are new messages;
+                # editing the silent menu would hide critical alerts from staff.
+                response = await client.post(
+                    "/messages", params={"user_id": item["user_id"]},
+                    json={"text": item["text"], "notify": bool(item["notify"])},
+                )
+                response.raise_for_status()
+            elif item["callback_id"]:
                 # /answers acknowledges a press and edits that SAME menu.
                 # Commands entered as text use PUT /messages on the last menu.
                 try:
@@ -293,7 +311,7 @@ def queue_temperature_alerts() -> int:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute("""
             SELECT p.id AS room_id, p.name, p.building, p.min_temp, p.max_temp,
-                   b.user_id, x.id AS reading_id, x.value, x.observed_at
+                   b.user_id, x.id AS reading_id, x.value, x.observed_at, x.source
             FROM rooms p
             JOIN max_bindings b ON b.room_id=p.id
             JOIN readings x ON x.id=(
@@ -303,13 +321,17 @@ def queue_temperature_alerts() -> int:
             WHERE p.active=1
         """).fetchall()
         for row in rows:
+            # Human-entered values are already known to the person entering them.
+            # Only automatic sensor measurements can trigger push notifications.
+            if row["source"] != "ha":
+                continue
             freshness_hours = int(settings.get("stale_hours", "26"))
             if now - datetime.fromisoformat(row["observed_at"]) > timedelta(hours=freshness_hours):
                 continue
             state = ("below" if row["value"] < row["min_temp"]
                      else "above" if row["value"] > row["max_temp"] else "normal")
             old=conn.execute("""
-                SELECT last_status,last_at FROM temperature_alert_state
+                SELECT last_status,last_at,last_reading_id FROM temperature_alert_state
                 WHERE room_id=? AND user_id=?
             """,(row["room_id"],row["user_id"])).fetchone()
             if state=="normal":
@@ -317,8 +339,11 @@ def queue_temperature_alerts() -> int:
                     conn.execute("""UPDATE temperature_alert_state SET last_status='normal'
                         WHERE room_id=? AND user_id=?""",(row["room_id"],row["user_id"]))
                 continue
-            if old and old["last_status"]==state and old["last_at"]:
-                if now - datetime.fromisoformat(old["last_at"]) < timedelta(minutes=interval):
+            if old and old["last_status"] == state:
+                # Do not notify endlessly about a single old measurement.
+                if old["last_reading_id"] == row["reading_id"]:
+                    continue
+                if old["last_at"] and now - datetime.fromisoformat(old["last_at"]) < timedelta(minutes=interval):
                     continue
             event_raw=f"alert:{row['room_id']}:{row['user_id']}:{row['reading_id']}:{stamp}"
             key=hashlib.sha256(event_raw.encode("utf-8")).hexdigest()
@@ -330,12 +355,15 @@ def queue_temperature_alerts() -> int:
                             VALUES(?,'complete',?)""",(key,stamp))
             conn.execute("""INSERT OR IGNORE INTO max_outbox(event_id,user_id,text,next_retry_at)
                             VALUES(?,?,?,?)""",(key,row["user_id"],msg,stamp))
+            conn.execute("""INSERT OR IGNORE INTO max_outbox_ui(event_id,delivery_mode,notify)
+                            VALUES(?,'notice',1)""", (key,))
             conn.execute("""
-                INSERT INTO temperature_alert_state(room_id,user_id,last_status,last_at)
-                VALUES(?,?,?,?)
+                INSERT INTO temperature_alert_state(room_id,user_id,last_status,last_at,last_reading_id)
+                VALUES(?,?,?,?,?)
                 ON CONFLICT(room_id,user_id) DO UPDATE SET
-                    last_status=excluded.last_status,last_at=excluded.last_at
-            """,(row["room_id"],row["user_id"],state,stamp))
+                    last_status=excluded.last_status,last_at=excluded.last_at,
+                    last_reading_id=excluded.last_reading_id
+            """,(row["room_id"],row["user_id"],state,stamp,row["reading_id"]))
             count+=1
     return count
 
@@ -349,4 +377,8 @@ def prune(days: int = 30) -> dict:
             DELETE FROM max_inbox WHERE state='complete' AND updated_at<?
               AND NOT EXISTS (SELECT 1 FROM max_outbox WHERE max_outbox.event_id=max_inbox.event_id)
         """,(cutoff,)).rowcount
+        # Keep aggregated history for six months, even after queue rows
+        # have been pruned, without retaining message texts indefinitely.
+        history_cutoff = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat(timespec="seconds")
+        conn.execute("DELETE FROM notification_batches WHERE created_at<?", (history_cutoff,))
     return {"outbox": sent, "inbox": inbox}

@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates, max_delivery, maintenance
+from . import auth, db, daily, settings, updates, max_delivery, maintenance, notifications
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
@@ -164,6 +164,13 @@ class SettingsIn(BaseModel):
     retention_days: int = Field(default=0, ge=0, le=3650)
     alerts_enabled: bool = False
     alert_cooldown_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class NotificationSendIn(BaseModel):
+    request_id: str = Field(min_length=12, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    text: str = Field(min_length=1, max_length=2000)
+    user_ids: list[str] = Field(min_length=1, max_length=250)
+    silent: bool = False
 
 
 class RestoreBackupIn(BaseModel):
@@ -368,6 +375,28 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
         # unacknowledged events after an interrupted processing attempt.
         raise HTTPException(503, "Событие ещё обрабатывается") from exc
     return {"ok": True}
+
+
+@app.get("/api/notifications/recipients", dependencies=[Depends(require_admin)])
+def notification_recipients():
+    return notifications.recipients()
+
+
+@app.get("/api/notifications/history", dependencies=[Depends(require_admin)])
+def notification_history():
+    return notifications.history()
+
+
+@app.post("/api/notifications/send", dependencies=[Depends(require_admin)])
+def notification_send(payload: NotificationSendIn):
+    try:
+        return notifications.queue_batch(
+            payload.request_id, payload.text, payload.user_ids, payload.silent,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        code = 409 if message.startswith("Сначала настройте") else 422
+        raise HTTPException(code, message) from exc
 
 
 @app.get("/api/max/diagnostics", dependencies=[Depends(require_admin)])

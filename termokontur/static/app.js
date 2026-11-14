@@ -708,6 +708,7 @@ function setSettingsCategory(category){
   if(category==="backups")void loadBackups();
   if(category==="updates")void loadUpdateStatus();
   if(category==="max")void loadMaxDiagnostics();
+  if(category==="notifications")void loadNotificationCenter();
 }
 for(const button of document.querySelectorAll("[data-settings-target]")){
   button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
@@ -838,6 +839,134 @@ $("alerts-settings-form").addEventListener("submit",async event=>{
     alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
   },"Температурные уведомления сохранены");
 });
+/* Targeted MAX notifications: no HTML interpolation of untrusted user names. */
+let notificationPeople=[], notificationSelected=new Set(), notificationRequestId=null, notificationSending=false;
+function notificationTargetIds(){
+  const mode=$("notification-audience").value;
+  return notificationPeople.filter(person=>{
+    if(mode==="missing")return person.missing;
+    if(mode==="building")return person.rooms.some(room=>room.building===$("notification-building").value);
+    if(mode==="selected")return notificationSelected.has(person.user_id);
+    return true;
+  }).map(person=>person.user_id);
+}
+function updateNotificationPreview(){
+  const mode=$("notification-audience").value;
+  $("notification-building-wrap").hidden=mode!=="building";
+  $("notification-selected-wrap").hidden=mode!=="selected";
+  const chosen=new Set(notificationTargetIds());
+  const people=notificationPeople.filter(x=>chosen.has(x.user_id));
+  const allowed=!!settingsCache?.max_token_configured;
+  $("notification-recipient-summary").textContent=people.length
+    ?"Получателей: "+people.length+(people.length>250?" (максимум 250 за отправку)":"")
+    :"В выбранной группе нет подключённых сотрудников.";
+  $("notification-recipient-names").textContent=people.length
+    ?people.slice(0,8).map(x=>x.name).join(", ")+(people.length>8?" и ещё "+(people.length-8):"")
+    :"Сотрудник появится здесь после привязки MAX к активному помещению.";
+  $("notification-text-count").textContent=$("notification-text").value.length+" / 2000";
+  $("notification-send").disabled=!allowed||people.length===0||people.length>250||notificationSending;
+  if(!allowed)$("notification-send-feedback").textContent="Сначала настройте токен на вкладке «Бот MAX».";
+}
+function renderNotificationPeople(){
+  const buildings=[...new Set(notificationPeople.flatMap(p=>p.rooms.map(r=>r.building)))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const building=$("notification-building"),previous=building.value;
+  building.replaceChildren(...buildings.map(value=>{
+    const option=el("option","",value);option.value=value;return option;
+  }));
+  if(buildings.includes(previous))building.value=previous;
+  const list=$("notification-selected-users");
+  list.replaceChildren();
+  for(const person of notificationPeople){
+    const label=el("label","notification-user");
+    const checkbox=el("input");
+    checkbox.type="checkbox";
+    checkbox.value=person.user_id;
+    checkbox.checked=notificationSelected.has(person.user_id);
+    checkbox.addEventListener("change",()=>{
+      if(checkbox.checked)notificationSelected.add(person.user_id);
+      else notificationSelected.delete(person.user_id);
+      notificationRequestId=null;
+      updateNotificationPreview();
+    });
+    const info=el("span","notification-user-info");
+    info.append(el("strong","",person.name),
+      el("small","",person.rooms.map(r=>r.building+" / "+r.name).join(" · ")));
+    if(person.missing)info.append(el("small","notification-missing","Есть кабинеты без показаний за сегодня"));
+    label.append(checkbox,info);
+    list.append(label);
+  }
+  updateNotificationPreview();
+}
+async function loadNotificationRecipients(){
+  try{
+    notificationPeople=await api("/api/notifications/recipients");
+    notificationSelected=new Set([...notificationSelected].filter(uid=>notificationPeople.some(p=>p.user_id===uid)));
+    renderNotificationPeople();
+  }catch(error){
+    $("notification-recipient-summary").textContent="Не удалось получить список сотрудников: "+error.message;
+    $("notification-send").disabled=true;
+  }
+}
+async function loadNotificationHistory(){
+  try{
+    const batches=await api("/api/notifications/history");
+    const target=$("notification-history");target.replaceChildren();
+    if(!batches.length){
+      target.append(el("p","hint","Пока нет сообщений от администратора."));
+      return;
+    }
+    for(const item of batches){
+      const entry=el("div","notification-history-item");
+      const top=el("div","notification-history-top");
+      top.append(el("strong","",when(item.created_at)),
+        el("span","",item.silent?"Тихое уведомление":"Обычное уведомление"));
+      const remaining=item.recipients-item.delivered;
+      entry.append(top,el("p","notification-history-message",item.text),
+        el("small","", "Доставлено: "+item.delivered+" из "+item.recipients+
+          (remaining?" · в очереди: "+remaining:"")+
+          (item.retrying?" · повторяем доставку: "+item.retrying:"")));
+      target.append(entry);
+    }
+  }catch(error){$("notification-history").textContent="Ошибка загрузки истории: "+error.message;}
+}
+async function loadNotificationCenter(){
+  await Promise.all([loadNotificationRecipients(),loadNotificationHistory()]);
+}
+$("notification-audience").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
+$("notification-building").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
+for(const id of ["notification-text","notification-silent"])
+  $(id).addEventListener("input",()=>{notificationRequestId=null;updateNotificationPreview();});
+$("notification-refresh-recipients").addEventListener("click",loadNotificationRecipients);
+$("notification-refresh-history").addEventListener("click",loadNotificationHistory);
+$("notification-compose-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(notificationSending)return;
+  const user_ids=notificationTargetIds();
+  const text=$("notification-text").value.trim();
+  if(!text){toast("Введите текст уведомления",true);return;}
+  if(!user_ids.length||user_ids.length>250){toast("Выберите от 1 до 250 получателей",true);return;}
+  if(!confirm("Отправить сообщение через MAX для "+user_ids.length+" сотрудников?\n\n"+text.slice(0,240)))return;
+  const request_id=notificationRequestId||("notify-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,12));
+  notificationRequestId=request_id;
+  notificationSending=true;updateNotificationPreview();
+  const feedback=$("notification-send-feedback");
+  feedback.textContent="Сохраняем рассылку в очередь…";
+  try{
+    const result=await api("/api/notifications/send","POST",{
+      request_id,text,user_ids,silent:$("notification-silent").checked
+    });
+    feedback.textContent=result.already_queued
+      ?"Сообщение уже находится в очереди. Повторная рассылка не создана."
+      :"Поставлено в очередь: "+result.queued+". Доставку выполняет служба MAX.";
+    $("notification-text").value="";
+    notificationRequestId=null;
+    toast("Сообщение поставлено в очередь для "+result.queued+" сотрудников");
+    await loadNotificationHistory();
+  }catch(error){feedback.textContent="Ошибка: "+error.message;toast(error.message,true);}
+  finally{notificationSending=false;updateNotificationPreview();}
+});
+
+
 $("max-settings-form").addEventListener("submit",async event=>{
   event.preventDefault();
   const value=$("setting-max-token").value.trim();

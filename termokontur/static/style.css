@@ -493,3 +493,33 @@ html[data-theme="dark"] .building-day.with-alert{background:#492c37;color:#ffaab
 html[data-theme="dark"] .building-day.empty{background:#25374c;color:#a7b9cf}
 html[data-theme="dark"] .room-drilldown>summary{background:#1b2e43;border-color:var(--dk-border);color:#98e2cb}
 html[data-theme="dark"] .room-drilldown>summary:hover{background:#243e50}
+
+/* Notification composer and delivery receipts */
+.notification-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.notification-title-row h3{margin-top:0}
+.notification-compose-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.notification-recipient-summary{padding:12px 15px;border:1px solid #d9e4e9;border-radius:11px;background:#f3f9fa;font-size:13px;color:#345568;font-weight:660}
+.notification-user-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:8px;max-height:285px;overflow:auto;padding:3px}
+.notification-user{display:flex!important;flex-direction:row!important;gap:10px!important;align-items:flex-start;padding:10px;border:1px solid #e1e9ee;border-radius:10px;cursor:pointer}
+.notification-user input{width:auto;flex:0 0 auto;margin-top:2px}
+.notification-user-info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.notification-user-info small{opacity:.8;line-height:1.4;overflow-wrap:anywhere}
+.notification-missing{color:#b75d2c}
+.notification-history{display:grid;gap:10px}
+.notification-history-item{padding:13px 15px;border:1px solid #e1e9ee;border-radius:12px;min-width:0}
+.notification-history-top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.notification-history-top span{font-size:12px;opacity:.7}
+.notification-history-message{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;margin:8px 0}
+.notification-history-item small{opacity:.8}
+@media(max-width:700px){.notification-title-row>.btn{width:100%}.notification-user-list{grid-template-columns:1fr}}
+
+
+/* Match the notification workspace to the selected dark theme. */
+#notification-text{width:100%;min-height:125px;resize:vertical;border:1px solid #e0e5ee;border-radius:10px;padding:12px;font:inherit;color:#263954;background:#fff}
+html[data-theme="dark"] #notification-text{background:var(--dk-high);border-color:var(--dk-border);color:var(--dk-text)}
+html[data-theme="dark"] #notification-text::placeholder{color:var(--dk-muted)}
+html[data-theme="dark"] .notification-recipient-summary{background:#1d3c40;border-color:#356265;color:#c6eee1}
+html[data-theme="dark"] .notification-user,html[data-theme="dark"] .notification-history-item{background:#1b2c42;border-color:var(--dk-border)}
+html[data-theme="dark"] .notification-user-info strong,html[data-theme="dark"] .notification-history-top strong,html[data-theme="dark"] .notification-history-message{color:var(--dk-text)}
+html[data-theme="dark"] .notification-user-info small,html[data-theme="dark"] .notification-history-item small{color:var(--dk-muted)}
+html[data-theme="dark"] .notification-missing{color:var(--dk-gold)}

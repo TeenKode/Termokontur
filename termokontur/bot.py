@@ -109,7 +109,11 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
             return "Введите корректную температуру, например /temp 21,5"
         if not created:
             return "Это измерение уже записано."
-        return f"Сохранено: {room['building']} / {room['name']} — {value:g} °C."
+        result = f"Сохранено: {room['building']} / {room['name']} — {value:g} °C."
+        if value < room["min_temp"] or value > room["max_temp"]:
+            result += (f"\nВнимание: температура вне установленной нормы "
+                       f"({room['min_temp']:g}–{room['max_temp']:g} °C).")
+        return result
     return HELP
 
 def process_update(update: dict) -> tuple[str, str] | None:
