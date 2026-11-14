@@ -314,4 +314,4 @@ def test_brand_favicon_and_logo(client):
         response = client.get(f"/static/icon-{size}.png")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/png")
-        assert response.content.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+        assert response.content.startswith(bytes.fromhex("89504e470d0a1a0a"))
