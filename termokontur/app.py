@@ -580,9 +580,11 @@ def dashboard():
     return db.dashboard(int(settings.get("stale_hours", "26")))
 
 @app.get("/api/dashboard/history", dependencies=[Depends(require_admin)])
-def dashboard_history(days: Literal[7, 14, 30, 90] = 14,
+def dashboard_history(days: int = Query(14, ge=7, le=90),
                       building: str = Query("", max_length=100)):
     """Calendar-day aggregates; each cabinet counts once per day."""
+    if days not in (7, 14, 30, 90):
+        raise HTTPException(422, "Выберите период: 7, 14, 30 или 90 дней")
     return db.dashboard_history(
         days=days, building=building, timezone_name=settings.get("timezone", "UTC")
     )
