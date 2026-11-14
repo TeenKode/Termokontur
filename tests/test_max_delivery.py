@@ -286,10 +286,12 @@ def test_replacing_bot_token_resets_old_poll_marker(admin):
     replacement = "test-token-for-the-next-max-bot-456"
     assert admin.put("/api/settings/max-token", json={"value": original}).status_code == 200
     db.set_state("max_marker", "123456")
+    max_delivery.set_menu_message_id("777", "old-bot-menu")
     assert admin.put("/api/settings/max-token", json={"value": original}).status_code == 200
     assert db.get_state("max_marker") == "123456"
     assert admin.put("/api/settings/max-token", json={"value": replacement}).status_code == 200
     assert db.get_state("max_marker") == ""
+    assert max_delivery.menu_message_id("777") is None
 
 
 def test_max_webhook_stream_has_strict_size_limit(admin):

@@ -96,7 +96,7 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
     for form in (
         "general-settings-form", "reminders-settings-form",
         "alerts-settings-form", "maintenance-form",
-        "max-settings-form", "max-webhook-form", "password-settings-form"
+        "max-settings-form", "password-settings-form"
     ):
         assert form in page.ids
     assert "saveSettingsPatch" in js
@@ -105,3 +105,19 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
     assert "renderSettingsSummary" in js
     assert "updateAvailable=false" in js
     assert "X-Api-Key" in html
+
+
+def test_max_polling_services_use_debian_ca_bundle():
+    """The Python httpx default bundle must not mask locally trusted MAX CAs."""
+    root = Path(__file__).resolve().parents[1]
+    for name in ("termokontur.service", "termokontur-max.service"):
+        content = (root / "deploy" / "systemd" / name).read_text(encoding="utf-8")
+        assert "Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in content
+        assert "verify=False" not in content
+    html = (root / "termokontur" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (root / "termokontur" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'id="switch-polling"' in html
+    assert 'id="max-webhook-form"' not in html
+    assert 'id="activate-webhook"' not in html
+    assert 'max_poll_last_error' in (root / "termokontur" / "app.py").read_text(encoding="utf-8")
+    assert "tls_certificate" in js

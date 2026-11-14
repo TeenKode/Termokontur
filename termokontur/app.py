@@ -261,6 +261,12 @@ def set_max_token(payload: SecretIn):
         # MAX markers belong to an individual bot. An old bot's marker can
         # silently skip events or make polling fail after a token replacement.
         db.set_state("max_marker", "")
+        db.set_state("max_poll_last_success_at", "")
+        db.set_state("max_poll_last_error", "")
+        # The saved menu belongs to a specific bot, not just a MAX user.
+        # A newly configured bot must publish its own first menu message.
+        with db.connect() as conn:
+            conn.execute("DELETE FROM max_menu_messages")
     return {"configured": bool(configured_token)}
 
 
@@ -383,6 +389,8 @@ def max_diagnostics():
         "webhook_check_error": False,
         "polling_blocked_by_webhook": False,
         "subscription_count": None,
+        "poll_last_success_at": db.get_state("max_poll_last_success_at") or None,
+        "poll_last_error": db.get_state("max_poll_last_error") or None,
     })
     heartbeat = db.get_state("max_worker_heartbeat") or ""
     try:

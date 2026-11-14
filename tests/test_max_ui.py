@@ -148,6 +148,7 @@ def test_max_delivery_callbacks_edit_message_and_regular_replies_have_menu(clien
     queued = max_delivery.pending()
     assert len(queued) == 1
     assert queued[0]["callback_id"] == "cb-ack"
+    assert queued[0]["origin_mid"] == "botmsg1"
     buttons = json.loads(queued[0]["buttons_json"])[0]["payload"]["buttons"]
     assert buttons[0][0]["text"] == "Отправить за сегодня"
 
@@ -155,23 +156,109 @@ def test_max_delivery_callbacks_edit_message_and_regular_replies_have_menu(clien
         def __init__(self):
             self.calls = []
         async def post(self, route, **kwargs):
-            self.calls.append((route, kwargs))
+            self.calls.append(("post", route, kwargs))
             class Response:
-                def raise_for_status(self):
-                    pass
+                def raise_for_status(self): pass
+            return Response()
+        async def put(self, route, **kwargs):
+            self.calls.append(("put", route, kwargs))
+            class Response:
+                def raise_for_status(self): pass
             return Response()
 
     fake = Client()
     asyncio.run(max_delivery.drain(fake))
-    assert fake.calls[0][0] == "/answers"
-    assert fake.calls[0][1]["params"]["callback_id"] == "cb-ack"
-    assert fake.calls[0][1]["json"]["message"]["attachments"][0]["type"] == "inline_keyboard"
+    assert fake.calls[0][1] == "/answers"
+    assert fake.calls[0][2]["params"]["callback_id"] == "cb-ack"
+    assert fake.calls[0][2]["json"]["message"]["attachments"][0]["type"] == "inline_keyboard"
+    assert max_delivery.menu_message_id("7") == "botmsg1"
     assert max_delivery.pending() == []
 
     assert max_delivery.enqueue(_message(7, "/today", "new-msg"))
     asyncio.run(max_delivery.drain(fake))
-    assert fake.calls[1][0] == "/messages"
-    assert fake.calls[1][1]["json"]["attachments"][0]["type"] == "inline_keyboard"
+    assert fake.calls[1][0:2] == ("put", "/messages")
+    assert fake.calls[1][2]["params"]["message_id"] == "botmsg1"
+    assert fake.calls[1][2]["json"]["attachments"][0]["type"] == "inline_keyboard"
+    assert len(fake.calls) == 2  # No extra messages created for typed commands.
+
+
+def test_max_reuses_one_menu_across_multiple_typed_commands(client):
+    class Client:
+        def __init__(self):
+            self.posts = 0
+            self.edits = []
+        async def post(self, route, **kwargs):
+            assert route == "/messages"
+            self.posts += 1
+            class Response:
+                def raise_for_status(self): pass
+                def json(self): return {"message": {"body": {"mid": "menu-1"}}}
+            return Response()
+        async def put(self, route, **kwargs):
+            self.edits.append((route, kwargs))
+            class Response:
+                def raise_for_status(self): pass
+            return Response()
+
+    fake = Client()
+    for i, command in enumerate(("/start", "/help", "/today", "/rooms")):
+        assert max_delivery.enqueue(_message(22, command, f"typed-{i}"))
+        asyncio.run(max_delivery.drain(fake))
+    assert fake.posts == 1
+    assert len(fake.edits) == 3
+    assert all(call[1]["params"]["message_id"] == "menu-1" for call in fake.edits)
+    assert max_delivery.menu_message_id("22") == "menu-1"
+
+
+def test_max_creates_new_menu_only_if_old_one_is_missing(client):
+    import httpx
+
+    class Client:
+        def __init__(self):
+            self.posts = 0
+            self.edits = 0
+        async def put(self, route, **kwargs):
+            self.edits += 1
+            request = httpx.Request("PUT", "https://platform-api2.max.ru/messages")
+            return httpx.Response(404, request=request)
+        async def post(self, route, **kwargs):
+            self.posts += 1
+            class Response:
+                def raise_for_status(self): pass
+                def json(self): return {"message": {"body": {"mid": "new-menu"}}}
+            return Response()
+
+    max_delivery.set_menu_message_id("23", "deleted-menu")
+    assert max_delivery.enqueue(_message(23, "/help", "recover-menu"))
+    fake = Client()
+    asyncio.run(max_delivery.drain(fake))
+    assert fake.edits == 1
+    assert fake.posts == 1
+    assert max_delivery.menu_message_id("23") == "new-menu"
+
+
+def test_max_failed_edit_is_retried_without_spamming(client):
+    import httpx
+
+    class Client:
+        def __init__(self):
+            self.posts = 0
+        async def put(self, route, **kwargs):
+            request = httpx.Request("PUT", "https://platform-api2.max.ru/messages")
+            return httpx.Response(503, request=request)
+        async def post(self, route, **kwargs):
+            self.posts += 1
+            raise AssertionError("A failed edit must not create a new message")
+
+    max_delivery.set_menu_message_id("24", "existing-menu")
+    assert max_delivery.enqueue(_message(24, "/help", "failure"))
+    fake = Client()
+    asyncio.run(max_delivery.drain(fake))
+    assert fake.posts == 0
+    assert len(max_delivery.pending()) == 0  # Delayed for retry, not dropped.
+    with db.connect() as conn:
+        row = conn.execute("SELECT attempts, delivered_at FROM max_outbox").fetchone()
+    assert row["attempts"] == 1 and row["delivered_at"] is None
 
 
 def test_replayed_delivery_cannot_repeat_callback_effect(client):

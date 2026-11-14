@@ -397,7 +397,7 @@ function renderSettingsSummary(){
   $("settings-summary-timezone").textContent=settingsCache.timezone+" · "+settingsCache.stale_hours+" ч до устаревания";
   $("settings-summary-max").textContent=settingsCache.max_token_configured?"Подключён":"Не настроен";
   $("settings-summary-max-mode").textContent=settingsCache.max_token_configured
-    ?(settingsCache.max_mode==="webhook"?"Webhook HTTPS":"Тестовый Long Polling")
+    ?(settingsCache.max_mode==="webhook"?"Webhook (устаревшая настройка)":"Long Polling")
     :"Токен MAX отсутствует";
   $("settings-summary-sensors").textContent=settingsCache.ingest_key_configured?"Ключ настроен":"Ключ отсутствует";
   $("settings-summary-backup").textContent=settingsCache.backup_interval_days
@@ -439,10 +439,8 @@ async function loadSettings() {
     for(const checkbox of document.querySelectorAll('[name="remind-day"]'))
       checkbox.checked=settingsCache.reminder_days.includes(Number(checkbox.value));
     $("max-status").textContent=settingsCache.max_token_configured?"Токен MAX настроен":"Токен MAX отсутствует";
-    $("max-webhook-mode").textContent=settingsCache.max_mode==="webhook"?"MAX: webhook включён (производственный режим).":"MAX: тестовый режим Long Polling.";
-    $("max-webhook-url").value=settingsCache.max_webhook_url || "";
-    $("switch-polling").disabled=settingsCache.max_mode!=="webhook";
-    $("activate-webhook").disabled=!settingsCache.max_token_configured;
+    $("max-webhook-mode").textContent=settingsCache.max_mode==="webhook"?"Обнаружен прежний режим webhook. Для получения сообщений через Long Polling отключите webhook кнопкой ниже.":"Long Polling включён. Публичный IP не требуется; служба MAX получает сообщения исходящими запросами.";
+    $("switch-polling").hidden=settingsCache.max_mode!=="webhook";
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
     settingsLoaded=true;
@@ -866,21 +864,11 @@ $("max-codes-form").addEventListener("submit",async event=>{
   finally{renderMaxCodes();}
 });
 
-/* Configure a trustworthy public HTTPS webhook without editing server files. */
-$("max-webhook-form").addEventListener("submit",async event=>{
-  event.preventDefault();
-  if(!confirm("Активировать HTTPS webhook в MAX? При этом тестовый Long Polling будет отключён."))return;
-  try{
-    await api("/api/settings/max-webhook","POST",{url:$("max-webhook-url").value.trim()});
-    toast("Webhook зарегистрирован в MAX");
-    await loadSettings();
-  }catch(error){toast(error.message,true);}
-});
 $("switch-polling").addEventListener("click",async()=>{
-  if(!confirm("Отключить webhook и вернуться к тестовому Long Polling?"))return;
+  if(!confirm("Отключить старый webhook и перейти на Long Polling?"))return;
   try{
     await api("/api/settings/max-polling","POST",{});
-    toast("MAX переведён в тестовый режим");
+    toast("Long Polling включён");
     await loadSettings();
   }catch(error){toast(error.message,true);}
 });
@@ -922,6 +910,20 @@ async function loadMaxDiagnostics() {
       } else if(state.token_valid===true) {
         lines.push("Long Polling разрешён: конфликтующих webhook-подписок нет.");
       }
+    }
+    if(state.mode==="polling") {
+      const errors={
+        tls_certificate:"ОШИБКА TLS: Python не доверяет сертификату MAX. Установите необходимые CA в Debian и укажите SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt для служб termokontur и termokontur-max.",
+        authorization:"ОШИБКА: Long Polling получает отказ авторизации. Проверьте токен.",
+        rate_limit:"MAX временно ограничил количество запросов. Бот повторит попытку.",
+        connection:"Нет связи с API MAX из службы опроса. Проверьте DNS, прокси и исходящий HTTPS.",
+        api_error:"MAX возвращает ошибку API; проверьте журнал службы.",
+        invalid_response:"MAX возвращает неожиданный ответ; проверьте журнал службы.",
+        event_processing:"Предыдущее событие ещё обрабатывается; служба повторит попытку."
+      };
+      if(state.poll_last_error) lines.push(errors[state.poll_last_error]||"Ошибка опроса MAX, проверьте журнал службы.");
+      if(state.poll_last_success_at) lines.push("Последний успешный опрос: "+when(state.poll_last_success_at)+".");
+      else if(state.worker_running&&state.token_valid===true) lines.push("Успешных циклов опроса с текущим токеном пока нет.");
     }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");

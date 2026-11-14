@@ -78,12 +78,17 @@ def enqueue(update: dict) -> bool:
                     INSERT OR IGNORE INTO max_outbox(event_id, user_id, text, next_retry_at)
                     VALUES (?, ?, ?, ?)
                 """, (key, uid, reply[:4000], now))
-                callback_id = ((update.get("callback") or {}).get("callback_id")
-                               if update.get("update_type") == "message_callback" else None)
+                is_callback = update.get("update_type") == "message_callback"
+                callback_id = (update.get("callback") or {}).get("callback_id") if is_callback else None
+                # The button belongs to this bot's message; keep its ID so
+                # later text commands can edit the menu rather than post anew.
+                source_mid = ((update.get("message") or {}).get("body") or {}).get("mid") if is_callback else None
                 conn.execute("""
-                    INSERT OR IGNORE INTO max_outbox_ui(event_id, buttons_json, callback_id)
-                    VALUES (?, ?, ?)
-                """, (key, json.dumps(keyboard(uid), ensure_ascii=False), callback_id))
+                    INSERT OR IGNORE INTO max_outbox_ui(
+                        event_id, buttons_json, callback_id, origin_mid
+                    ) VALUES (?, ?, ?, ?)
+                """, (key, json.dumps(keyboard(uid), ensure_ascii=False),
+                      callback_id, str(source_mid) if source_mid else None))
             conn.execute("""
                 UPDATE max_inbox SET state='complete', updated_at=?
                 WHERE event_id=?
@@ -121,7 +126,7 @@ def pending(limit: int = 20) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("""
             SELECT o.event_id, o.user_id, o.text, o.attempts,
-                   u.buttons_json, u.callback_id
+                   u.buttons_json, u.callback_id, u.origin_mid
             FROM max_outbox o
             LEFT JOIN max_outbox_ui u ON u.event_id=o.event_id
             WHERE o.delivered_at IS NULL AND o.next_retry_at<=?
@@ -147,6 +152,63 @@ def mark_failed(key: str, attempts: int) -> None:
             WHERE event_id=? AND delivered_at IS NULL
         """, (next_time, key))
 
+def menu_message_id(uid: str) -> str | None:
+    """The last bot message containing the reusable menu for this user."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT message_id FROM max_menu_messages WHERE user_id=?", (str(uid),)
+        ).fetchone()
+    return row["message_id"] if row else None
+
+
+def set_menu_message_id(uid: str, mid: str) -> None:
+    if not isinstance(mid, str) or not mid:
+        return
+    with db.connect() as conn:
+        conn.execute("""
+            INSERT INTO max_menu_messages(user_id, message_id) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET message_id=excluded.message_id
+        """, (str(uid), mid))
+
+
+def _response_mid(response: httpx.Response) -> str | None:
+    # MAX POST /messages returns {message: {body: {mid: "..."}}}.
+    try:
+        payload = response.json()
+        mid = ((payload.get("message") or {}).get("body") or {}).get("mid")
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return str(mid) if mid else None
+
+
+async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> None:
+    """Prefer one editable menu per user; create only when editing is impossible.
+
+    Keep the MAX keyboard in every bot message, so it stays editable even
+    after the seven-day limit for ordinary text-only messages.
+    """
+    mid = menu_message_id(uid)
+    if mid:
+        try:
+            response = await client.put(
+                "/messages", params={"message_id": mid}, json={**message, "notify": False},
+            )
+            response.raise_for_status()
+            return
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (400, 404, 410):
+                raise
+            # The previous bot message was removed or can no longer be edited.
+            # Replace the tracked ID only after MAX accepts a new message.
+    response = await client.post(
+        "/messages", params={"user_id": uid}, json=message,
+    )
+    response.raise_for_status()
+    new_mid = _response_mid(response)
+    if new_mid:
+        set_menu_message_id(uid, new_mid)
+
+
 async def drain(client: httpx.AsyncClient) -> None:
     from .max_ui import keyboard
     for item in pending():
@@ -155,28 +217,24 @@ async def drain(client: httpx.AsyncClient) -> None:
         message = {"text": item["text"], "attachments": attachments}
         try:
             if item["callback_id"]:
-                # MAX callbacks must be acknowledged via /answers. Editing the
-                # clicked keyboard gives immediate feedback and preserves menu.
+                # /answers acknowledges a press and edits that SAME menu.
+                # Commands entered as text use PUT /messages on the last menu.
                 try:
                     response = await client.post(
                         "/answers", params={"callback_id": item["callback_id"]},
                         json={"message": message},
                     )
                     response.raise_for_status()
+                    if item["origin_mid"]:
+                        set_menu_message_id(item["user_id"], item["origin_mid"])
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code not in (400, 404, 410):
                         raise
-                    # MAX no longer accepts this callback (e.g. after outage).
-                    # The result still needs to be shown, without re-executing.
-                    response = await client.post(
-                        "/messages", params={"user_id": item["user_id"]}, json=message,
-                    )
-                    response.raise_for_status()
+                    # The callback expired while queued. Edit the existing
+                    # menu instead of creating an unnecessary new message.
+                    await _edit_or_post(client, item["user_id"], message)
             else:
-                response = await client.post(
-                    "/messages", params={"user_id": item["user_id"]}, json=message,
-                )
-                response.raise_for_status()
+                await _edit_or_post(client, item["user_id"], message)
         except httpx.HTTPError as exc:
             mark_failed(item["event_id"], item["attempts"])
             logger.warning("MAX message delivery failed for %s: %s", item["event_id"], exc)
