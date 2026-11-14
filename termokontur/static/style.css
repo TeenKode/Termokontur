@@ -494,3 +494,8 @@ html[data-theme="dark"] .building-day.with-alert{background:#492c37;color:#ffaab
 html[data-theme="dark"] .building-day.empty{background:#25374c;color:#a7b9cf}
 html[data-theme="dark"] .room-drilldown>summary{background:#1b2e43;border-color:var(--dk-border);color:#98e2cb}
 html[data-theme="dark"] .room-drilldown>summary:hover{background:#243e50}
+
+/* TLS status also follows the selected dark theme. */
+html[data-theme="dark"] .tls-details{background:#1c3043;border-color:#34536a;color:#d5e4f2}
+html[data-theme="dark"] .tls-details p{color:#d5e4f2}
+html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
