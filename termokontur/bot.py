@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from . import db, daily, settings, max_delivery
+from . import db, daily, settings, max_delivery, max_ui
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
@@ -93,11 +93,27 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
     return HELP
 
 def process_update(update: dict) -> tuple[str, str] | None:
+    """Accept private messages, bot starts and MAX callback button presses."""
     kind = update.get("update_type")
     if kind == "bot_started":
         user = update.get("user") or {}
         uid = user.get("user_id")
-        return (str(uid), HELP) if uid is not None else None
+        if uid is None or user.get("is_bot"):
+            return None
+        uid = str(uid)
+        payload = update.get("payload") or ""
+        return uid, max_ui.handle_start(uid, str(payload), f"start:{update.get('timestamp', '')}")
+    if kind == "message_callback":
+        callback = update.get("callback") or {}
+        user = callback.get("user") or {}
+        message = update.get("message") or {}
+        recipient = message.get("recipient") or {}
+        uid = user.get("user_id")
+        callback_id = callback.get("callback_id")
+        if uid is None or user.get("is_bot") or not callback_id or recipient.get("chat_type") != "dialog":
+            return None
+        uid = str(uid)
+        return uid, max_ui.handle_callback(uid, str(callback.get("payload") or ""), str(callback_id))
     if kind != "message_created":
         return None
     message = update.get("message") or {}
@@ -111,7 +127,18 @@ def process_update(update: dict) -> tuple[str, str] | None:
     mid = body.get("mid")
     if uid is None or not isinstance(text, str) or not mid:
         return None
-    return str(uid), interpret(str(uid), text, str(mid))
+    uid = str(uid)
+    stripped = text.strip()
+    if stripped.split(maxsplit=1)[0:1] == ["/start"]:
+        payload = stripped.split(maxsplit=1)
+        return uid, max_ui.handle_start(uid, payload[1].strip() if len(payload) > 1 else "", str(mid))
+    interactive = max_ui.handle_message(uid, text, str(mid))
+    if interactive is not None:
+        return uid, interactive
+    result = interpret(uid, text, str(mid))
+    if stripped.lower().startswith(("/bind ", "/unbind ")):
+        max_ui._set(uid)
+    return uid, result
 
 async def send_reminders(client: httpx.AsyncClient) -> None:
     """Send at most one reminder per user and local day, with bounded retries."""
@@ -124,7 +151,7 @@ async def send_reminders(client: httpx.AsyncClient) -> None:
         try:
             response = await client.post(
                 "/messages", params={"user_id": uid},
-                json={"text": daily.reminder_text(missing)},
+                json={"text": daily.reminder_text(missing), "attachments": max_ui.keyboard(uid)},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
