@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 COPY termokontur ./termokontur
 USER termokontur
 EXPOSE 8092
-CMD ["uvicorn", "termokontur.app:app", "--host", "0.0.0.0", "--port", "8092"]
+CMD ["python", "-m", "termokontur.server"]
