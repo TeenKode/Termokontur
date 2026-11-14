@@ -49,23 +49,83 @@
 
       <section id="view-overview" class="view">
         <div class="heading">
-          <div><h1>Обзор температуры</h1><p>Текущее состояние помещений по последним измерениям.</p></div>
+          <div><h1>Температура в школе</h1><p>Динамика среднесуточной температуры по кабинетам и контроль сбора показаний.</p></div>
           <button type="button" class="btn primary" id="quick-reading">+ Добавить измерение</button>
         </div>
-        <div class="metrics">
-          <article class="metric"><span class="metric-label">Всего помещений</span><strong id="count-total">0</strong><small>Под мониторингом</small></article>
-          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>Последние показания</small></article>
+        <div class="dashboard-hero">
+          <div class="dashboard-hero-main">
+            <span class="dashboard-eyebrow">СРЕДНЯЯ ТЕМПЕРАТУРА СЕГОДНЯ</span>
+            <div class="dashboard-hero-value" id="avg-today">—</div>
+            <p id="avg-today-desc">Ожидаем показания кабинетов</p>
+            <span id="avg-change" class="dashboard-change">Динамика появится после двух дней измерений</span>
+          </div>
+          <div class="dashboard-hero-coverage">
+            <span class="dashboard-eyebrow">ОХВАТ ПОМЕЩЕНИЙ СЕГОДНЯ</span>
+            <strong id="today-coverage">—</strong>
+            <p id="today-coverage-desc">Кабинеты с показаниями</p>
+            <progress id="coverage-progress" max="100" value="0" aria-label="Доля кабинетов с показаниями сегодня"></progress>
+            <small id="today-alerts">Отклонений по среднесуточной температуре: —</small>
+          </div>
+        </div>
+
+        <div class="panel dashboard-trend-panel">
+          <div class="panel-heading dashboard-trend-heading">
+            <div><h2>Средняя температура по дням</h2><p>Каждый кабинет учитывается один раз за день, независимо от числа измерений.</p></div>
+            <div class="dashboard-controls">
+              <label for="building-filter">Корпус
+                <select id="building-filter"><option value="">Все корпуса</option></select>
+              </label>
+              <label for="history-period">Период
+                <select id="history-period">
+                  <option value="7">7 дней</option>
+                  <option value="14" selected>14 дней</option>
+                  <option value="30">30 дней</option>
+                  <option value="90">90 дней</option>
+                </select>
+              </label>
+              <button type="button" class="btn secondary" id="history-export">↓ CSV</button>
+            </div>
+          </div>
+          <div id="history-state" class="history-state" role="status" aria-live="polite">Загружаем историю температур…</div>
+          <div id="history-content" hidden>
+            <div id="history-chart-frame" class="history-chart-frame">
+              <canvas id="history-chart" width="900" height="310" role="img" aria-label="График средней суточной температуры помещений"></canvas>
+              <div id="history-tooltip" class="history-tooltip" hidden></div>
+            </div>
+            <div class="history-legend"><span class="legend-line">Средняя по кабинетам</span><span class="legend-band">Разброс средних по кабинетам</span><span class="legend-muted">Дни без данных не соединяются</span></div>
+            <p id="history-empty" class="history-empty" hidden>За этот период нет показаний. После первого измерения здесь появится график.</p>
+            <details class="history-details">
+              <summary>Посмотреть значения по дням</summary>
+              <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинеты</th><th>Отклонения</th><th>Измерений</th></tr></thead><tbody id="history-table"></tbody></table></div>
+            </details>
+          </div>
+        </div>
+
+        <div class="metrics overview-metrics">
+          <article class="metric"><span class="metric-label">Всего помещений</span><strong id="count-total">0</strong><small>Активных кабинетов</small></article>
+          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>По последнему свежему показанию</small></article>
           <article class="metric"><span class="metric-label">Отклонения</span><strong id="count-alert" class="bad">0</strong><small>Ниже или выше нормы</small></article>
           <article class="metric"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">0</strong><small>Требуется измерение</small></article>
         </div>
+
+        <div class="panel dashboard-heatmap-panel">
+          <div class="panel-heading">
+            <div><h2>Температура по кабинетам</h2><p id="heatmap-description">Среднесуточная температура каждого кабинета за последние дни.</p></div>
+            <input id="heatmap-search" type="search" placeholder="Найти кабинет" aria-label="Поиск кабинета в таблице средних температур">
+          </div>
+          <div class="heatmap-guide"><span class="heatmap-guide-normal">В норме</span><span class="heatmap-guide-low">Ниже нормы</span><span class="heatmap-guide-high">Выше нормы</span><span class="heatmap-guide-empty">Нет показаний</span></div>
+          <div class="table-scroll heatmap-scroll"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
+          <p id="heatmap-empty" class="empty" hidden>Нет кабинетов по выбранному фильтру.</p>
+        </div>
+
         <div class="panel daily-panel">
           <div class="panel-heading"><div><h2>Сбор показаний за сегодня</h2><p id="daily-date">По времени сервера</p></div><strong id="daily-counts" class="daily-total">—</strong></div>
-          <div id="daily-missing" class="daily-missing" aria-live="polite">Загрузка...</div>
+          <div id="daily-missing" class="daily-missing" aria-live="polite">Загрузка…</div>
         </div>
         <div class="panel">
           <div class="panel-heading">
-            <div><h2>Помещения</h2><p>Статус по каждому кабинету</p></div>
-            <div class="filter-row"><input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета"><select id="building-filter" aria-label="Корпус"><option value="">Все корпуса</option></select></div>
+            <div><h2>Последние показания</h2><p>Статус каждого помещения по последнему измерению.</p></div>
+            <div class="filter-row"><input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета"></div>
           </div>
           <div class="table-scroll"><table><thead><tr><th>Помещение</th><th>Корпус</th><th>Температура</th><th>Норма</th><th>Получено</th><th>Статус</th></tr></thead><tbody id="overview-table"></tbody></table></div>
           <p id="overview-empty" class="empty" hidden>Помещения ещё не добавлены. Перейдите в раздел «Помещения».</p>
