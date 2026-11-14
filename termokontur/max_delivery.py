@@ -185,6 +185,43 @@ async def drain(client: httpx.AsyncClient) -> None:
         await asyncio.sleep(0.06)
 
 
+async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
+    """Refresh a legacy MAX subscription to receive button clicks.
+
+    MAX explicitly supports updating an existing subscription through POST
+    /subscriptions. Do not regenerate the secret: it must continue matching the
+    value validated by the inbound webhook endpoint.
+    Returns True if already current or successfully updated.
+    """
+    from . import settings
+    if settings.get("max_mode", "polling") != "webhook":
+        return False
+    url = settings.get("max_webhook_url", "") or ""
+    secret = settings.get("max_webhook_secret", "") or ""
+    if not url or not secret:
+        return False
+    response = await client.get("/subscriptions")
+    response.raise_for_status()
+    subscriptions = response.json().get("subscriptions", [])
+    if not isinstance(subscriptions, list):
+        raise ValueError("Invalid MAX subscriptions response")
+    current = next((s for s in subscriptions
+                    if isinstance(s, dict) and s.get("url") == url), None)
+    required = ("message_created", "bot_started", "message_callback")
+    # A null set of update types in MAX means all types are subscribed.
+    if current and (current.get("update_types") is None or
+                    set(required).issubset(set(current["update_types"]))):
+        return True
+    response = await client.post("/subscriptions", json={
+        "url": url, "secret": secret, "update_types": list(required),
+    })
+    response.raise_for_status()
+    if response.json().get("success") is not True:
+        raise ValueError("MAX did not accept subscription refresh")
+    logger.info("Updated MAX webhook subscription event types")
+    return True
+
+
 def queue_temperature_alerts() -> int:
     """Queue limited deviation alerts for users assigned to affected rooms."""
     from . import settings
