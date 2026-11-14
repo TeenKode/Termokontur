@@ -147,16 +147,45 @@ def initialize() -> None:
             buttons_json TEXT,
             callback_id TEXT
         );
+        CREATE TABLE IF NOT EXISTS notification_batches (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            text TEXT NOT NULL,
+            recipients INTEGER NOT NULL,
+            silent INTEGER NOT NULL DEFAULT 0,
+            payload_hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notification_recipients (
+            batch_id TEXT NOT NULL REFERENCES notification_batches(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            event_id TEXT NOT NULL UNIQUE,
+            delivered_at TEXT,
+            PRIMARY KEY(batch_id, user_id)
+        );
         CREATE TABLE IF NOT EXISTS max_menu_messages (
             user_id TEXT PRIMARY KEY,
             message_id TEXT NOT NULL
         );
         """)
         # Add optional callback source ID without changing existing installations.
-        if "origin_mid" not in {
+        ui_columns = {
             col["name"] for col in conn.execute("PRAGMA table_info(max_outbox_ui)")
-        }:
+        }
+        if "origin_mid" not in ui_columns:
             conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN origin_mid TEXT")
+        if "delivery_mode" not in ui_columns:
+            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'menu'")
+        if "notify" not in ui_columns:
+            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN notify INTEGER NOT NULL DEFAULT 1")
+        alert_columns = {
+            col["name"] for col in conn.execute("PRAGMA table_info(temperature_alert_state)")
+        }
+        if "last_reading_id" not in alert_columns:
+            conn.execute("ALTER TABLE temperature_alert_state ADD COLUMN last_reading_id INTEGER NOT NULL DEFAULT 0")
+        if "delivered_at" not in {
+            col["name"] for col in conn.execute("PRAGMA table_info(notification_recipients)")
+        }:
+            conn.execute("ALTER TABLE notification_recipients ADD COLUMN delivered_at TEXT")
 
 def room_list(active_only: bool = True) -> list[dict]:
     """Admin room catalog with MAX assignments, fetched without N+1 queries."""
