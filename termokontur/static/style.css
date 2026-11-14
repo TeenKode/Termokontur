@@ -155,3 +155,12 @@
 }
 @media(max-width:600px){.settings-summary-grid{grid-template-columns:1fr}.settings-summary-card{min-height:145px}.settings-pane .settings-panel{padding:17px}.settings-section-heading h2{font-size:19px}.settings-managed{display:none}.settings-save{align-items:stretch;flex-direction:column}.settings-save .btn{width:100%}}
 @media(prefers-reduced-motion:reduce){.settings-pane,.settings-dependent{animation:none;transition:none}}
+
+/* Shared feedback for all panel actions, including dynamically created buttons. */
+.operation-status{margin:14px 0 0;padding:12px 16px;border:1px solid #cfe6e1;background:#effaf6;color:#206a5b;border-radius:10px;font-size:13px;font-weight:600}
+.operation-status[data-kind="error"]{background:#fff2f2;border-color:#efb9be;color:#a33243}
+button.operation-busy{cursor:progress;opacity:.78}
+button.operation-busy::before{content:"";display:inline-block;width:13px;height:13px;margin-right:7px;vertical-align:-2px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:operation-spin .7s linear infinite}
+.toast.success{background:#176f5d}
+@keyframes operation-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){button.operation-busy::before{animation:none;border-style:dotted}}
