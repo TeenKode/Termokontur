@@ -517,11 +517,42 @@ function renderReadings(){
   for(const row of readings) {
     const tr=el("tr");cell(tr,when(row.observed_at));cell(tr,row.building);
     cell(tr,row.room_name);cell(tr,temperature(row.value),"temp");
-    cell(tr,sources[row.source]||row.source);tbody.append(tr);
+    cell(tr,sources[row.source]||row.source);
+    cell(tr,row.reporter_display||row.reporter||"—");
+    const actions=el("td");
+    const history=el("button","btn secondary",
+      row.corrections_count?"История ("+row.corrections_count+")":"Подробнее");
+    history.type="button";
+    history.setAttribute("aria-label","История показания: "+row.building+" / "+row.room_name);
+    history.addEventListener("click",()=>openReadingHistory(row));
+    actions.append(history);tr.append(actions);tbody.append(tr);
   }
   show("readings-empty",readings.length===0);
   drawChart();
 }
+async function openReadingHistory(reading){
+  try{
+    const changes=await api("/api/readings/"+reading.id+"/corrections");
+    const target=$("reading-history-content");target.replaceChildren();
+    $("reading-history-subtitle").textContent=reading.building+" / "+reading.room_name;
+    const original=changes.length?changes[0].old_value:reading.value;
+    const created=changes.length?changes[0].old_observed_at:reading.observed_at;
+    const first=el("div","reading-history-item");
+    first.append(el("strong","","Первоначальное показание: "+temperature(original)),
+      el("small","",when(created)+" · "+(reading.reporter_display||reading.reporter||"Автор неизвестен")));
+    target.append(first);
+    for(const correction of changes){
+      const change=el("div","reading-history-item");
+      change.append(el("strong","",temperature(correction.old_value)+" → "+temperature(correction.new_value)),
+        el("small","",when(correction.corrected_at)+" · Исправил(а): "+correction.actor_display));
+      target.append(change);
+    }
+    if(!changes.length)target.append(el("p","hint","Исправлений пока не было."));
+    $("reading-history-dialog").showModal();
+  }catch(error){toast(error.message,true);}
+}
+$("reading-history-close").addEventListener("click",()=>$("reading-history-dialog").close());
+$("reading-history-done").addEventListener("click",()=>$("reading-history-dialog").close());
 function drawChart(){
   const canvas=$("reading-chart"), parent=canvas.parentElement;
   const rectWidth=Math.max(200,parent.clientWidth-46), dpr=window.devicePixelRatio||1;

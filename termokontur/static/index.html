@@ -157,7 +157,7 @@
         <div class="panel">
           <div class="panel-heading"><h2>Последние измерения</h2><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
           <div class="chart-container"><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График последних измерений"></canvas><p class="chart-note">Последние показания выбранного помещения, °C</p></div>
-          <div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Корпус</th><th>Кабинет</th><th>°C</th><th>Источник</th></tr></thead><tbody id="readings-table"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Корпус</th><th>Кабинет</th><th>°C</th><th>Источник</th><th>Автор</th><th>Изменения</th></tr></thead><tbody id="readings-table"></tbody></table></div>
           <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
         </div>
       </section>
@@ -528,6 +528,14 @@
       <label>Температура, °C <input id="reading-value" type="number" min="-40" max="60" step="0.1" placeholder="21.5" required></label>
       <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button type="submit" value="save" class="btn primary">Записать показание</button></div>
     </form>
+  </dialog>
+
+  <dialog id="reading-history-dialog">
+    <div class="dialog-form">
+      <div class="dialog-head"><div><h2>История показания</h2><p id="reading-history-subtitle">Первоначальный замер и исправления сотрудников.</p></div><button type="button" id="reading-history-close" class="x-button" aria-label="Закрыть">×</button></div>
+      <div id="reading-history-content" class="reading-history-list" aria-live="polite"></div>
+      <div class="dialog-actions"><button type="button" class="btn secondary" id="reading-history-done">Закрыть</button></div>
+    </div>
   </dialog>
 
   <dialog id="max-codes-dialog">

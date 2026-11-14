@@ -837,6 +837,14 @@ def manual_reading(payload: ReadingIn):
 def readings(room_id: int | None = None, limit: int = Query(200, ge=1, le=1000)):
     return db.recent_readings(room_id=room_id, limit=limit)
 
+@app.get("/api/readings/{reading_id}/corrections", dependencies=[Depends(require_admin)])
+def reading_corrections(reading_id: int):
+    """Original reading and MAX corrections are visible only to administrators."""
+    history = db.reading_corrections(reading_id)
+    if history is None:
+        raise HTTPException(404, "Измерение не найдено")
+    return history
+
 def clean_cell(value) -> str:
     value = "" if value is None else str(value)
     if value.startswith(("=", "+", "-", "@", "\t", "\r")):
