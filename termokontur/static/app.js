@@ -967,6 +967,11 @@ const updatePhases=[
   ["switching","Переключение версии"],["verifying","Проверка запуска"],
   ["finishing","Завершение"]
 ];
+function updateElapsed(seconds){
+  if(!Number.isFinite(seconds)||seconds<0)return "";
+  const minutes=Math.floor(seconds/60),hours=Math.floor(minutes/60);
+  return hours?hours+" ч "+(minutes%60)+" мин":minutes?minutes+" мин "+(seconds%60)+" сек":seconds+" сек";
+}
 const updateStateLabels={
   idle:"Готово к проверке",queued:"Обновление в очереди",
   installing:"Выполняется обновление",success:"Обновление завершено",
@@ -1006,6 +1011,36 @@ function renderUpdateStatus(r){
   track.setAttribute("aria-valuenow",String(step));
   track.setAttribute("aria-valuetext",$("update-step-label").textContent);
   $("update-progress-fill").style.width=(step/updatePhases.length*100)+"%";
+  const phases=$("update-phase-list");
+  phases.replaceChildren();
+  for(const [index,item] of updatePhases.entries()){
+    const entry=el("li","update-phase-item",item[1]);
+    const done=state==="success"||state==="installing"&&index<stepIndex;
+    const current=active&&(state==="queued"?index===0:index===stepIndex);
+    if(done)entry.classList.add("done");
+    if(current)entry.classList.add("current");
+    entry.setAttribute("aria-current",current?"step":"false");
+    phases.append(entry);
+  }
+  const duration=r.duration_seconds;
+  const haveMeta=Boolean(r.started_at||r.target_revision);
+  show("update-meta",haveMeta);
+  $("update-elapsed").textContent=r.started_at
+    ?(active?"Выполняется: ":"Длительность: ")+updateElapsed(duration):"";
+  $("update-target").textContent=r.target_revision?"Целевая сборка: "+r.target_revision.slice(0,12):"";
+  const history=Array.isArray(r.history)?r.history:[];
+  const historyPanel=$("update-history"),historyList=$("update-history-list");
+  show("update-history",history.length>0);
+  historyList.replaceChildren();
+  for(const event of history){
+    const row=el("li","update-history-entry");
+    const stage=updatePhases.find(([key])=>key===event.phase);
+    const name=stage?stage[1]:event.phase==="success"?"Успешно":event.phase==="failed"?"Ошибка":"Событие";
+    const time=event.at?when(event.at):"";
+    row.append(el("strong","",name),el("span","",event.message||""),el("small","",time));
+    historyList.append(row);
+  }
+  if(state==="failed")historyPanel.open=true;
   const busy=active||updateRequesting;
   $("check-update").disabled=!r.supported||busy||updateChecking;
   $("install-update").disabled=!r.supported||!updateAvailable||busy||updateChecking;
@@ -1013,7 +1048,10 @@ function renderUpdateStatus(r){
   $("install-update").classList.toggle("busy",updateRequesting);
   $("check-update").textContent=updateChecking?"Проверяем…":"Проверить обновления";
   $("install-update").textContent=updateRequesting?"Отправляем запрос…":active?"Выполняется обновление…":"Установить обновление";
-  show("reload-after-update",state==="success"&&updateStartedHere);
+  show("reload-after-update",state==="success"&&(
+    updateStartedHere||!!(updateInstalledRevision&&r.installed_revision&&
+      updateInstalledRevision!==r.installed_revision)
+  ));
 }
 async function loadUpdateStatus(){
   if(updatePolling||updateChecking)return;
