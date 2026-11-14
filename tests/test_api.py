@@ -284,7 +284,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
 
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     expected = sha256(b"".join(
-        (static / name).read_bytes() for name in ("app.js", "style.css")
+        (static / name).read_bytes() for name in ("app.js", "style.css", "theme.js")
     )).hexdigest()[:16]
     assert _ASSET_FINGERPRINT == expected
     page = client.get("/")
