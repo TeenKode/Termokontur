@@ -1,7 +1,4 @@
-"""MAX bot: development mode long polling, no public IP required.
-
-Production deployments should switch to MAX webhooks behind trusted HTTPS.
-"""
+"""MAX bot with durable long polling; no public IP or incoming ports required."""
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +12,23 @@ from . import db, daily, settings, max_delivery, max_ui
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
+
+
+def _poll_failure_reason(exc: Exception) -> str:
+    """Return safe diagnostic codes instead of exposing transport internals."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code in (401, 403):
+            return "authorization"
+        if exc.response.status_code == 429:
+            return "rate_limit"
+        return "api_error"
+    if isinstance(exc, httpx.TransportError):
+        if "certificate verify failed" in str(exc).lower():
+            return "tls_certificate"
+        return "connection"
+    if isinstance(exc, max_delivery.ProcessingPending):
+        return "event_processing"
+    return "invalid_response"
 
 
 def _heartbeat(mode: str) -> None:
@@ -195,9 +209,12 @@ async def poll(token: str):
                 if next_marker is not None:
                     db.set_state("max_marker", str(next_marker))
                 await max_delivery.drain(client)
+                db.set_state("max_poll_last_success_at", db.utc_now())
+                db.set_state("max_poll_last_error", "")
                 backoff = 2
             except (httpx.HTTPError, ValueError, KeyError, max_delivery.ProcessingPending) as exc:
-                logger.warning("MAX API temporarily unavailable: %s", exc)
+                db.set_state("max_poll_last_error", _poll_failure_reason(exc))
+                logger.warning("MAX polling cycle failed: %s", exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 90)
 
