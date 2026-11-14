@@ -124,6 +124,13 @@ def status() -> dict:
     except OSError:
         age = None
     if age is not None:
+        # The request belongs to a new attempt, not a previous success/failure.
+        created = datetime.fromtimestamp(time.time() - age, tz=timezone.utc).isoformat()
+        result["history"] = []
+        result["target_revision"] = None
+        result["started_at"] = created
+        result["updated_at"] = created
+        result["duration_seconds"] = max(0, int(age))
         if age > QUEUED_STALLED_SECONDS:
             result["state"] = "failed"
             result["phase"] = "failed"
@@ -136,8 +143,7 @@ def status() -> dict:
             result["state"] = "queued"
             result["phase"] = "preparing"
             result["message"] = "Запрос принят. Ожидаем запуска системной службы."
-            result["updated_at"] = datetime.fromtimestamp(
-                time.time() - age, tz=timezone.utc).isoformat()
+
     if not result["message"]:
         result["message"] = "Можно проверить наличие новой версии."
     return result
