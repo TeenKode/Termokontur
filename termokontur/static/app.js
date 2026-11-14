@@ -911,6 +911,20 @@ async function loadMaxDiagnostics() {
         lines.push("Long Polling разрешён: конфликтующих webhook-подписок нет.");
       }
     }
+    if(state.mode==="polling") {
+      const errors={
+        tls_certificate:"ОШИБКА TLS: Python не доверяет сертификату MAX. Установите необходимые CA в Debian и укажите SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt для служб termokontur и termokontur-max.",
+        authorization:"ОШИБКА: Long Polling получает отказ авторизации. Проверьте токен.",
+        rate_limit:"MAX временно ограничил количество запросов. Бот повторит попытку.",
+        connection:"Нет связи с API MAX из службы опроса. Проверьте DNS, прокси и исходящий HTTPS.",
+        api_error:"MAX возвращает ошибку API; проверьте журнал службы.",
+        invalid_response:"MAX возвращает неожиданный ответ; проверьте журнал службы.",
+        event_processing:"Предыдущее событие ещё обрабатывается; служба повторит попытку."
+      };
+      if(state.poll_last_error) lines.push(errors[state.poll_last_error]||"Ошибка опроса MAX, проверьте журнал службы.");
+      if(state.poll_last_success_at) lines.push("Последний успешный опрос: "+when(state.poll_last_success_at)+".");
+      else if(state.worker_running&&state.token_valid===true) lines.push("Успешных циклов опроса с текущим токеном пока нет.");
+    }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
     if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");
