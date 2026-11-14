@@ -2,6 +2,7 @@
 const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
 const selectedMaxRooms = new Set();
+let activeMaxCodes = [], issuedMaxCodes = [];
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -176,12 +177,17 @@ function renderOverview() {
   }
   show("overview-empty", filtered.length===0);
 }
+function maxUserName(user){
+  return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
+    (user.username ? "@"+user.username : "MAX ID "+user.user_id);
+}
 function renderRooms(){
   const tbody=$("rooms-table");tbody.replaceChildren();
   const search=$("rooms-search").value.trim().toLocaleLowerCase("ru");
   const showInactive=$("show-inactive").checked;
   const matching=allRooms.filter(r=>(showInactive || r.active) &&
-    [r.name,r.building,r.floor,r.kind].some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
+    [r.name,r.building,r.floor,r.kind,...(r.max_users||[]).flatMap(u=>[u.first_name,u.last_name,u.username,u.user_id])]
+      .some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
   for(const room of matching) {
     const row=el("tr", room.active ? "" : "archived-room");
     cell(row,room.name);
@@ -189,6 +195,26 @@ function renderRooms(){
     if(!room.active)building.append(el("span","archived-label","Отключён"));
     cell(row,room.floor||"—");cell(row,room.kind);
     cell(row,room.min_temp+"–"+room.max_temp+" °C");
+    const maxCell=cell(row,"","max-users-cell");
+    const boundUsers=room.max_users||[];
+    if(!boundUsers.length)maxCell.append(el("span","max-unbound","Не привязан"));
+    else{
+      const list=el("div","max-user-list");
+      for(const user of boundUsers){
+        const entry=el("div","max-user-entry"),details=el("div","max-user-details");
+        details.append(el("strong","",maxUserName(user)));
+        details.append(el("small","",[
+          user.username?"@"+user.username:"",
+          "ID "+user.user_id
+        ].filter(Boolean).join(" · ")));
+        const remove=el("button","max-unbind","Отвязать");
+        remove.type="button";
+        remove.title="Отвязать пользователя "+maxUserName(user)+" от "+room.name;
+        remove.addEventListener("click",()=>unbindMax(room,user));
+        entry.append(details,remove);list.append(entry);
+      }
+      maxCell.append(list);
+    }
     const actions=cell(row,"");
     const duplicate=el("button","","Копировать");
     duplicate.title="Создать новый кабинет с теми же параметрами";
@@ -279,6 +305,14 @@ async function pairing(room){
     $("pairing-code").textContent=reply.code;
     $("pairing-dialog").showModal();
   } catch(error){toast(error.message,true);}
+}
+async function unbindMax(room,user){
+  if(!confirm("Отвязать «"+maxUserName(user)+"» от помещения «"+room.name+"»? После отвязки сотрудник не сможет отправлять показания для этого кабинета."))return;
+  try{
+    await api("/api/rooms/"+room.id+"/max-bindings/"+encodeURIComponent(user.user_id),"DELETE");
+    await refresh();
+    toast("Профиль MAX отвязан от помещения");
+  }catch(error){toast(error.message,true);}
 }
 async function restoreRoom(room){
   try{
