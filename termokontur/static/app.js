@@ -843,6 +843,7 @@ async function loadTlsStatus(){
     $("tls-proxy-warning").hidden=!(window.location.protocol==="https:"&&!state.active);
     const next=new URL(window.location.href);
     next.protocol=state.configured?"https:":"http:";
+    next.port=state.configured?"":"8092";
     $("tls-next-link").href=next.href;
     $("tls-next-link").textContent=next.href;
     $("tls-next").hidden=!state.restart_pending;

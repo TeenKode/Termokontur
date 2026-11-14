@@ -68,6 +68,7 @@ git config --global --add safe.directory /src
 cd /src
 bash scripts/install-debian.sh
 test -e /etc/systemd/system/termokontur-update.service
+grep -q 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/termokontur.service
 test -x /usr/local/sbin/termokontur-apply-update
 systemctl start termokontur.service
 for i in $(seq 1 30); do
