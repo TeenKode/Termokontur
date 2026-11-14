@@ -13,21 +13,96 @@ const el = (tag, className = "", value = "") => {
 };
 function toast(message, isError = false) {
   const target = $("toast");
-  target.textContent = message; target.className = "toast show" + (isError ? " error" : "");
+  target.textContent = message; target.className = "toast show" + (isError ? " error" : " success");
+  target.setAttribute("role",isError?"alert":"status");
+  target.setAttribute("aria-live",isError?"assertive":"polite");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { target.className = "toast"; }, 4200);
 }
-async function api(path, method = "GET", body) {
-  const opts = {method, credentials:"same-origin", headers:{"Accept":"application/json"}};
-  if(path.startsWith("/api/update/"))opts.cache="no-store";
-  if(body !== undefined) { opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(body); }
-  const response = await fetch(path, opts);
-  if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
-  if(!response.ok) {
-    let detail = response.statusText;
-    try { const error=await response.json(); detail=typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail); } catch {}
-    throw new Error(detail || "Ошибка запроса");
+/* Unified operation feedback. Background polling stays silent; user actions
+   show an in-button spinner and a polite, accessible global progress message. */
+let interactionButton=null, interactionAt=0, foregroundCount=0, networkFailed=false;
+const buttonOperations=new WeakMap();
+let operationRegion=null;
+function operationStatus(message,kind="working"){
+  if(!operationRegion){
+    operationRegion=document.createElement("div");
+    operationRegion.id="operation-status";
+    operationRegion.className="operation-status";
+    operationRegion.setAttribute("role","status");
+    operationRegion.setAttribute("aria-live","polite");
+    operationRegion.hidden=true;
+    const topbar=document.querySelector(".topbar");
+    (topbar?.parentNode||document.body).insertBefore(operationRegion,topbar?.nextSibling||null);
   }
-  return response.json();
+  operationRegion.textContent=message;
+  operationRegion.dataset.kind=kind;
+  operationRegion.hidden=!message;
+}
+document.addEventListener("click",event=>{
+  const button=event.target.closest("button");
+  if(button){interactionButton=button;interactionAt=Date.now();}
+},true);
+document.addEventListener("submit",event=>{
+  const button=event.submitter||event.target.querySelector('button[type="submit"]');
+  if(button){interactionButton=button;interactionAt=Date.now();}
+},true);
+function beginRequest(path,method){
+  const userAction=Date.now()-interactionAt<1200 && interactionButton?.isConnected;
+  if(!userAction)return ()=>{};
+  const button=interactionButton;
+  const existing=buttonOperations.get(button);
+  if(existing) {
+    existing.count++;
+  }else{
+    buttonOperations.set(button,{count:1,disabled:button.disabled});
+    button.classList.add("operation-busy");
+    button.setAttribute("aria-busy","true");
+    button.disabled=true;
+  }
+  foregroundCount++;
+  const label=method==="GET"?"Загружаем данные…":method==="DELETE"?"Удаляем…":"Сохраняем изменения…";
+  operationStatus(label);
+  return ()=>{
+    const current=buttonOperations.get(button);
+    if(current&&--current.count===0){
+      button.classList.remove("operation-busy");
+      button.removeAttribute("aria-busy");
+      button.disabled=current.disabled;
+      buttonOperations.delete(button);
+    }
+    foregroundCount=Math.max(0,foregroundCount-1);
+    if(!foregroundCount&&!networkFailed)operationStatus("");
+  };
+}
+window.addEventListener("offline",()=>{
+  networkFailed=true;operationStatus("Нет подключения к сети. Проверьте соединение и повторите действие.","error");
+});
+window.addEventListener("online",()=>{
+  networkFailed=false;
+  operationStatus(foregroundCount?"Восстанавливаем соединение…":"","working");
+});
+async function api(path, method = "GET", body) {
+  const finish=beginRequest(path,method);
+  try{
+    const opts = {method, credentials:"same-origin", headers:{"Accept":"application/json"}};
+    if(path.startsWith("/api/update/"))opts.cache="no-store";
+    if(body !== undefined) { opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(body); }
+    let response;
+    try {response=await fetch(path, opts);}
+    catch(error){
+      networkFailed=true;
+      operationStatus("Не удалось связаться с сервером. Проверьте подключение и повторите действие.","error");
+      throw new Error("Нет связи с сервером. Проверьте сеть и повторите действие.");
+    }
+    if(networkFailed){networkFailed=false;operationStatus("");}
+    if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
+    if(!response.ok) {
+      let detail = response.statusText;
+      try { const error=await response.json(); detail=typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail); } catch {}
+      throw new Error(detail || "Ошибка запроса");
+    }
+    return response.json();
+  } finally {finish();}
 }
 function enterLogin() {
   show("login-screen",true); show("app-root",false); $("password").value="";
