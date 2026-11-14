@@ -78,16 +78,18 @@ def test_temperature_alerts_do_not_spam(client):
     settings.set_secret("max_token","the-max-token-will-be-longer-than-20")
     settings.update({"alerts_enabled":"1","alert_cooldown_minutes":"60"})
     db.add_reading(r["id"],16,"manual")
+    assert max_delivery.queue_temperature_alerts()==0
+    db.add_reading(r["id"],16,"ha")
     assert max_delivery.queue_temperature_alerts()==1
     assert max_delivery.queue_temperature_alerts()==0
     messages=max_delivery.pending()
     assert len(messages)==1
     assert "ниже минимума" in messages[0]["text"]
-    db.add_reading(r["id"],21,"manual")
+    db.add_reading(r["id"],21,"ha")
     assert max_delivery.queue_temperature_alerts()==0
-    db.add_reading(r["id"],26,"manual")
+    db.add_reading(r["id"],26,"ha")
     assert max_delivery.queue_temperature_alerts()==1
     assert len(max_delivery.pending())==2
     settings.update({"alerts_enabled":"0"})
-    db.add_reading(r["id"],16,"manual")
+    db.add_reading(r["id"],16,"ha")
     assert max_delivery.queue_temperature_alerts()==0

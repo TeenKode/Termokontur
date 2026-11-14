@@ -194,7 +194,11 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
             raise ValueError("Unknown MAX temperature action")
     _set(uid)
     verb = "Исправлено" if mode == "c" else "Сохранено"
-    return f"{verb}: {room['building']} / {room['name']} — {value:g} °C.\nВ любой момент можно изменить сегодняшний замер кнопкой в меню."
+    result = f"{verb}: {room['building']} / {room['name']} — {value:g} °C."
+    if value < room["min_temp"] or value > room["max_temp"]:
+        result += (f"\nВнимание: температура вне установленной нормы "
+                   f"({room['min_temp']:g}–{room['max_temp']:g} °C).")
+    return result + "\nВ любой момент можно изменить сегодняшний замер кнопкой в меню."
 
 
 def handle_callback(uid: str, payload: str, event_id: str) -> str:
