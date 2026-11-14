@@ -263,6 +263,10 @@ def set_max_token(payload: SecretIn):
         db.set_state("max_marker", "")
         db.set_state("max_poll_last_success_at", "")
         db.set_state("max_poll_last_error", "")
+        # The saved menu belongs to a specific bot, not just a MAX user.
+        # A newly configured bot must publish its own first menu message.
+        with db.connect() as conn:
+            conn.execute("DELETE FROM max_menu_messages")
     return {"configured": bool(configured_token)}
 
 
