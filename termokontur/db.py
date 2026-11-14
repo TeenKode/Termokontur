@@ -7,7 +7,8 @@ import os
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 def utc_now() -> str:
@@ -287,6 +288,103 @@ def dashboard(stale_hours: int = 26) -> dict:
             counts[status] += 1
             result.append(item)
     return {"counts": counts, "rooms": result, "generated_at": utc_now()}
+
+
+def dashboard_history(days: int = 14, timezone_name: str = "UTC",
+                      building: str = "", now: datetime | None = None) -> dict:
+    """Daily school average with equal weight for each reporting room.
+
+    First average multiple readings within one room and local calendar day,
+    then average those room-day values. Missing rooms are not treated as 0 °C.
+    Dates use the configured IANA timezone, including DST transitions.
+    """
+    if days not in (7, 14, 30, 90):
+        raise ValueError("Недопустимый период")
+    zone = ZoneInfo(timezone_name)
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    today = instant.astimezone(zone).date()
+    start_day = today - timedelta(days=days - 1)
+    start_utc = datetime.combine(start_day, time.min, tzinfo=zone).astimezone(timezone.utc)
+    end_utc = datetime.combine(today + timedelta(days=1), time.min, tzinfo=zone).astimezone(timezone.utc)
+    calendar = [(start_day + timedelta(days=i)).isoformat() for i in range(days)]
+
+    where_building = " AND p.building=?" if building else ""
+    args = (building,) if building else ()
+    totals: dict[tuple[int, str], list[float | int]] = {}
+    with connect() as conn:
+        rooms = [dict(row) for row in conn.execute(
+            "SELECT id, name, building, min_temp, max_temp FROM rooms p "
+            "WHERE p.active=1" + where_building + " ORDER BY p.building,p.name,p.id",
+            args,
+        )]
+        # The (room_id, observed_at) index makes the bounded scans efficient.
+        measurements = conn.execute(
+            "SELECT r.room_id, r.value, r.observed_at FROM rooms p "
+            "JOIN readings r ON r.room_id=p.id AND r.observed_at>=? AND r.observed_at<? "
+            "WHERE p.active=1" + where_building + " ORDER BY r.room_id,r.observed_at",
+            (start_utc.isoformat(timespec="seconds"), end_utc.isoformat(timespec="seconds"), *args),
+        )
+        for row in measurements:
+            observed = datetime.fromisoformat(row["observed_at"])
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            day = observed.astimezone(zone).date().isoformat()
+            if not calendar[0] <= day <= calendar[-1]:
+                continue
+            pair = totals.setdefault((row["room_id"], day), [0.0, 0])
+            pair[0] += row["value"]
+            pair[1] += 1
+
+    per_day: dict[str, list[tuple[float, float, float, int]]] = {
+        day: [] for day in calendar
+    }
+    by_room = []
+    for room in rooms:
+        samples = {}
+        averages = []
+        for day in calendar:
+            pair = totals.get((room["id"], day))
+            if pair is None:
+                continue
+            mean = pair[0] / pair[1]
+            averages.append(mean)
+            samples[day] = {"average": round(mean, 2), "count": pair[1]}
+            per_day[day].append((mean, room["min_temp"], room["max_temp"], pair[1]))
+        by_room.append({
+            **room,
+            "average": round(sum(averages) / len(averages), 2) if averages else None,
+            "days_reported": len(averages),
+            "daily": samples,
+        })
+
+    series = []
+    for day in calendar:
+        samples = per_day[day]
+        values = [item[0] for item in samples]
+        series.append({
+            "date": day,
+            "average": round(sum(values) / len(values), 2) if values else None,
+            "minimum": round(min(values), 2) if values else None,
+            "maximum": round(max(values), 2) if values else None,
+            "rooms_measured": len(values),
+            "rooms_total": len(rooms),
+            "coverage": round(100 * len(values) / len(rooms)) if rooms else 0,
+            "out_of_range": sum(not low <= val <= high for val, low, high, _ in samples),
+            "readings_count": sum(item[3] for item in samples),
+        })
+
+    return {
+        "timezone": timezone_name,
+        "days": days,
+        "building": building,
+        "rooms_total": len(rooms),
+        "series": series,
+        "rooms": by_room,
+        "generated_at": utc_now(),
+    }
+
 
 def issue_codes_bulk(room_ids: list[int], validity_minutes: int = 1440) -> list[dict]:
     """Issue new one-time MAX codes atomically for 1..250 active rooms.
