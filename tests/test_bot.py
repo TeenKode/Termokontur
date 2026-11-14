@@ -22,3 +22,19 @@ def test_bot_only_private_and_real_messages(client):
     assert process_update(msg)==("123",interpret("123","/help","m2"))
     msg["message"]["sender"]["is_bot"]=True
     assert process_update(msg) is None
+
+
+def test_polling_error_types_are_safe_and_actionable():
+    import httpx
+    from termokontur.bot import _poll_failure_reason
+
+    request = httpx.Request("GET", "https://platform-api2.max.ru/updates")
+    auth = httpx.HTTPStatusError(
+        "unauthorized", request=request,
+        response=httpx.Response(401, request=request),
+    )
+    assert _poll_failure_reason(auth) == "authorization"
+    tls = httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed", request=request)
+    assert _poll_failure_reason(tls) == "tls_certificate"
+    assert _poll_failure_reason(httpx.ConnectError("network down", request=request)) == "connection"
+    assert _poll_failure_reason(ValueError("internal event payload")) == "invalid_response"
