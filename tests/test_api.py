@@ -284,7 +284,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
 
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     expected = sha256(b"".join(
-        (static / name).read_bytes() for name in ("app.js", "style.css")
+        (static / name).read_bytes() for name in ("app.js", "style.css", "theme.js", "icon-32.png", "icon-192.png")
     )).hexdigest()[:16]
     assert _ASSET_FINGERPRINT == expected
     page = client.get("/")
@@ -293,8 +293,9 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert "__ASSET_FINGERPRINT__" not in page.text
     assert f'/static/app.js?v={expected}' in page.text
     assert f'/static/style.css?v={expected}' in page.text
+    assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "style.css"):
+    for filename in ("app.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"

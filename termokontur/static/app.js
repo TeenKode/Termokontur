@@ -363,7 +363,9 @@ function drawHistoryChart(){
   if(maximum-minimum<4){const mid=(minimum+maximum)/2;minimum=mid-2;maximum=mid+2;}
   const px=i=>left+(series.length===1?graphWidth/2:graphWidth*i/(series.length-1));
   const py=v=>top+(maximum-v)/(maximum-minimum)*graphHeight;
-  ctx.font="12px system-ui";ctx.strokeStyle="#eaf0f4";ctx.fillStyle="#8594a6";ctx.textAlign="right";ctx.lineWidth=1;
+  const dark=document.documentElement.dataset.theme==="dark";
+  const historyGrid=dark?"#354961":"#eaf0f4",historyText=dark?"#b4c5da":"#8594a6";
+  ctx.font="12px system-ui";ctx.strokeStyle=historyGrid;ctx.fillStyle=historyText;ctx.textAlign="right";ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const value=minimum+(maximum-minimum)*(4-i)/4,y=top+graphHeight*i/4;
     ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();
@@ -382,15 +384,15 @@ function drawHistoryChart(){
     for(let i=0;i<points.length;i++){
       if(points[i].average==null)continue;
       ctx.beginPath();ctx.arc(px(i),py(points[i].average),dashed?2.3:3.3,0,Math.PI*2);
-      ctx.fillStyle=dashed?color:"#fff";ctx.fill();
+      ctx.fillStyle=dashed?color:(dark?"#152438":"#fff");ctx.fill();
       if(!dashed){ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();}
     }
   }
   // On the school-wide view prioritize building lines, with the school mean
   // as a restrained dashed reference. When one building is selected, draw only it.
-  if(buildings.length>1)line(series,"#6a7b8d",true);
+  if(buildings.length>1)line(series,dark?"#a5bacc":"#6a7b8d",true);
   buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
-  ctx.textAlign="center";ctx.fillStyle="#8090a4";ctx.font="11px system-ui";
+  ctx.textAlign="center";ctx.fillStyle=historyText;ctx.font="11px system-ui";
   const step=Math.max(1,Math.ceil(series.length/7));
   for(let i=0;i<series.length;i++){
     if(i%step!==0&&i!==series.length-1)continue;
@@ -534,7 +536,9 @@ function drawChart(){
   const min=values.length?Math.floor(Math.min(...values)-1):16;
   const max=values.length?Math.ceil(Math.max(...values)+1):26;
   const span=Math.max(1,max-min);
-  ctx.font="11px system-ui";ctx.textAlign="right";ctx.strokeStyle="#e5ebf1";ctx.fillStyle="#8492a7";ctx.lineWidth=1;
+  const dark=document.documentElement.dataset.theme==="dark";
+  const chartGrid=dark?"#354961":"#e5ebf1",chartText=dark?"#b4c4d9":"#8492a7";
+  ctx.font="11px system-ui";ctx.textAlign="right";ctx.strokeStyle=chartGrid;ctx.fillStyle=chartText;ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const y=top+h*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(rectWidth-right,y);ctx.stroke();
     ctx.fillText((max-span*i/4).toFixed(1),left-8,y+4);
@@ -545,7 +549,7 @@ function drawChart(){
   ctx.beginPath();data.forEach((x,i)=>{if(i===0)ctx.moveTo(px(i),py(x.value));else ctx.lineTo(px(i),py(x.value));});
   ctx.strokeStyle="#14a786";ctx.lineWidth=2.5;ctx.stroke();
   data.forEach((x,i)=>{ctx.beginPath();ctx.arc(px(i),py(x.value),3,0,Math.PI*2);ctx.fillStyle="#14a786";ctx.fill();});
-  ctx.fillStyle="#8492a7";ctx.textAlign="center";
+  ctx.fillStyle=chartText;ctx.textAlign="center";
   ctx.fillText(when(data[0].observed_at),left+55,height-8);
   if(data.length>1)ctx.fillText(when(data[data.length-1].observed_at),rectWidth-right-55,height-8);
 }

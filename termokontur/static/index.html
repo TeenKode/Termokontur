@@ -7,12 +7,14 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png?v=__ASSET_FINGERPRINT__">
   <link rel="apple-touch-icon" sizes="192x192" href="/static/icon-192.png?v=__ASSET_FINGERPRINT__">
   <title>Термоконтур — мониторинг температуры</title>
+  <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
     <div class="login-card">
+      <button type="button" class="theme-toggle login-theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
       <div class="brand large"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
       <h1>Контроль температуры</h1>
       <p>Единая панель мониторинга помещений и журнал измерений.</p>
@@ -44,6 +46,7 @@
       <header class="topbar">
         <div class="eyebrow">МОНИТОРИНГ МИКРОКЛИМАТА</div>
         <div class="topbar-actions">
+          <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
           <span id="updated-at" class="muted">—</span>
           <button type="button" id="refresh" class="btn secondary">↻ Обновить</button>
         </div>
@@ -179,6 +182,7 @@
             <button type="button" class="settings-nav-button active" data-settings-target="summary" aria-current="page">Обзор системы</button>
             <button type="button" class="settings-nav-button" data-settings-target="general">Организация</button>
             <button type="button" class="settings-nav-button" data-settings-target="notifications">Уведомления</button>
+            <button type="button" class="settings-nav-button" data-settings-target="appearance">Внешний вид</button>
             <span class="settings-nav-caption">ПОДКЛЮЧЕНИЯ</span>
             <button type="button" class="settings-nav-button" data-settings-target="max">Бот MAX</button>
             <button type="button" class="settings-nav-button" data-settings-target="sensors">Датчики и API</button>
@@ -227,6 +231,7 @@
                   <small id="settings-summary-build">—</small>
                   <button type="button" data-settings-target="updates">Проверить обновления</button>
                 </article>
+                <article class="settings-summary-card"><span class="settings-summary-label">Оформление</span><strong id="settings-summary-theme">Как на устройстве</strong><small>Настройка для этого браузера</small><button type="button" data-settings-target="appearance">Изменить тему</button></article>
               </div>
               <div class="settings-guidance">
                 <h3>Быстрая проверка после настройки</h3>
@@ -245,6 +250,18 @@
                   <p class="hint">Если новых измерений нет дольше заданного времени, помещение отображается без актуальных данных.</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="general-save-feedback" role="status" aria-live="polite">Изменения сохраняются после нажатия кнопки.</span><button type="submit" class="btn primary">Сохранить</button></div>
                 </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="appearance" hidden>
+              <div class="settings-section-heading"><h2>Внешний вид</h2><p>Тема интерфейса без перезагрузки страницы.</p></div>
+              <article class="panel settings-panel">
+                <h3>Оформление панели</h3>
+                <div class="theme-choices" role="radiogroup" aria-label="Выбор оформления">
+                  <label class="theme-choice"><input type="radio" name="theme-preference" value="system"><span class="theme-preview theme-preview-system" aria-hidden="true"></span><span class="theme-choice-title">Как на устройстве</span><small>Автоматически, по теме системы</small></label>
+                  <label class="theme-choice"><input type="radio" name="theme-preference" value="light"><span class="theme-preview" aria-hidden="true"></span><span class="theme-choice-title">Светлая</span><small>Светлая рабочая панель</small></label>
+                  <label class="theme-choice"><input type="radio" name="theme-preference" value="dark"><span class="theme-preview theme-preview-dark" aria-hidden="true"></span><span class="theme-choice-title">Тёмная</span><small>Приглушённые поверхности и ясные показатели</small></label>
+                </div>
+                <p class="hint">Изменения применяются сразу и сохраняются в этом браузере. Другие пользователи и настройки сервера не затрагиваются.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="notifications" hidden>
