@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +23,30 @@ image = (build / 'firmware.bin').read_bytes()
 version = image[48:80].split(b'\0', 1)[0].decode()
 payload = {name: (build / name).read_bytes() for name in (
     'firmware.bin', 'bootloader.bin', 'partitions.bin', 'ota_data_initial.bin')}
+with tempfile.TemporaryDirectory(prefix='sensor-merge-') as tmp:
+    merged = Path(tmp) / 'factory.bin'
+    subprocess.run([sys.executable, '-m', 'esptool', '--chip', 'esp32c3',
+                    'merge_bin', '-o', str(merged), '--flash_mode', 'dio',
+                    '--flash_freq', '80m', '--flash_size', '4MB',
+                    '0x0', str(build / 'bootloader.bin'),
+                    '0x8000', str(build / 'partitions.bin'),
+                    '0xf000', str(build / 'ota_data_initial.bin'),
+                    '0x20000', str(build / 'firmware.bin')], check=True)
+    factory = merged.read_bytes()
+    # merge_bin may patch the bootloader header; all other parts must match.
+    for offset, name in ((0x8000, 'partitions.bin'),
+                         (0xf000, 'ota_data_initial.bin'), (0x20000, 'firmware.bin')):
+        assert factory[offset:offset + len(payload[name])] == payload[name], name
+    assert len(factory) == 0x20000 + len(image)
+    assert factory[0x9000:0xf000] == b'\xff' * 0x6000
+    payload['factory.bin'] = factory
+payload['web-manifest.json'] = (json.dumps({
+    'name': 'Termokontur sensor (initial installation)', 'version': version,
+    'builds': [{'chipFamily': 'ESP32-C3',
+                'parts': [{'path': 'factory.bin', 'offset': 0}]}]
+}, indent=2) + '\n').encode()
 payload['flash-sensor.py'] = (ROOT / 'scripts/flash-sensor.py').read_bytes()
-for name in ('BENCH.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md'):
+for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md'):
     payload[name] = (ROOT / 'docs/sensors' / name).read_bytes()
 manifest = {'version': version, 'source_commit': commit, 'chip': 'esp32c3',
             'flash_size': '4MB', 'files': {

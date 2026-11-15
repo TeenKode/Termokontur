@@ -7,6 +7,7 @@ ESP32-C3 SuperMini + SHT40 + BL-5C + TP4056 Type-C с защитой. Измер
 ## Файлы
 
 - [BENCH.md](BENCH.md) — первая прошивка и пошаговая приёмка одного прототипа с ведомостью результатов.
+- [FLASHING.md](FLASHING.md) — готовые браузерные флешеры, единый factory.bin и встраивание в панель.
 - `firmware/sensor/` — проект PlatformIO / ESP-IDF, два OTA-слота, журнал Flash.
 - `termokontur/sensors.py` — регистрация, устройства, миграция SQLite, пакеты, настройки, образы OTA.
 - `termokontur/sensor_mqtt.py` — MQTT Discovery и очередь доставки.
@@ -14,7 +15,7 @@ ESP32-C3 SuperMini + SHT40 + BL-5C + TP4056 Type-C с защитой. Измер
 - [HARDWARE.md](HARDWARE.md) — соединения, BOM, питание, зарядка, стендовые проверки.
 - [PROTOCOL.md](PROTOCOL.md) — протокол, номера записей, время, ошибки и ограничения.
 
-Комплект для стенда из чистого закоммиченного checkout: установите `platformio==6.1.18` в Python-окружение и выполните `python scripts/package-sensor.py`. Скрипт собирает и проверяет прошивку, затем создаёт `dist/termokontur-sensor-<версия>-<commit>-bench.zip` с четырьмя образами, скриптом первой записи, инструкциями, manifest и SHA-256. В CI тот же ZIP входит в артефакт `termokontur-sensor-esp32c3`. В панель OTA загружайте только `firmware.bin`.
+Комплект для стенда из чистого закоммиченного checkout: установите `platformio==6.1.18 esptool==4.5.1` в Python-окружение и выполните `python scripts/package-sensor.py`. Скрипт собирает и проверяет прошивку, затем создаёт `dist/termokontur-sensor-<версия>-<commit>-bench.zip` с четырьмя образами, скриптом первой записи, инструкциями, manifest и SHA-256. В CI тот же ZIP входит в артефакт `termokontur-sensor-esp32c3`. В панель OTA загружайте только `firmware.bin`.
 
 ## Установка панели
 

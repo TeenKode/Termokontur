@@ -25,7 +25,7 @@ jobs:
           key: platformio-sensor-${{ runner.os }}-6.9.0-${{ hashFiles('firmware/sensor/platformio.ini') }}
       - name: Build ESP32-C3 image and rollback bootloader
         run: |
-          python -m pip install platformio==6.1.18
+          python -m pip install platformio==6.1.18 esptool==4.5.1
           python scripts/package-sensor.py
       - uses: actions/upload-artifact@v4
         with:
