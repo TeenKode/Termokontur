@@ -26,13 +26,13 @@ jobs:
       - name: Build ESP32-C3 image and rollback bootloader
         run: |
           python -m pip install platformio==6.1.18
-          pio run -d firmware/sensor
-          python scripts/check-sensor-build.py
+          python scripts/package-sensor.py
       - uses: actions/upload-artifact@v4
         with:
           name: termokontur-sensor-esp32c3
           include-hidden-files: true
           path: |
+            dist/termokontur-sensor-*-bench.zip
             firmware/sensor/.pio/build/esp32-c3-supermini/firmware.bin
             firmware/sensor/.pio/build/esp32-c3-supermini/bootloader.bin
             firmware/sensor/.pio/build/esp32-c3-supermini/partitions.bin
