@@ -46,7 +46,7 @@ payload['web-manifest.json'] = (json.dumps({
                 'parts': [{'path': 'factory.bin', 'offset': 0}]}]
 }, indent=2) + '\n').encode()
 payload['flash-sensor.py'] = (ROOT / 'scripts/flash-sensor.py').read_bytes()
-for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md', 'SETUP.md', 'SCHEMATICS.md'):
+for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md', 'SETUP.md', 'SCHEMATICS.md', 'USB-ONBOARDING.md'):
     payload[name] = (ROOT / 'docs/sensors' / name).read_bytes()
 # Preserve relative Markdown image links inside the offline kit.
 for folder in ('images', 'schematics'):

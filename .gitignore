@@ -12,3 +12,5 @@ dist/
 
 .pio/
 firmware/sensor/sdkconfig.esp32-c3-supermini
+
+scripts/vendor-flasher/node_modules/

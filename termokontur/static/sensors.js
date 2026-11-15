@@ -15,8 +15,10 @@ function sensorRoomOptions(select,chosen){select.replaceChildren();for(const r o
 async function refreshSensors(){
   $("sensor-state").textContent="Загружаем датчики…";
   try{
-    const [devices,active,mqtt]=await Promise.all([api("/api/sensors/devices"),api("/api/rooms"),api("/api/sensors/mqtt")]);
+    const [devices,active,mqtt,claims]=await Promise.all([api("/api/sensors/devices"),api("/api/rooms"),api("/api/sensors/mqtt"),api("/api/sensors/claims")]);
     sensorDevices=devices;rooms=active;
+    if(typeof renderSensorClaims==="function")renderSensorClaims(claims);
+    if(typeof refreshInstaller==="function")refreshInstaller().catch(()=>{});
     const cards=$("sensor-cards");cards.replaceChildren();
     for(const d of devices){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
@@ -42,6 +44,7 @@ async function openSensor(id){
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
     $("sensor-detail").hidden=false;$("sensor-title").textContent=d.name;
     $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");configForm.replaceChildren();
     for(const [key,label,min,max] of sensorConfigFields){const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
@@ -68,7 +71,7 @@ function drawSensorChart(){
   ctx.fillText(sensorWhen(first),left,248);if(points.length>1)ctx.fillText(sensorWhen(last),Math.max(left,right-110),248);
   for(const [key,color,min,max] of [["temperature","#14a786",lo,hi],["humidity","#508de2",0,100]]){
     ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();let previous=null;
-    for(const p of points){const x=left+(p.measured_at-first)/range*(right-left),y=bottom-(p[key]-min)/(max-min)*(bottom-top);
+    for(const p of points){if(p[key]===null||!Number.isFinite(p[key])){previous=null;continue;}const x=left+(p.measured_at-first)/range*(right-left),y=bottom-(p[key]-min)/(max-min)*(bottom-top);
       if(previous===null||p.seq!==previous.seq+1||p.measured_at-previous.measured_at>2*p.interval_s)ctx.moveTo(x,y);else ctx.lineTo(x,y);previous=p;
     }ctx.stroke();
   }
@@ -81,7 +84,7 @@ $("sensor-code-copy").addEventListener("click",async()=>{try{await navigator.cli
 $("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-refresh").addEventListener("click",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
 $("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled:$("sensor-enabled").checked});await refreshSensors();await openSensor(sensorSelected);toast("Привязка сохранена");}catch(e){toast(e.message,true);}});
-$("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать текущий ключ? Для восстановления связи потребуется настроить плату с новым кодом."))return;try{revealSensorCode(await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST"));}catch(e){toast(e.message,true);}});
+$("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать текущий ключ? Для восстановления связи потребуется настроить плату с новым кодом."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Подключите плату по USB для повторной авторизации либо подтвердите её следующую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-config-form").addEventListener("submit",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки ожидают следующего обмена");}catch(e){toast(e.message,true);}});
 $("sensor-ota-form").addEventListener("submit",async e=>{e.preventDefault();if(!$("sensor-firmware").value)return;try{await api("/api/sensors/devices/"+sensorSelected+"/ota?firmware_id="+encodeURIComponent($("sensor-firmware").value),"PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление назначено");}catch(e){toast(e.message,true);}});
 $("sensor-ota-cancel").addEventListener("click",async()=>{try{await api("/api/sensors/devices/"+sensorSelected+"/ota","PUT");await refreshSensors();await openSensor(sensorSelected);toast("Назначение отменено");}catch(e){toast(e.message,true);}});

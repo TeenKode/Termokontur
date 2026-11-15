@@ -159,6 +159,8 @@ def initialize(conn):
     if "sensor_type" not in {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}:
         conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
     conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
+    from . import sensor_onboarding
+    sensor_onboarding.initialize(conn)
 
 
 def digest(value):
@@ -222,8 +224,8 @@ def router(require_admin):
     @r.get("/devices", dependencies=admin)
     def devices():
         with db.connect() as conn:
-            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building "
-                    "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id ORDER BY r.building,r.name,d.name")]
+            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building,i.fingerprint identity_fingerprint "
+                    "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id LEFT JOIN sensor_identities i ON i.device_id=d.id ORDER BY r.building,r.name,d.name")]
 
     @r.post("/devices", dependencies=admin)
     def create(payload: DeviceIn):
@@ -252,8 +254,15 @@ def router(require_admin):
         code = secrets.token_urlsafe(32)
         with db.connect() as conn:
             get_device(conn, device)
+            identity = conn.execute("SELECT fingerprint FROM sensor_identities WHERE device_id=?", (device,)).fetchone()
+            if identity:
+                conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
+                conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
+                event(conn, device, "rekey", "Доступ отозван; требуется повторная авторизация")
+                return {"device_id":device,"requires_authorization":True}
             conn.execute("UPDATE sensor_devices SET enrollment_hash=?,enrollment_until=?,token_hash=NULL WHERE id=?",
                          (digest(code), int(time.time())+7*86400, device))
+            conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
             event(conn, device, "rekey", "Ключ отозван; требуется настройка устройства")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 

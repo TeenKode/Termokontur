@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/sensors.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/sensor-onboarding.js?v=__ASSET_FINGERPRINT__" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
@@ -165,8 +166,10 @@
       </section>
 
       <section id="view-sensors" class="view" hidden>
-        <div class="heading"><div><h1>Автономные датчики</h1><p>Температура и влажность каждые 30 минут. Накопленные данные приходят раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn primary" type="button">+ Подключить датчик</button></div></div>
+        <div class="heading"><div><h1>Автономные датчики</h1><p>Температура и влажность каждые 30 минут. Накопленные данные приходят раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
         <p id="sensor-state" role="status" aria-live="polite"></p>
+        <details class="panel"><summary>Общий комплект для USB-прошивки</summary><p id="sensor-installer-status">Загружаем сведения о комплекте…</p><p>Загрузите стендовый ZIP версии 0.1.4 или новее один раз. Затем новые платы прошиваются прямо из панели.</p><form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form></details>
+        <article class="panel" id="sensor-claims-panel" hidden><h2>Ожидают авторизации</h2><p>Платы, настроенные по USB из этой панели, авторизуются автоматически. Здесь показаны устройства, подключившиеся самостоятельно.</p><div id="sensor-claims"></div></article>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="sensor-detail" class="panel" hidden>
           <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ История CSV</button></div>
@@ -627,5 +630,20 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик</h2><p>Создание разрешает регистрацию одной платы. Код действует 7 суток и погасится после первого обмена.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
 <dialog id="sensor-code-dialog"><h2>Настройка с телефона</h2><p>Подключитесь к Wi-Fi датчика, откройте http://192.168.4.1 и введите эти данные. Имя сети и пароль выводятся в USB-монитор при запуске режима настройки.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
+<dialog id="sensor-usb-dialog" class="sensor-usb-dialog"><form id="sensor-usb-form" class="dialog-form">
+<h2>Прошивка и подключение по USB</h2><p>Выберите помещение и параметры. Плата создаст собственный ключ, а панель автоматически разрешит ей работу.</p>
+<p id="sensor-usb-support" class="hint"></p>
+<div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
+<label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
+<label>Wi-Fi 2,4 ГГц<input id="usb-ssid" maxlength="32" required autocomplete="off"></label><label>Пароль рабочей Wi-Fi сети<input id="usb-wifi-password" type="password" maxlength="63" autocomplete="new-password"></label>
+<label>HTTPS-адрес этой панели для датчика<input id="usb-server" type="url" required></label></div>
+<p class="hint">Адрес должен вести к этой панели и быть доступен из сети датчика. Перед подключением USB SuperMini разомкните SW1 и отключите зарядный USB TP4056.</p>
+<details><summary>Дополнительные параметры</summary><label>Корневой сертификат PEM (для собственного CA)<textarea id="usb-ca" rows="3"></textarea></label><label>Сервер времени NTP<input id="usb-ntp" value="pool.ntp.org" maxlength="100" required></label>
+<label>Свой пароль точки настройки (необязательно)<input id="usb-setup-password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите пароль точки настройки<input id="usb-setup-confirm" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
+<label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Использовать случайный пароль точки настройки</label><div id="usb-config-fields" class="field-grid"></div><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
+<label class="archive-toggle"><input id="usb-new-board" type="checkbox"> Это новая или выведенная из эксплуатации плата: USB-прошивка сотрёт всю Flash, включая настройки и локальный журнал. Для работающего датчика используется OTA.</label>
+<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" role="status" aria-live="polite"></p><pre id="usb-log" class="usb-log" hidden></pre>
+<div class="heading-actions"><button id="usb-flash" class="btn primary" type="submit">Прошить и настроить</button><button id="usb-configure" class="btn secondary" type="button">Настроить уже прошитую</button><button id="usb-close" class="btn secondary" type="button">Закрыть</button></div>
+</form></dialog>
 </body>
 </html>

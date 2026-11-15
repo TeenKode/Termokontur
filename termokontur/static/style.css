@@ -575,3 +575,7 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 #sensor-code-dialog input{width:100%;margin:8px 0 18px}
 #sensor-events{padding-left:20px;line-height:1.7;overflow-wrap:anywhere}
 @media(max-width:600px){.sensor-form{display:block}.sensor-form label{margin:12px 0}.sensor-form button{margin:5px 5px 5px 0}.sensor-cards{grid-template-columns:1fr}}
+
+.sensor-usb-dialog{width:min(780px,96vw);max-height:90vh;overflow:auto}.sensor-usb-dialog form>p,.sensor-usb-dialog details{margin:14px 0}.sensor-usb-dialog progress{width:100%}.usb-log{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:12px}.sensor-claim{padding:16px 0;border-bottom:1px solid var(--border,#ddd)}.sensor-claim .sensor-form{margin-top:12px}
+
+.sensor-usb-dialog .archive-toggle{display:flex;flex-direction:row;gap:10px;white-space:normal;align-items:flex-start}.sensor-usb-dialog .archive-toggle input{flex:0 0 16px;width:16px;height:16px;margin-top:2px}.sensor-usb-dialog textarea{width:100%;max-width:100%}.sensor-usb-dialog details{min-width:0}.sensor-usb-dialog label{min-width:0}
