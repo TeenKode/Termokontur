@@ -222,3 +222,30 @@ def test_invalid_signatures_are_rate_limited_without_consuming_challenge(admin):
     with db.connect() as conn:
         assert conn.execute('SELECT 1 FROM sensor_auth_challenges WHERE nonce=?', (payload['challenge'],)).fetchone()
         assert conn.execute('SELECT count(*) FROM sensor_identities').fetchone()[0] == 0
+
+
+def test_bootstrap_uses_server_time_and_active_public_certificate(client, monkeypatch):
+    from termokontur import tls
+    monkeypatch.setattr(onboarding.time, 'time', lambda: 1794700100)
+    monkeypatch.setattr(tls, '_managed', True)
+    monkeypatch.setattr(tls, '_running_certificate', 'active-public-chain')
+    for response in (client.get('/api/sensors/bootstrap', headers={'Origin':'http://192.168.4.1'}),
+                     client.post('/api/sensors/bootstrap', json={})):
+        assert response.status_code == 200
+        assert response.json() == {'time':1794700100, 'ca':'active-public-chain'}
+        assert response.headers['cache-control'] == 'no-store'
+        assert response.headers['access-control-allow-origin'] == '*'
+        assert 'access-control-allow-credentials' not in response.headers
+
+
+def test_bootstrap_fails_closed_for_invalid_private_proxy_ca(client, monkeypatch, tmp_path):
+    from termokontur import tls
+    path = tmp_path / 'proxy-ca.pem'
+    monkeypatch.setenv('TERMOKONTUR_SENSOR_CA_FILE', str(path))
+    for content in (b'broken', b'PRIVATE KEY', b'x'*8001):
+        path.write_bytes(content)
+        response = client.get('/api/sensors/bootstrap')
+        assert response.status_code == 503
+        assert str(path) not in response.text
+    path.unlink()
+    assert client.get('/api/sensors/bootstrap').status_code == 503

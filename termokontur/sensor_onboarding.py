@@ -17,10 +17,10 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import Field, model_validator
 
-from . import db, sensors
+from . import db, sensors, tls
 
 MAX_KIT = 16 * 1024 * 1024
 MAX_FACTORY = 0x20000 + sensors.MAX_FIRMWARE
@@ -215,6 +215,21 @@ def inspect_kit(data):
 def router(require_admin):
     r = APIRouter(prefix='/api/sensors')
     admin = [Depends(require_admin)]
+
+    @r.get('/bootstrap')
+    @r.post('/bootstrap')
+    def bootstrap():
+        # Public metadata, authenticated by HTTPS. CORS lets the local setup
+        # page relay it over the physical setup connection, without cookies.
+        try:
+            certificate = tls.sensor_certificate()
+        except (OSError, ValueError, UnicodeError):
+            raise HTTPException(503, "Проверьте сертификат сервера для датчиков") from None
+        if len(certificate.encode("utf-8")) > 8000:
+            raise HTTPException(503, "Цепочка сертификатов превышает 8000 байт")
+        return JSONResponse({'time': int(time.time()), 'ca': certificate}, headers={
+            'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
+        })
 
     @r.post('/auth/challenge')
     def challenge(payload: Identity, request: Request):

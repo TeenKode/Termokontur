@@ -20,6 +20,7 @@ MAX_UPLOAD = 256 * 1024
 KEYS = ("tls_cert_path", "tls_key_path", "tls_key_password")
 _running_pair: tuple[str, str, str] = ("", "", "")
 _managed = False
+_running_certificate = ""
 
 
 def storage_dir() -> Path:
@@ -214,8 +215,9 @@ def state() -> dict:
 
 def server_kwargs() -> dict:
     """Called by the bundled launcher before starting Uvicorn."""
-    global _running_pair, _managed
+    global _running_pair, _managed, _running_certificate
     _managed = True
+    _running_certificate = ""
     pair = current_pair()
     error = check_pair(*pair)
     if error:
@@ -225,8 +227,29 @@ def server_kwargs() -> dict:
     _running_pair = pair
     if not pair[0]:
         return {}
+    _running_certificate = b"".join(
+        cert.public_bytes(serialization.Encoding.PEM)
+        for cert in x509.load_pem_x509_certificates(Path(pair[0]).read_bytes())
+    ).decode("ascii")
     return {
         "ssl_certfile": pair[0],
         "ssl_keyfile": pair[1],
         "ssl_keyfile_password": pair[2],
     }
+
+
+def sensor_certificate() -> str:
+    """Only the active public chain; staged uploads and private keys never leave storage.
+
+    For private reverse proxies, the operator can supply their public CA chain
+    via TERMOKONTUR_SENSOR_CA_FILE. Public proxies use the built-in CA bundle.
+    """
+    path = os.getenv("TERMOKONTUR_SENSOR_CA_FILE", "")
+    if path:
+        raw = Path(path).read_bytes()
+        if len(raw) > 8000 or b"PRIVATE KEY" in raw:
+            raise ValueError("Invalid sensor CA chain")
+        if not x509.load_pem_x509_certificates(raw):
+            raise ValueError("Missing sensor CA certificate")
+        return raw.decode("ascii")
+    return _running_certificate if _managed else ""

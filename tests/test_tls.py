@@ -105,3 +105,33 @@ def test_removal_does_not_touch_external_certbot_files(admin, monkeypatch, tmp_p
     assert admin.delete("/api/tls/certificate").status_code == 200
     assert external_cert.exists() and external_key.exists()
     assert admin.get("/api/tls/status").json()["source"] == "environment"
+
+
+def test_sensors_receive_running_chain_until_restart(admin, monkeypatch):
+    # Uploaded replacement files delete the old paths. Retain the public chain
+    # in memory so sensors receive the cert the running HTTPS listener uses.
+    monkeypatch.setattr(tls, '_managed', False)
+    monkeypatch.setattr(tls, '_running_pair', ('', '', ''))
+    monkeypatch.setattr(tls, '_running_certificate', '')
+    first, first_key = pair()
+    assert post_pair(admin, first + first_key, first_key).status_code == 200
+    assert tls.sensor_certificate() == ''
+    tls.server_kwargs()
+    assert tls.sensor_certificate() == first.decode('ascii')
+    second, second_key = pair()
+    assert post_pair(admin, second, second_key).status_code == 200
+    response = admin.get('/api/sensors/bootstrap')
+    assert response.json()['ca'] == first.decode('ascii')
+    assert 'PRIVATE KEY' not in response.text
+    tls.server_kwargs()
+    assert tls.sensor_certificate() == second.decode('ascii')
+
+
+def test_sensor_ca_override_contains_only_public_certificates(admin, monkeypatch, tmp_path):
+    certificate, key = pair()
+    path = tmp_path / 'proxy-ca.pem'
+    monkeypatch.setenv('TERMOKONTUR_SENSOR_CA_FILE', str(path))
+    path.write_bytes(certificate)
+    assert admin.get('/api/sensors/bootstrap').json()['ca'] == certificate.decode('ascii')
+    path.write_bytes(certificate + key)
+    assert admin.get('/api/sensors/bootstrap').status_code == 503

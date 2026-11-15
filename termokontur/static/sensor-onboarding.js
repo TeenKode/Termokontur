@@ -1,12 +1,14 @@
 "use strict";
 let usbInstaller=null,usbDefaults=null,usbBusy=false,usbExpectedHardware=null;
+function usbServerBootstrapVersion(version){const m=/^(\d+)\.(\d+)\.(\d+)$/.exec(version||"");return Boolean(m&&(Number(m[1])>0||Number(m[2])>1||(Number(m[2])===1&&Number(m[3])>=5)));}
 const usbSupported=()=>Boolean(window.isSecureContext&&navigator.serial);
 const usbStatus=text=>{$("usb-status").textContent=text;};
 function usbClearSecrets(){for(const id of ["usb-wifi-password","usb-setup-password","usb-setup-confirm"])$(id).value="";}
 function usbSetBusy(value){usbBusy=value;for(const field of $("sensor-usb-form").querySelectorAll("input,select,textarea"))field.disabled=value||(["usb-setup-password","usb-setup-confirm"].includes(field.id)&&$("usb-setup-random").checked);for(const id of ["usb-flash","usb-configure","usb-close"])$(id).disabled=value||(!usbSupported()&&id!=="usb-close")||(id==="usb-flash"&&!usbInstaller);}
 async function refreshInstaller(){
   usbInstaller=await api("/api/sensors/installer");
-  $("sensor-installer-status").textContent=usbInstaller?"Доступна версия "+usbInstaller.version+" · "+Math.round(usbInstaller.size/1024)+" КиБ":"Загрузите ZIP прошивки версии 0.1.4 или новее.";
+  if(usbInstaller&&!usbServerBootstrapVersion(usbInstaller.version))usbInstaller=null;
+  $("sensor-installer-status").textContent=usbInstaller?"Доступна версия "+usbInstaller.version+" · "+Math.round(usbInstaller.size/1024)+" КиБ":"Загрузите ZIP прошивки версии 0.1.5 или новее.";
 }
 function renderSensorClaims(claims){
   const target=$("sensor-claims");if(!target)return;target.replaceChildren();$("sensor-claims-panel").hidden=!claims.length;
@@ -23,7 +25,7 @@ function renderSensorClaims(claims){
 $("sensor-usb-open").addEventListener("click",async()=>{
   try{
     await refreshInstaller();usbDefaults=(await api("/api/sensors/usb/options")).config;
-    sensorRoomOptions($("usb-room"));$("usb-server").value=location.origin;$("usb-ntp").value="pool.ntp.org";
+    sensorRoomOptions($("usb-room"));$("usb-server").value=location.origin;
     const fields=$("usb-config-fields");fields.replaceChildren();
     for(const [key,label,min,max] of sensorConfigFields){const wrap=el("label","",label),input=el("input");input.name=key;input.type="number";input.required=true;input.min=min;input.max=max;input.value=usbDefaults[key];wrap.append(input);fields.append(wrap);}
     $("sensor-usb-support").textContent=usbSupported()?"Настройки передаются подключённой плате по USB.":"Откройте панель по HTTPS в Chrome или Edge на компьютере. Для локальной разработки доступен localhost.";
@@ -34,19 +36,19 @@ function usbSettings(){
   const form=$("sensor-usb-form");if(!form.reportValidity())return null;
   const url=new URL($("usb-server").value);
   if(url.protocol!=="https:"||url.username||url.password||url.pathname!=="/"||url.search||url.hash)throw Error("Укажите HTTPS-адрес панели без пути и параметров: https://example.org");
+  if(url.origin!==location.origin)throw Error("Для настройки откройте панель на указанном HTTPS-сервере");
   if(!$("usb-name").value.trim())throw Error("Укажите название датчика");
   const encoder=new TextEncoder(),password=$("usb-wifi-password").value;
   const length=encoder.encode(password).length;
   if(password&&(length<8||length>63))throw Error("Проверьте длину пароля Wi-Fi: 8–63 байта");
   if(encoder.encode($("usb-ssid").value).length>32)throw Error("Название Wi-Fi превышает 32 байта");
-  if(encoder.encode($("usb-ca").value).length>8000)throw Error("Корневой сертификат слишком большой");
   if(!$("usb-setup-random").checked&&$("usb-setup-password").value!==$("usb-setup-confirm").value)throw Error("Пароли сети настройки не совпадают");
   const config={...usbDefaults,enabled:$("usb-measure-enabled").checked};
   for(const [key] of sensorConfigFields)config[key]=Number(form.elements[key].value);
   if(config.send_s<config.measure_s||config.cutoff_mv>config.wifi_min_mv||config.wifi_min_mv>config.ota_min_mv)throw Error("Передача должна быть не чаще измерений. Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление.");
   return {name:$("usb-name").value.trim(),room_id:Number($("usb-room").value),sensor_type:$("usb-type").value,config,
-    settings:{ssid:$("usb-ssid").value,password,server:url.origin,ca:$("usb-ca").value,ntp:$("usb-ntp").value,
-      setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked,epoch:Math.floor(Date.now()/1000)}};
+    settings:{ssid:$("usb-ssid").value,password,server:url.origin,
+      setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked}};
 }
 async function usbRun(flash){
   if(usbBusy)return;
@@ -73,6 +75,7 @@ async function usbRun(flash){
     serial=new usb.SensorSerial(port);await serial.open();
     const hello=await serial.request("hello");
     const fp=await usb.verifyIdentity(hello,usbExpectedHardware);
+    if(!usbServerBootstrapVersion(hello.firmware))throw Error("Для времени и сертификата от сервера обновите прошивку датчика до 0.1.5 или новее");
     if(hello.pending_records&&hello.sensor_type!==data.sensor_type)throw Error("Перед сменой типа передайте накопленные измерения на сервер");
     $("usb-identity").textContent="Плата "+hello.hardware_id+" · ключ "+fp.slice(0,16).match(/.{4}/g).join("–");
     const identity={public_key:hello.public_key,hardware_id:hello.hardware_id,sensor_type:data.sensor_type,firmware:hello.firmware};
@@ -81,6 +84,11 @@ async function usbRun(flash){
     const signed=await serial.request("sign",{message:challenge.message});
     const approval=await api("/api/sensors/onboard","POST",{...identity,challenge:challenge.challenge,signature:signed.signature,name:data.name,room_id:data.room_id,config:data.config});
     usbStatus("Доступ выдан. Передаём настройки по USB…");
+    const bootstrapResponse=await fetch(data.settings.server+"/api/sensors/bootstrap",{credentials:"omit",cache:"no-store"});
+    if(!bootstrapResponse.ok)throw Error("Не удалось получить время и сертификат сервера");
+    const bootstrap=await bootstrapResponse.json();
+    if(!Number.isInteger(bootstrap.time)||bootstrap.time<1700000000||bootstrap.time>4102444800||typeof bootstrap.ca!=="string"||new TextEncoder().encode(bootstrap.ca).length>8000)throw Error("Сервер вернул неверное время или сертификат");
+    data.settings.epoch=bootstrap.time;data.settings.ca=bootstrap.ca;
     const saved=await serial.request("configure",{...data.settings,device:approval.device_id,code:"",sensor_type:data.sensor_type,config:approval.config});
     if(!saved.saved)throw Error("Датчик не подтвердил сохранение настроек");
     usbClearSecrets();await refreshSensors();

@@ -636,9 +636,9 @@
 <div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
 <label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
 <label>Wi-Fi 2,4 ГГц<input id="usb-ssid" maxlength="32" required autocomplete="off"></label><label>Пароль Wi-Fi<input id="usb-wifi-password" type="password" maxlength="63" autocomplete="new-password"></label>
-<label>HTTPS-адрес панели<input id="usb-server" type="url" required></label></div>
+<label>HTTPS-адрес панели<input id="usb-server" readonly type="url" required></label></div>
 <p class="hint">Панель должна быть доступна из сети датчика. Перед подключением USB SuperMini разомкните SW1 и отключите USB зарядки TP4056.</p>
-<details><summary>Дополнительные параметры</summary><label>Корневой сертификат PEM (для собственного CA)<textarea id="usb-ca" rows="3"></textarea></label><label>Сервер времени NTP<input id="usb-ntp" value="pool.ntp.org" maxlength="100" required></label>
+<details><summary>Дополнительные параметры</summary><p class="hint">Время и сертификат передаются с выбранного сервера автоматически.</p>
 <label>Пароль сети настройки (необязательно)<input id="usb-setup-password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите пароль сети настройки<input id="usb-setup-confirm" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
 <label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Случайный пароль сети настройки</label><div id="usb-config-fields" class="field-grid"></div><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
 <label class="archive-toggle"><input id="usb-new-board" type="checkbox"> Подтверждаю удаление всех данных платы: настроек, ключа и журнала. Для обновления работающего датчика используйте его карточку.</label>
