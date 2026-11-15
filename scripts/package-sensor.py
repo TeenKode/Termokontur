@@ -48,6 +48,10 @@ payload['web-manifest.json'] = (json.dumps({
 payload['flash-sensor.py'] = (ROOT / 'scripts/flash-sensor.py').read_bytes()
 for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md', 'SETUP.md'):
     payload[name] = (ROOT / 'docs/sensors' / name).read_bytes()
+# Preserve relative Markdown image links inside the offline kit.
+for picture in sorted((ROOT / 'docs/sensors/images').rglob('*')):
+    if picture.is_file():
+        payload['images/' + picture.relative_to(ROOT / 'docs/sensors/images').as_posix()] = picture.read_bytes()
 manifest = {'version': version, 'source_commit': commit, 'chip': 'esp32c3',
             'flash_size': '4MB', 'files': {
                 name: {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
