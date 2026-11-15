@@ -28,6 +28,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "policy.hpp"
+#include "sensor_drivers.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -61,7 +62,7 @@ struct State {
 static Config cfg;
 static State state;
 static std::string ssid, password, server, device, code, token, ca,
-    ntp = "pool.ntp.org";
+    ntp = "pool.ntp.org", sensor_type = "sht4x";
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
@@ -161,6 +162,7 @@ static bool save_provision() {
   add(j, "token", token);
   add(j, "ca", ca);
   add(j, "ntp", ntp);
+  add(j, "sensor_type", sensor_type);
   auto s = stringify(j);
   cJSON_Delete(j);
   return save_blob("provision", s.c_str(), s.size() + 1);
@@ -190,8 +192,10 @@ static bool load_provision() {
   token = text(j, "token");
   ca = text(j, "ca");
   ntp = text(j, "ntp");
+  sensor_type = text(j, "sensor_type");
+  if (sensor_type.empty()) sensor_type = "sht4x";
   cJSON_Delete(j);
-  return !ssid.empty() && server.rfind("https://", 0) == 0 &&
+  return sensor::supported(sensor_type.c_str()) && !ssid.empty() && server.rfind("https://", 0) == 0 &&
          device.size() == 19 && (!code.empty() || !token.empty());
 }
 struct PartitionFlash : sensor::Flash {
@@ -415,55 +419,10 @@ static uint16_t battery_mv() {
   adc_oneshot_del_unit(adc);
   return ok ? (uint64_t)(total / 16) * cfg.adc_scale_ppm / 1000000 : 0;
 }
-static uint8_t crc8(const uint8_t *p, int n) {
-  uint8_t c = 255;
-  while (n--) {
-    c ^= *p++;
-    for (int i = 0; i < 8; i++)
-      c = c & 128 ? (c << 1) ^ 0x31 : c << 1;
-  }
-  return c;
-}
 static bool sensor_read(Record &r) {
-  if (charging())
-    return false;
-  i2c_config_t i{};
-  i.mode = I2C_MODE_MASTER;
-  i.sda_io_num = GPIO_NUM_6;
-  i.scl_io_num = GPIO_NUM_7;
-  i.sda_pullup_en = GPIO_PULLUP_DISABLE;
-  i.scl_pullup_en = GPIO_PULLUP_DISABLE;
-  i.master.clk_speed = 100000;
-  if (i2c_param_config(I2C_NUM_0, &i) != ESP_OK ||
-      i2c_driver_install(I2C_NUM_0, i.mode, 0, 0, 0) != ESP_OK) {
-    r.error = 2;
-    return true;
-  }
-  uint8_t cmd = 0xfd, b[6];
-  auto e =
-      i2c_master_write_to_device(I2C_NUM_0, 0x44, &cmd, 1, pdMS_TO_TICKS(100));
-  vTaskDelay(pdMS_TO_TICKS(10));
-  if (e == ESP_OK && !charging())
-    e = i2c_master_read_from_device(I2C_NUM_0, 0x44, b, 6, pdMS_TO_TICKS(100));
-  else
-    e = ESP_FAIL;
-  i2c_driver_delete(I2C_NUM_0);
-  if (charging())
-    return false;
-  if (e != ESP_OK) {
-    r.error = 2;
-    return true;
-  }
-  if (crc8(b, 2) != b[2] || crc8(b + 3, 2) != b[5]) {
-    r.error = 1;
-    return true;
-  }
-  r.temperature = lround((-45 + 175.0 * ((b[0] << 8) | b[1]) / 65535) * 1000);
-  r.humidity =
-      lround(std::max(0.0, std::min(100.0, -6 + 125.0 * ((b[3] << 8) | b[4]) /
-                                                    65535)) *
-             1000);
-  return true;
+  if (charging()) return false;
+  sensor::read_sensor(sensor_type.c_str(), r);
+  return !charging();
 }
 static void config_from(cJSON *j) {
   if (!cJSON_IsObject(j))
@@ -501,6 +460,7 @@ static bool enroll() {
   add(j, "code", code);
   add(j, "hardware_id", hw);
   add(j, "model", MODEL);
+  add(j, "sensor_type", sensor_type);
   auto b = stringify(j);
   cJSON_Delete(j);
   auto response = post("/api/sensors/enroll", b, false);
@@ -628,6 +588,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
     add(j, "model", MODEL);
+    add(j, "sensor_type", sensor_type);
     add(j, "firmware", FW_VERSION);
     num(j, "next_seq", state.next);
     num(j, "lost", lost);
@@ -663,7 +624,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
           cJSON_AddNullToObject(x, "humidity");
         } else {
           num(x, "temperature", r.temperature / 1000.0);
-          num(x, "humidity", r.humidity / 1000.0);
+          if (r.humidity == sensor::NO_HUMIDITY)
+            cJSON_AddNullToObject(x, "humidity");
+          else num(x, "humidity", r.humidity / 1000.0);
         }
         num(x, "battery_mv", r.battery);
         num(x, "interval_s", r.interval);
@@ -726,7 +689,7 @@ static std::string setup_nonce;
 static std::atomic<bool> configured{false};
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
-      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Заполните сеть Wi-Fi и данные из панели «Термоконтур».</p><form id="f"><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>Адрес сервера HTTPS<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Идентификатор датчика<input name="device" required></label><label>Код подключения<input name="code" required></label><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>На телефоне должны быть правильно выставлены дата и время.</small><script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
+      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Заполните сеть Wi-Fi и данные из панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>Адрес сервера HTTPS<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Идентификатор датчика<input name="device" required></label><label>Код подключения<input name="code" required></label><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>На телефоне должны быть правильно выставлены дата и время.</small><script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
   html.replace(html.find("NONCE"), 5, setup_nonce);
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, html.c_str(), html.size());
@@ -749,8 +712,10 @@ static esp_err_t setup_save(httpd_req_t *req) {
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca"), nt = text(j, "ntp");
+  std::string kind = text(j, "sensor_type");
+  if (kind.empty()) kind = "sht4x";
   int64_t epoch = number(j, "epoch");
-  bool valid = text(j, "csrf") == setup_nonce && !s.empty() && s.size() <= 32 &&
+  bool valid = sensor::supported(kind.c_str()) && text(j, "csrf") == setup_nonce && !s.empty() && s.size() <= 32 &&
                (p.empty() || (p.size() >= 8 && p.size() <= 63)) &&
                url.rfind("https://", 0) == 0 && url.size() > 8 &&
                url.size() <= 240 && url.find('@') == std::string::npos &&
@@ -759,6 +724,9 @@ static esp_err_t setup_save(httpd_req_t *req) {
                key.size() <= 100 && root.size() <= 8000 && !nt.empty() &&
                nt.size() <= 100 && epoch >= 1700000000 && epoch <= 4102444800;
   cJSON_Delete(j);
+  if (valid && kind != sensor_type && state.next != state.ack)
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                               "Upload pending measurements before changing sensor type");
   if (!valid)
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                "Check fields and phone clock");
@@ -772,6 +740,7 @@ static esp_err_t setup_save(httpd_req_t *req) {
   token.clear();
   ca = root;
   ntp = nt;
+  sensor_type = kind;
   state.saved_time = epoch;
   if (!save_provision() || !save_state())
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,

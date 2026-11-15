@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db
 
 MODEL = "c3-sht40-v1"
+SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "dht11", "dht22", "ds18b20"]
 MAX_FIRMWARE = 0x1C0000
 
 
@@ -64,6 +65,7 @@ class Enrollment(Strict):
     code: str = Field(min_length=32, max_length=100)
     hardware_id: str = Field(pattern=r"^[a-f0-9]{12}$")
     model: Literal["c3-sht40-v1"]
+    sensor_type: SensorType = "sht4x"
 
 
 class Record(Strict):
@@ -72,7 +74,7 @@ class Record(Strict):
     uptime_s: int = Field(ge=0, le=9007199254740991)
     measured_at: int | None = Field(default=None, ge=1700000000, le=4102444800)
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
-    temperature: float | None = Field(default=None, ge=-40, le=125, allow_inf_nan=False)
+    temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     battery_mv: int = Field(ge=2000, le=5000)
     interval_s: int = Field(ge=60, le=86400)
@@ -82,7 +84,7 @@ class Record(Strict):
     def coherent(self):
         if (self.time_quality == "unknown") != (self.measured_at is None):
             raise ValueError("Качество времени не соответствует временной метке")
-        if not self.error and (self.temperature is None or self.humidity is None):
+        if not self.error and self.temperature is None:
             raise ValueError("Нет измерения или описания ошибки")
         if self.error and (self.temperature is not None or self.humidity is not None):
             raise ValueError("Ошибочное измерение не должно содержать значения")
@@ -91,6 +93,7 @@ class Record(Strict):
 
 class Sync(Strict):
     model: Literal["c3-sht40-v1"]
+    sensor_type: SensorType = "sht4x"
     firmware: str = Field(pattern=r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
     records: list[Record] = Field(max_length=100)
     next_seq: int = Field(ge=1, le=9007199254740991)
@@ -108,6 +111,13 @@ class Sync(Strict):
         seqs = [r.seq for r in self.records]
         if seqs != sorted(set(seqs)) or any(s >= self.next_seq for s in seqs):
             raise ValueError("Неверная последовательность записей")
+        for record in self.records:
+            if not record.error:
+                if self.sensor_type == "ds18b20":
+                    if record.humidity is not None:
+                        raise ValueError("DS18B20 не измеряет влажность")
+                elif record.humidity is None:
+                    raise ValueError("Нет показания влажности")
         return self
 
 
@@ -144,6 +154,11 @@ def initialize(conn):
     CREATE TABLE IF NOT EXISTS sensor_mqtt_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
     INSERT OR IGNORE INTO sensor_migrations VALUES(1);
     """)
+    # Web and MAX services can start together; serialize the additive migration.
+    conn.execute("BEGIN IMMEDIATE")
+    if "sensor_type" not in {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}:
+        conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
+    conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
 
 
 def digest(value):
@@ -271,8 +286,8 @@ def router(require_admin):
                              (previous["id"],))
                 event(conn, previous["id"], "retired", "Плата перенесена в новую регистрацию; архив сохранён")
             try:
-                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=? WHERE id=?",
-                             (payload.hardware_id, digest(token), payload.device_id))
+                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=? WHERE id=?",
+                             (payload.hardware_id, digest(token), payload.sensor_type, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
             event(conn, payload.device_id, "enrolled", "Ключ выдан; код погасится после первого обмена")
@@ -284,6 +299,8 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
+            if payload.sensor_type != d["sensor_type"]:
+                raise HTTPException(409, "Тип датчика изменился; выполните повторную настройку")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]

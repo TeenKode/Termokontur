@@ -19,6 +19,10 @@ jobs:
           /tmp/journal-test
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/policy.cpp -o /tmp/policy-test
           /tmp/policy-test
+      - name: Sensor protocol and conversion vectors
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/test/hal -I firmware/sensor/include firmware/sensor/test/drivers.cpp -o /tmp/sensor-drivers-test
+          /tmp/sensor-drivers-test
       - uses: actions/cache@v4
         with:
           path: ~/.platformio
