@@ -29,10 +29,10 @@ export class SensorSerial {
   }
   failAll(error) {for(const item of this.pending.values()){clearTimeout(item.timer);item.reject(error);}this.pending.clear();}
   async request(cmd,data={}) {
-    if(this.closed||this.failure)throw this.failure||Error("USB закрыт");
+    if(this.closed||this.failure)throw this.failure||Error("USB-соединение закрыто");
     const id=crypto.randomUUID();
     const response=new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.pending.delete(id);reject(Error("Нет ответа датчика. Проверьте прошивку 0.1.4+, режим настройки и порт."));},this.timeout);
+      const timer=setTimeout(()=>{this.pending.delete(id);reject(Error("Нет ответа датчика. Проверьте порт, режим настройки и версию прошивки — нужна 0.1.4 или новее."));},this.timeout);
       this.pending.set(id,{resolve,reject,timer});
     });
     const writer=this.port.writable.getWriter();
@@ -42,14 +42,14 @@ export class SensorSerial {
     return response;
   }
   async close() {
-    this.closed=true;this.failAll(Error("USB закрыт"));
+    this.closed=true;this.failAll(Error("USB-соединение закрыто"));
     try{await this.reader?.cancel();await this.reading;}catch{}
     try{await this.port.close();}catch{}
   }
 }
 
 export async function verifyIdentity(hello,expectedHardware=null) {
-  if(hello.protocol!==1||!/^04[a-f0-9]{128}$/.test(hello.public_key)||!/^[a-f0-9]{12}$/.test(hello.hardware_id))throw Error("Плата не поддерживает защищённую USB-настройку");
+  if(hello.protocol!==1||!/^04[a-f0-9]{128}$/.test(hello.public_key)||!/^[a-f0-9]{12}$/.test(hello.hardware_id))throw Error("Плата не поддерживает настройку по USB. Нужна прошивка 0.1.4 или новее.");
   const bytes=Uint8Array.from(hello.public_key.match(/../g),b=>parseInt(b,16));
   const fp=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
   if(fp!==hello.fingerprint)throw Error("Отпечаток ключа не совпадает");
@@ -59,14 +59,14 @@ export async function verifyIdentity(hello,expectedHardware=null) {
 
 export async function flashFactory(port,image,metadata,{checkBoard,progress,log,sdk=null}) {
   const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",image)),b=>b.toString(16).padStart(2,"0")).join("");
-  if(image.byteLength!==metadata.size||digest!==metadata.sha256)throw Error("Контрольная сумма комплекта не совпадает");
+  if(image.byteLength!==metadata.size||digest!==metadata.sha256)throw Error("Контрольная сумма не совпадает. Загрузите комплект заново.");
   const {ESPLoader,Transport,md5}=sdk||await import("./vendor/esptool.bundle.js");
   const transport=new Transport(port,true);
   const loader=new ESPLoader({transport,baudrate:115200,terminal:{clean(){},write:log,writeLine:log},debugLogging:false});
   try {
     const chip=await loader.main();
-    if(!String(chip).includes("ESP32-C3"))throw Error("Нужна ESP32-C3; запись не начата");
-    if(!((await loader.getFlashSize())>=4096))throw Error("Нужна плата с Flash не меньше 4 МиБ; запись не начата");
+    if(!String(chip).includes("ESP32-C3"))throw Error("Нужна ESP32-C3. Запись не начата.");
+    if(!((await loader.getFlashSize())>=4096))throw Error("Нужна Flash-память не меньше 4 МиБ. Запись не начата.");
     const hardware=String(await loader.chip.readMac(loader)).replace(/:/g,"").toLowerCase();
     if(!/^[a-f0-9]{12}$/.test(hardware))throw Error("Не удалось прочитать MAC платы");
     await checkBoard(hardware);

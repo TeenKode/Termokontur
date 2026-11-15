@@ -95,16 +95,16 @@ def throttle(conn, request, fp, proof=False):
     for key, maximum in ((scope+"ip:"+ip, 60 if proof else 30), (scope+"key:"+fp, 32 if proof else 8)):
         row = conn.execute("SELECT count FROM sensor_auth_limits WHERE bucket=?", (key,)).fetchone()
         if row and row[0] >= maximum:
-            raise HTTPException(429, "Слишком много запросов авторизации; повторите через минуту")
+            raise HTTPException(429, "Слишком много запросов. Повторите через минуту.")
         if not row and conn.execute("SELECT count(*) FROM sensor_auth_limits").fetchone()[0] >= 512:
-            raise HTTPException(503, "Очередь авторизации занята")
+            raise HTTPException(503, "Подключение временно недоступно. Повторите позже.")
         conn.execute("INSERT INTO sensor_auth_limits VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET count=count+1", (key, now))
 
 
 def verify(conn, payload):
     row = conn.execute("SELECT * FROM sensor_auth_challenges WHERE nonce=?", (payload.challenge,)).fetchone()
     if not row or row['expires'] < time.time() or row['message'] != message(payload, payload.challenge):
-        raise HTTPException(401, "Запрос авторизации истёк или не соответствует устройству")
+        raise HTTPException(401, "Не удалось подтвердить плату. Повторите подключение.")
     try:
         public_key(payload.public_key).verify(bytes.fromhex(payload.signature), row['message'].encode(), ec.ECDSA(hashes.SHA256()))
     except (InvalidSignature, ValueError):
@@ -116,7 +116,7 @@ def remember(conn, identity, usb=False):
     fp = fingerprint(identity.public_key)
     existing = conn.execute("SELECT * FROM sensor_identities WHERE fingerprint=?", (fp,)).fetchone()
     if existing and existing['hardware_id'] != identity.hardware_id:
-        raise HTTPException(409, "Ключ уже связан с другой аппаратной платой")
+        raise HTTPException(409, "Этот ключ используется другой платой")
     if not existing:
         if not usb and conn.execute("SELECT count(*) FROM sensor_identities WHERE state='pending'").fetchone()[0] >= 64:
             raise HTTPException(503, "Список ожидающих устройств заполнен")
@@ -136,11 +136,11 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
         raise HTTPException(404, "Заявка не найдена")
     d = sensors.get_device(conn, identity['device_id']) if identity['device_id'] else None
     if d and d['room_id'] != room_id:
-        raise HTTPException(409, "Для переноса зарегистрированного датчика используйте его карточку")
+        raise HTTPException(409, "Смените помещение в карточке датчика")
     old = conn.execute("SELECT id,enabled FROM sensor_devices WHERE hardware_id=? AND id!=?", (identity['hardware_id'], d['id'] if d else '')).fetchone()
     if old:
         if old['enabled']:
-            raise HTTPException(409, "Эта плата уже зарегистрирована. Для обновления используйте OTA; при замене сначала отключите прежнюю запись")
+            raise HTTPException(409, "Плата уже подключена. Обновите её через карточку. Для замены сначала отключите старую запись.")
         conn.execute("UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,enrollment_hash=NULL WHERE id=?", (old['id'],))
     if not d:
         device = "tk-" + secrets.token_hex(8)
@@ -170,15 +170,15 @@ def inspect_kit(data):
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             names = z.namelist()
             if len(names) != len(set(names)) or any(PurePosixPath(n).is_absolute() or '..' in PurePosixPath(n).parts for n in names):
-                raise ValueError("Неверные пути или повторяющиеся файлы ZIP")
+                raise ValueError("ZIP повреждён: неверные пути или повторяющиеся файлы")
             if z.getinfo('manifest.json').file_size > 65536 or z.getinfo('factory.bin').file_size > MAX_FACTORY:
-                raise ValueError("Слишком большой образ или manifest")
+                raise ValueError("Файлы комплекта слишком большие")
             manifest = json.loads(z.read('manifest.json'))
             image = z.read('factory.bin')
         entry = manifest['files']['factory.bin']
         sha = hashlib.sha256(image).hexdigest()
         if entry['sha256'] != sha or entry['size'] != len(image):
-            raise ValueError("SHA-256 или размер factory.bin не совпадает с manifest")
+            raise ValueError("Комплект повреждён: проверка factory.bin не пройдена")
         if not 0x20100 <= len(image) <= MAX_FACTORY or image[0] != 0xe9 or struct.unpack_from('<H', image, 12)[0] != 5:
             raise ValueError("Нужен заводской образ ESP32-C3")
         app = image[0x20000:]
@@ -190,7 +190,7 @@ def inspect_kit(data):
         if sensors.version_tuple(version) < (0, 1, 4):
             raise ValueError("Нужна прошивка 0.1.4 или новее с USB-настройкой")
         if image[0x9000:0xf000] != b'\xff' * 0x6000:
-            raise ValueError("Общий образ не должен содержать индивидуальные реквизиты NVS")
+            raise ValueError("Комплект содержит чужие настройки. Загрузите чистую сборку.")
         actual = {}
         for pos in range(0x8000, 0x9000-31, 32):
             magic, kind, subtype, offset, size, name, flags = struct.unpack_from('<HBBII16sI', image, pos)
@@ -200,10 +200,10 @@ def inspect_kit(data):
         if actual != {'nvs': (1,2,0x9000,0x6000), 'otadata': (1,0,0xf000,0x2000),
                        'phy_init': (1,1,0x11000,0x1000), 'ota_0': (0,16,0x20000,0x1c0000),
                        'ota_1': (0,17,0x1e0000,0x1c0000), 'datalog': (1,64,0x3a0000,0x60000)}:
-            raise ValueError("Неизвестная таблица разделов")
+            raise ValueError("Неподдерживаемая разметка памяти")
         commit = manifest['source_commit']
         if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):
-            raise ValueError("Неверная исходная ревизия")
+            raise ValueError("В комплекте неверно указан исходный коммит")
         return version, sha, commit, image
     except (ValueError, KeyError, TypeError, IndexError, struct.error, UnicodeError, zipfile.BadZipFile) as exc:
         raise HTTPException(422, "Неверный комплект: " + str(exc)) from None
@@ -221,7 +221,7 @@ def router(require_admin):
             throttle(conn, request, fp)
             conn.execute('DELETE FROM sensor_auth_challenges WHERE expires<?', (int(time.time()),))
             if conn.execute('SELECT count(*) FROM sensor_auth_challenges').fetchone()[0] >= 256:
-                raise HTTPException(503, 'Очередь авторизации занята')
+                raise HTTPException(503, 'Подключение временно недоступно. Повторите позже.')
             nonce = secrets.token_hex(32)
             text = message(payload, nonce)
             conn.execute('INSERT INTO sensor_auth_challenges VALUES(?,?,?,?)', (nonce,text,fp,int(time.time())+60))
@@ -240,9 +240,9 @@ def router(require_admin):
                 return {'status':status, 'fingerprint':fp}
             d = sensors.get_device(conn, identity['device_id'])
             if not d['enabled'] or not conn.execute('SELECT 1 FROM rooms WHERE id=? AND active=1',(d['room_id'],)).fetchone():
-                raise HTTPException(403, 'Доступ датчика или помещения отключён')
+                raise HTTPException(403, 'Датчик или помещение отключены')
             if payload.sensor_type != d['sensor_type']:
-                raise HTTPException(409, 'Тип датчика изменился; настройте его через USB из панели')
+                raise HTTPException(409, 'Тип датчика изменился. Повторите настройку по USB.')
             token = secrets.token_hex(32)
             conn.execute('UPDATE sensor_devices SET token_hash=? WHERE id=?', (sensors.digest(token), d['id']))
         return {'status':'approved', 'device_id':d['id'], 'token':token, 'fingerprint':fp}
@@ -283,7 +283,7 @@ def router(require_admin):
         with db.connect() as conn:
             existing = conn.execute('SELECT id FROM sensor_devices WHERE hardware_id=? AND enabled=1', (hardware_id,)).fetchone()
         if existing:
-            raise HTTPException(409, 'Эта плата уже зарегистрирована: используйте OTA. Для замены сначала отключите прежнюю запись')
+            raise HTTPException(409, 'Плата уже подключена. Обновите её через карточку. Для замены сначала отключите старую запись.')
         return {'new_board':True}
 
     @r.post('/installer', dependencies=admin)
@@ -296,7 +296,7 @@ def router(require_admin):
             old = conn.execute('SELECT id,sha256 FROM sensor_installers WHERE version=?', (version,)).fetchone()
             if old:
                 if old['sha256'] != sha:
-                    raise HTTPException(409, 'Эта версия уже загружена с другим содержимым')
+                    raise HTTPException(409, 'Эта версия уже загружена. Используйте комплект с новым номером версии.')
                 return {'id':old['id'], 'version':version}
             cur = conn.execute('INSERT INTO sensor_installers(version,sha256,source_commit,image,created_at) VALUES(?,?,?,?,?)',
                                (version,sha,commit,image,db.utc_now()))

@@ -99,14 +99,14 @@ def test_manual_max_reading_shows_deviation_without_push(client):
     settings.update({"alerts_enabled": "1", "alert_cooldown_minutes": "60"})
     reply = bot.interpret("123", f"/temp {room['id']} 16", "test-reading-1")
     assert "Сохранено" in reply
-    assert "вне установленной нормы" in reply
+    assert "вне нормы" in reply
     assert max_delivery.queue_temperature_alerts() == 0
 
     # Button-based correction also displays a warning immediately, without
     # an extra notification in the outbox.
     reply = max_ui._write("123", room["id"], "c", "17", "max:correction-2")
     assert "Исправлено" in reply
-    assert "вне установленной нормы" in reply
+    assert "вне нормы" in reply
     assert max_delivery.queue_temperature_alerts() == 0
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM max_outbox").fetchone()[0] == 0
