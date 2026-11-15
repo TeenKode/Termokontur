@@ -25,20 +25,20 @@ SIMULATED_USB=r'''(() => {
   port={async open(){const self=this;this.readable=new ReadableStream({start(c){self.rx=c;}});this.writable=new WritableStream({async write(value){
    const req=JSON.parse(new TextDecoder().decode(value).trim().slice(6));let response={id:req.id};const pair=await key;
    const publicBytes=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',publicBytes)));
-   if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.4',pending_records:false});
+   if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false});
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
    else if(req.cmd==='configure'){window.savedUSB=req;response.saved=true;}
    const bytes=new TextEncoder().encode('startup log\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
  window.radioConnect=async()=>{
-  const pair=await key;const raw=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const ident={public_key:hex(raw),hardware_id:'0123456789ab',sensor_type:window.savedUSB.sensor_type,firmware:'0.1.4'};
+  const pair=await key;const raw=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const ident={public_key:hex(raw),hardware_id:'0123456789ab',sensor_type:window.savedUSB.sensor_type,firmware:'0.1.5'};
   const post=async(path,body)=>{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json();};
   const challenge=await post('/api/sensors/auth/challenge',ident);
   const signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(challenge.message))));
   const authorized=await post('/api/sensors/auth/prove',{...ident,challenge:challenge.challenge,signature});
   const record={seq:1,boot_id:'0000000000000001',uptime_s:60,measured_at:Math.floor(Date.now()/1000)-10,time_quality:'rtc',temperature:21.5,humidity:null,battery_mv:3950,interval_s:60,error:''};
-  const reply=await fetch('/api/sensors/devices/'+authorized.device_id+'/sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authorized.token},body:JSON.stringify({model:'c3-sht40-v1',sensor_type:ident.sensor_type,firmware:'0.1.4',records:[record],next_seq:2,lost:0,rssi:-55,battery_mv:3950,config_version:window.savedUSB.config.version,boots:1})});
+  const reply=await fetch('/api/sensors/devices/'+authorized.device_id+'/sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authorized.token},body:JSON.stringify({model:'c3-sht40-v1',sensor_type:ident.sensor_type,firmware:'0.1.5',records:[record],next_seq:2,lost:0,rssi:-55,battery_mv:3950,config_version:window.savedUSB.config.version,boots:1})});
   if(!reply.ok)throw Error(await reply.text());return reply.json();
  };
 })();'''
@@ -50,22 +50,28 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
     env={**os.environ,'TERMOKONTUR_DB':str(Path(tmp)/'test.sqlite3'),
          'TERMOKONTUR_SECRET':'usb-browser-test-secret-at-least-32-characters',
          'TERMOKONTUR_ADMIN_PASSWORD':'browser-test-password'}
+    spec_tls=importlib.util.spec_from_file_location('tls_fixture',ROOT/'tests/test_tls.py')
+    tls_fixtures=importlib.util.module_from_spec(spec_tls);spec_tls.loader.exec_module(tls_fixtures)
+    certificate,key=tls_fixtures.pair("localhost")
+    cert_path,key_path=Path(tmp)/'cert.pem',Path(tmp)/'key.pem'
+    cert_path.write_bytes(certificate);key_path.write_bytes(key)
+    env['TERMOKONTUR_SENSOR_CA_FILE']=str(cert_path)
     with open(Path(tmp)/'server.log','w+') as log:
-        server=subprocess.Popen([sys.executable,'-m','uvicorn','termokontur.app:app','--host','127.0.0.1','--port',str(port)],cwd=ROOT,env=env,stdout=log,stderr=log)
-        base=f'http://127.0.0.1:{port}'
+        server=subprocess.Popen([sys.executable,'-m','uvicorn','termokontur.app:app','--host','127.0.0.1','--port',str(port),'--ssl-certfile',str(cert_path),'--ssl-keyfile',str(key_path)],cwd=ROOT,env=env,stdout=log,stderr=log)
+        base=f'https://127.0.0.1:{port}'
         try:
             for _ in range(100):
                 try:
-                    if httpx.get(base+'/health',trust_env=False).is_success:break
+                    if httpx.get(base+'/health',trust_env=False,verify=False).is_success:break
                 except httpx.HTTPError:pass
                 time.sleep(.1)
             else:log.seek(0);raise RuntimeError(log.read())
-            with httpx.Client(base_url=base,trust_env=False) as api,sync_playwright() as pw:
+            with httpx.Client(base_url=base,trust_env=False,verify=False) as api,sync_playwright() as pw:
                 assert api.post('/api/login',json={'password':'browser-test-password'}).status_code==200
                 room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 101'}).json()
-                assert api.post('/api/sensors/installer',files={'file':('demo.zip',fixtures.kit())}).status_code==200
+                assert api.post('/api/sensors/installer',files={'file':('demo.zip',fixtures.kit('0.1.5'))}).status_code==200
                 browser=pw.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
-                page=browser.new_page(viewport={'width':1440,'height':1100},locale='ru-RU')
+                page=browser.new_page(ignore_https_errors=True,viewport={'width':1440,'height':1100},locale='ru-RU')
                 errors=[];requests=[]
                 page.on('pageerror',lambda error:errors.append(str(error)))
                 page.on('request',lambda r:requests.append((r.url,r.post_data)) if r.post_data else None)
@@ -84,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 # Import the actual vendored SDK under the application's CSP.
                 assert page.evaluate("async()=>typeof (await import('/static/vendor/esptool.bundle.js')).ESPLoader")=='function'
                 page.click('#sensor-usb-open');page.wait_for_selector('#sensor-usb-dialog',state='visible')
-                page.fill('#usb-name','Демо: USB-датчик');page.select_option('#usb-type','ds18b20');page.fill('#usb-ssid','School-IoT-2.4G');page.fill('#usb-wifi-password','SchoolPassDemo2026');page.fill('#usb-server','https://monitor.school.example')
+                page.fill('#usb-name','Демо: USB-датчик');page.select_option('#usb-type','ds18b20');page.fill('#usb-ssid','School-IoT-2.4G');page.fill('#usb-wifi-password','SchoolPassDemo2026')
                 page.locator('#sensor-usb-form details summary').click()
                 page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
                 page.locator('#sensor-usb-form details summary').click()
@@ -110,9 +116,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path='/tmp/termokontur-usb-setup-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/10-usb-setup.jpg'),type='jpeg',quality=85)
+                page.evaluate('window.originalDateNow=Date.now;Date.now=()=>window.originalDateNow()+315360000000')
                 page.click('#usb-flash');expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
                 assert page.evaluate('window.simFlashed') is True
-                saved=page.evaluate('window.savedUSB');assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
+                saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
+                assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
+                page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
                 assert page.input_value('#usb-wifi-password')==''
                 onboard=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/onboard')]
