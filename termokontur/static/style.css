@@ -563,6 +563,7 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 #readings-table td:nth-last-child(-n+2){white-space:normal}
 
 /* Autonomous sensor management reuses the existing light/dark panel palette. */
+@media(max-width:700px){.navigation{overflow-x:auto}.navigation .nav-button{flex:0 0 auto;width:auto}}
 .sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
 .sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
 .sensor-form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:16px 0}

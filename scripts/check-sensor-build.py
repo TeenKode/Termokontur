@@ -7,6 +7,7 @@ root=Path(__file__).resolve().parents[1]
 folder=root/'firmware/sensor'
 config=(folder/'sdkconfig.esp32-c3-supermini').read_text()
 assert 'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' in config
+assert 'CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT=y' in config
 assert 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y' in config
 image=(folder/'.pio/build/esp32-c3-supermini/firmware.bin').read_bytes()
 assert 256<=len(image)<=0x1c0000

@@ -65,7 +65,7 @@ static std::string ssid, password, server, device, code, token, ca,
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
-  int64_t next_send, cool_until;
+  int64_t next_send, cool_until, sleep_started_us;
   uint32_t failures;
   bool charging;
   bool clock_valid;
@@ -74,7 +74,12 @@ struct Runtime {
   uint32_t crc;
 };
 RTC_DATA_ATTR static Runtime rt;
-static constexpr uint32_t RTC_MAGIC = 0x544b5233;
+static constexpr uint32_t RTC_MAGIC = 0x544b5234;
+static int64_t wall_time_us() {
+  timeval tv{};
+  gettimeofday(&tv, nullptr);
+  return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
 static bool charging() { return gpio_get_level(USB_PIN) == 0; }
 static bool available() {
   return !charging() && esp_timer_get_time() < deadline;
@@ -215,7 +220,8 @@ static void stop_network() {
 [[noreturn]] static void sleep_for(uint32_t seconds) {
   stop_network();
   seconds = std::max<uint32_t>(1, seconds);
-  rt.uptime += seconds + esp_timer_get_time() / 1000000;
+  rt.uptime += esp_timer_get_time() / 1000000;
+  rt.sleep_started_us = wall_time_us();
   rt.crc = sensor::crc32(&rt, offsetof(Runtime, crc));
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000);
   // Wake on the opposite level, avoiding an immediate wake loop while charging.
@@ -830,6 +836,10 @@ extern "C" void app_main() {
     rt = {};
     rt.magic = RTC_MAGIC;
     rt.boot = ((uint64_t)esp_random() << 32) | esp_random();
+  } else {
+    // The RTC wall clock survives Deep Sleep even before SNTP synchronization.
+    // Account for actual sleep before setup or sync can change that clock.
+    rt.uptime += sensor::sleep_elapsed_s(rt.sleep_started_us, wall_time_us());
   }
   // Charging takes priority over provisioning, measurements, diagnostics and
   // OTA.

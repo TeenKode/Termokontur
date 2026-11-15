@@ -10,7 +10,7 @@ import tempfile
 import time
 
 import httpx
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 errors=[];page.on("pageerror",lambda e:errors.append(str(e)))
                 page.goto(base);page.fill("#password","browser-smoke-password");page.click('#login-form button[type="submit"]')
                 page.wait_for_selector("#app-root",state="visible")
-                page.click('[data-tab="sensors"]');page.wait_for_function("document.querySelector('#sensor-state').textContent.includes('Добавьте')")
+                page.click('[data-tab="sensors"]');expect(page.locator('#sensor-state')).to_contain_text('Добавьте')
                 page.click("#sensor-add");page.fill("#sensor-new-name","Датчик <тест>")
                 with page.expect_response(lambda r:r.url.endswith('/api/sensors/devices') and r.request.method=='POST') as response:
                     page.click('#sensor-add-form button:not([type="button"])')
@@ -52,12 +52,12 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 sync=api.post('/api/sensors/devices/'+created['device_id']+'/sync',headers={"Authorization":"Bearer "+enroll.json()["token"]},json={"model":"c3-sht40-v1","firmware":"0.1.0","records":records,"next_seq":49,"lost":0,"rssi":-65,"battery_mv":3910,"config_version":1,"boots":48})
                 assert sync.status_code==200,sync.text
                 page.click("#sensor-refresh");page.locator(".sensor-card button").first.click();page.wait_for_selector("#sensor-detail",state="visible")
-                assert page.locator("#sensor-records tr").count()==48
+                expect(page.locator("#sensor-records tr")).to_have_count(48)
                 assert "Датчик <тест>"==page.text_content("#sensor-title")
                 page.locator('#sensor-detail details summary').nth(0).click()
                 page.fill('#sensor-config-form input[name="measure_s"]','3600')
                 page.click('#sensor-config-form button')
-                page.wait_for_function("document.querySelector('#sensor-detail-state').textContent.includes('1 / 2')")
+                expect(page.locator('#sensor-detail-state')).to_contain_text('1 / 2')
                 for width,height,theme in [(1440,1000,'light'),(390,844,'light'),(390,844,'dark')]:
                     page.set_viewport_size({"width":width,"height":height})
                     page.evaluate('(value)=>window.termokonturTheme.setPreference(value)',theme)
