@@ -19,6 +19,8 @@ jobs:
           /tmp/journal-test
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/policy.cpp -o /tmp/policy-test
           /tmp/policy-test
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/setup_password.cpp -o /tmp/setup-password-test
+          /tmp/setup-password-test
       - name: Sensor protocol and conversion vectors
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/test/hal -I firmware/sensor/include firmware/sensor/test/drivers.cpp -o /tmp/sensor-drivers-test

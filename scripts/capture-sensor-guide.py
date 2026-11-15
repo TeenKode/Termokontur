@@ -20,6 +20,8 @@ import httpx
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+FW_VERSION = re.search(r"VERSION (\d+\.\d+\.\d+)",
+                       (ROOT / "firmware/sensor/CMakeLists.txt").read_text()).group(1)
 OUT = ROOT / "docs/sensors/images"
 OUT.mkdir(exist_ok=True)
 
@@ -105,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="sensor-guide-") as tmp:
                             "humidity": 45.0 + (i % 6)*.2, "battery_mv": 3950,
                             "interval_s": 1800, "error": ""} for i in range(1, 49)]
                 payload = {"model": "c3-sht40-v1", "sensor_type": "sht4x",
-                           "firmware": "0.1.2", "records": records, "next_seq": 49,
+                           "firmware": FW_VERSION, "records": records, "next_seq": 49,
                            "lost": 0, "rssi": -57, "battery_mv": 3950,
                            "config_version": 1, "boots": 48}
                 checked(api.post(f"/api/sensors/devices/{created['device_id']}/sync",
@@ -133,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix="sensor-guide-") as tmp:
                     "model": "c3-sht40-v1", "hardware_id": "000000000002"}))["token"]
                 checked(api.post(f"/api/sensors/devices/{ota['device_id']}/sync",
                                  headers={"Authorization": "Bearer " + ota_token},
-                                 json={**payload, "firmware": "0.1.1", "records": [],
+                                 json={**payload, "firmware": "0.1.2", "records": [],
                                        "next_seq": 1, "boots": 1}))
                 page.click("#sensor-refresh")
                 page.locator(".sensor-card").filter(has_text="Демо: обновление").locator("button").click()
@@ -169,11 +171,39 @@ with tempfile.TemporaryDirectory(prefix="sensor-guide-") as tmp:
                                     "device": created["device_id"],
                                     "code": "ДЕМО — вставьте свой код из панели"}.items():
                     setup.fill(f'[name="{name}"]', value)
+                # Exercise the firmware page's JS locally: never send settings to a board.
+                setup.evaluate("() => { window.fetch=async(url,opts)=>{window.submitted=JSON.parse(opts.body);return {ok:true};}; }")
+                setup.fill('[name="setup_password"]', "MySetupPass2026")
+                setup.fill('[name="setup_password_confirm"]', "DifferentPass2026")
+                setup.locator('button').click()
+                expect(setup.locator('#result')).to_contain_text('не совпадают')
+                assert setup.evaluate('window.submitted === undefined')
+                setup.fill('[name="setup_password_confirm"]', "MySetupPass2026")
+                setup.locator('button').click()
+                expect(setup.locator('#result')).to_contain_text('Сохранено')
+                submitted = setup.evaluate('window.submitted')
+                assert submitted['setup_password'] == 'MySetupPass2026'
+                assert submitted['random_setup_password'] is False
+                setup.check('[name="random_setup_password"]')
+                expect(setup.locator('[name="setup_password"]')).to_be_disabled()
+                setup.locator('button').click()
+                assert setup.evaluate('window.submitted.random_setup_password') is True
+                assert setup.evaluate('window.submitted.setup_password === undefined')
+                setup.uncheck('[name="random_setup_password"]')
+                setup.fill('[name="setup_password"]', '')
+                setup.fill('[name="setup_password_confirm"]', '')
+                setup.locator('button').click()
+                assert setup.evaluate('window.submitted.setup_password') == ''
+                assert setup.evaluate('window.submitted.random_setup_password') is False
+                setup.fill('[name="setup_password"]', 'MySetupPass2026')
+                setup.fill('[name="setup_password_confirm"]', 'MySetupPass2026')
+                setup.locator('#result').evaluate("e => e.textContent=''")
+                capture(setup, "09-setup-password", setup.locator('fieldset'))
                 setup.screenshot(path=str(OUT / "04-phone-setup.jpg"), full_page=True,
                                  type="jpeg", quality=78)
                 assert not errors, errors
                 browser.close()
-            print(f"Saved 8 screenshots to {OUT}; isolated demo DB removed on exit.")
+            print(f"Saved 9 screenshots to {OUT}; isolated demo DB removed on exit.")
         finally:
             proc.terminate()
             proc.wait(timeout=10)
