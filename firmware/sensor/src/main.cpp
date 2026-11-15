@@ -795,7 +795,7 @@ static std::string setup_nonce;
 static std::atomic<bool> configured{false};
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
-      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Заполните сеть Wi-Fi и данные из панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль рабочей Wi-Fi сети<input name="password" type="password" maxlength="63"></label><label>Адрес сервера HTTPS<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Идентификатор (для старого подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода датчик создаст заявку на сервере. При USB-настройке из панели доступ выдаётся автоматически.</small></p><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Этот пароль нужен при следующем входе в настройку. Пустое поле сохраняет текущий режим. Используйте 8–63 латинских символа, цифры и знаки.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>На телефоне должны быть правильно выставлены дата и время.</small><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли точки настройки не совпадают.';return;}b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
+      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>Проверьте дату и время на телефоне.</small><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
   html.replace(html.find("NONCE"), 5, setup_nonce);
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, html.c_str(), html.size());
@@ -803,7 +803,7 @@ static esp_err_t setup_page(httpd_req_t *req) {
 static std::mutex provision_mutex;
 static std::string provision_apply(cJSON *j, bool require_nonce) {
   std::lock_guard<std::mutex> lock(provision_mutex);
-  if (configured || charging()) return "Setup finished or charging";
+  if (configured || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca"), nt = text(j, "ntp");
@@ -823,11 +823,11 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
                ((id.empty() && key.empty()) || (id.size() == 19 && id.rfind("tk-", 0) == 0 &&
                  (key.empty() || (key.size() >= 32 && key.size() <= 100)))) && root.size() <= 8000 && !nt.empty() &&
                nt.size() <= 100 && epoch >= 1700000000 && epoch <= 4102444800;
-  if (!valid) return "Check fields and phone clock";
-  if (!setup_password_valid) return "Setup password: use 8-63 printable ASCII characters and matching confirmation";
-  if (kind != sensor_type && state.next != state.ack) return "Upload pending measurements before changing sensor type";
+  if (!valid) return "Проверьте поля и дату на телефоне.";
+  if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
+  if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
   auto config = cJSON_GetObjectItemCaseSensitive(j, "config");
-  if (config && !config_from(config, true)) return "Invalid configuration or Flash write failed";
+  if (config && !config_from(config, true)) return "Проверьте параметры. Не удалось сохранить настройки.";
   while (url.back() == '/')
     url.pop_back();
   ssid = s;
@@ -842,13 +842,13 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
   setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
                                                   random_setup_password);
   state.saved_time = epoch;
-  if (!save_provision() || !save_state()) return "Flash write failed";
+  if (!save_provision() || !save_state()) return "Не удалось сохранить настройки в памяти платы.";
   configured = true;
   return "";
 }
 static esp_err_t setup_save(httpd_req_t *req) {
   if (req->content_len <= 0 || req->content_len > 11000)
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Oversized request");
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Слишком большой запрос.");
   std::string body(req->content_len, '\0'); size_t n = 0;
   while (n < body.size()) {
     int got = httpd_req_recv(req, body.data()+n, body.size()-n);
@@ -856,7 +856,7 @@ static esp_err_t setup_save(httpd_req_t *req) {
     n += got;
   }
   auto j = cJSON_Parse(body.c_str());
-  if (!j) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+  if (!j) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Не удалось прочитать запрос. Повторите настройку.");
   auto error = provision_apply(j, true); cJSON_Delete(j);
   if (!error.empty()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, error.c_str());
   return httpd_resp_sendstr(req, "Saved");
@@ -887,13 +887,13 @@ static void usb_setup_task(void *) {
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
           } else if (cmd == "sign") {
             auto signature=identity_sign(text(j,"message"));
-            if (signature.empty()) add(out,"error","Invalid auth message");
+            if (signature.empty()) add(out,"error","Не удалось подтвердить плату. Повторите подключение.");
             else add(out,"signature",signature);
           } else if (cmd == "configure") {
             auto error=provision_apply(j,false);
             if (error.empty()) cJSON_AddBoolToObject(out,"saved",true);
             else add(out,"error",error);
-          } else add(out,"error","Unknown command");
+          } else add(out,"error","Команда не поддерживается. Проверьте версию прошивки.");
           auto response=stringify(out); cJSON_Delete(out); cJSON_Delete(j);
           printf("\nTKRPC %s\n",response.c_str()); fflush(stdout);
         }

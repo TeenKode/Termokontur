@@ -47,7 +47,7 @@ def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -
         raise ValueError("Сначала настройте токен MAX")
     text = text.strip()
     if not text or len(text) > 2000:
-        raise ValueError("Текст сообщения должен содержать от 1 до 2000 символов")
+        raise ValueError("Введите сообщение от 1 до 2000 символов")
     if not user_ids or len(user_ids) > 250 or len(set(user_ids)) != len(user_ids):
         raise ValueError("Выберите от 1 до 250 разных сотрудников")
     payload_hash = hashlib.sha256(json.dumps(
@@ -70,7 +70,7 @@ def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -
             WHERE r.active=1 AND b.user_id IN ({placeholders})
         """, user_ids)}
         if eligible != set(user_ids):
-            raise ValueError("Список сотрудников изменился. Обновите получателей перед отправкой")
+            raise ValueError("Список сотрудников изменился. Обновите получателей.")
         conn.execute("""
             INSERT INTO notification_batches(id,created_at,text,recipients,silent,payload_hash)
             VALUES(?,?,?,?,?,?)

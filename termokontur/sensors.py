@@ -43,9 +43,9 @@ class Config(Strict):
     @model_validator(mode="after")
     def coherent(self):
         if not self.cutoff_mv <= self.wifi_min_mv <= self.ota_min_mv:
-            raise ValueError("Нужно cutoff ≤ Wi-Fi ≤ OTA")
+            raise ValueError("Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление")
         if self.send_s < self.measure_s:
-            raise ValueError("Передача не может быть чаще измерений")
+            raise ValueError("Интервал передачи должен быть не меньше интервала измерений")
         return self
 
 
@@ -197,7 +197,7 @@ def authenticate(conn, device, authorization):
 
 def check_room(conn, room):
     if not conn.execute("SELECT 1 FROM rooms WHERE id=? AND active=1", (room,)).fetchone():
-        raise HTTPException(422, "Выберите действующее помещение")
+        raise HTTPException(422, "Выберите активное помещение")
 
 
 def version_tuple(v):
@@ -258,12 +258,12 @@ def router(require_admin):
             if identity:
                 conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
                 conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
-                event(conn, device, "rekey", "Доступ отозван; требуется повторная авторизация")
+                event(conn, device, "rekey", "Доступ отозван. Требуется новое разрешение.")
                 return {"device_id":device,"requires_authorization":True}
             conn.execute("UPDATE sensor_devices SET enrollment_hash=?,enrollment_until=?,token_hash=NULL WHERE id=?",
                          (digest(code), int(time.time())+7*86400, device))
             conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
-            event(conn, device, "rekey", "Ключ отозван; требуется настройка устройства")
+            event(conn, device, "rekey", "Ключ отозван. Настройте датчик заново.")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
     @r.put("/devices/{device}/config", dependencies=admin)
@@ -299,7 +299,7 @@ def router(require_admin):
                              (payload.hardware_id, digest(token), payload.sensor_type, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
-            event(conn, payload.device_id, "enrolled", "Ключ выдан; код погасится после первого обмена")
+            event(conn, payload.device_id, "enrolled", "Ключ выдан. Код будет использован при первой передаче данных.")
         return {"token": token}
 
     @r.post("/devices/{device}/sync")
@@ -309,7 +309,7 @@ def router(require_admin):
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
             if payload.sensor_type != d["sensor_type"]:
-                raise HTTPException(409, "Тип датчика изменился; выполните повторную настройку")
+                raise HTTPException(409, "Тип датчика изменился. Настройте его заново.")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]
@@ -382,13 +382,13 @@ def router(require_admin):
     async def upload(file: UploadFile = File(...)):
         image = await file.read(MAX_FIRMWARE + 1)
         if len(image) < 256 or len(image) > MAX_FIRMWARE or image[0] != 0xE9:
-            raise HTTPException(422, "Неверный размер или формат ESP-образа")
+            raise HTTPException(422, "Неверный формат или размер прошивки")
         if struct.unpack_from("<H", image, 12)[0] != 5 or struct.unpack_from("<I", image, 32)[0] != 0xABCD5432:
-            raise HTTPException(422, "Образ не предназначен для ESP32-C3")
+            raise HTTPException(422, "Выберите прошивку для ESP32-C3")
         version = image[48:80].split(b"\0", 1)[0].decode("ascii", errors="replace")
         project = image[80:112].split(b"\0", 1)[0]
         if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}", version) or project != b"termokontur-sensor":
-            raise HTTPException(422, "Неверное имя проекта или версия прошивки")
+            raise HTTPException(422, "Прошивка не подходит: проверьте проект и версию")
         with db.connect() as conn:
             try:
                 cur = conn.execute("INSERT INTO sensor_firmware(version,model,sha256,image,created_at) VALUES(?,?,?,?,?)",
