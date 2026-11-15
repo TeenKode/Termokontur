@@ -295,3 +295,20 @@ def test_sensor_type_migration_preserves_existing_data(admin):
         sensors.initialize(conn)
         assert conn.execute("SELECT sensor_type FROM sensor_devices").fetchone()[0] == "sht4x"
         assert list(conn.execute("SELECT * FROM sensor_records")) == before
+
+
+def test_enrollment_denied_while_room_disabled(admin):
+    room = db.create_room('Школа', '1', 'Закрыт', 'Кабинет', 18, 24)
+    device = admin.post('/api/sensors/devices', json={'name': 'Новый', 'room_id': room['id']}).json()
+    enrollment = {key: device[key] for key in ('device_id', 'code')}
+    enrollment.update(hardware_id='0123456789ab', model=sensors.MODEL)
+    with db.connect() as conn:
+        conn.execute('UPDATE rooms SET active=0 WHERE id=?', (room['id'],))
+    response = admin.post('/api/sensors/enroll', json=enrollment)
+    assert response.status_code == 403
+    assert 'token' not in response.json()
+    with db.connect() as conn:
+        saved = conn.execute('SELECT token_hash,hardware_id FROM sensor_devices WHERE id=?', (device['device_id'],)).fetchone()
+        assert tuple(saved) == (None, None)
+        conn.execute('UPDATE rooms SET active=1 WHERE id=?', (room['id'],))
+    assert admin.post('/api/sensors/enroll', json=enrollment).status_code == 200

@@ -190,3 +190,35 @@ def test_installer_upload_integrity_version_and_authenticated_download(admin, cl
     # Valid but different content cannot replace an already installed version.
     changed=kit(mutate=lambda b:b.__setitem__(0x20,1))
     assert admin.post('/api/sensors/installer',files={'file':('kit.zip',changed)}).status_code==409
+
+
+@pytest.mark.parametrize('problem', ['encrypted', 'compression', 'deflate'])
+def test_installer_rejects_unreadable_zip_as_validation_error(admin, problem):
+    data = bytearray(kit())
+    if problem == 'deflate':
+        # Corrupt the first DEFLATE stream without changing its ZIP envelope.
+        offset = 30 + struct.unpack_from('<H', data, 26)[0] + struct.unpack_from('<H', data, 28)[0]
+        data[offset] = (data[offset] & ~6) | 6  # Reserved DEFLATE block type.
+    else:
+        offset = data.index(b'PK\x01\x02')
+        if problem == 'encrypted':
+            struct.pack_into('<H', data, 6, 1)
+            struct.pack_into('<H', data, offset + 8, 1)
+        else:
+            struct.pack_into('<H', data, 8, 99)
+            struct.pack_into('<H', data, offset + 10, 99)
+    response = admin.post('/api/sensors/installer', files={'file': ('invalid.zip', bytes(data))})
+    assert response.status_code == 422, response.text
+    assert admin.get('/api/sensors/installer').json() is None
+
+
+def test_invalid_signatures_are_rate_limited_without_consuming_challenge(admin):
+    private, ident = identity()
+    payload = proof(admin, private, ident)
+    invalid = {**payload, 'signature': private.sign(b'wrong-message', ec.ECDSA(hashes.SHA256())).hex()}
+    for _ in range(32):
+        assert admin.post('/api/sensors/auth/prove', json=invalid).status_code == 401
+    assert admin.post('/api/sensors/auth/prove', json=invalid).status_code == 429
+    with db.connect() as conn:
+        assert conn.execute('SELECT 1 FROM sensor_auth_challenges WHERE nonce=?', (payload['challenge'],)).fetchone()
+        assert conn.execute('SELECT count(*) FROM sensor_identities').fetchone()[0] == 0

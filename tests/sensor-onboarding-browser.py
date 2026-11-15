@@ -88,7 +88,26 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.locator('#sensor-usb-form details summary').click()
                 page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
                 page.locator('#sensor-usb-form details summary').click()
-                page.check('#usb-new-board');page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path='/tmp/termokontur-usb-setup-desktop.png')
+                page.check('#usb-new-board')
+                # The chooser is asynchronous: prevent a second setup before it closes.
+                page.evaluate("""() => {
+                    window.originalRequestPort = navigator.serial.requestPort;
+                    window.portRequests = 0;
+                    navigator.serial.requestPort = () => new Promise((resolve, reject) => {
+                        window.portRequests++; window.rejectPort = reject;
+                    });
+                }""")
+                page.click('#usb-flash')
+                expect(page.locator('#usb-flash')).to_be_disabled()
+                expect(page.locator('#usb-configure')).to_be_disabled()
+                expect(page.locator('#usb-close')).to_be_disabled()
+                page.evaluate('usbRun(true)')
+                assert page.evaluate('window.portRequests') == 1
+                page.evaluate("window.rejectPort(new DOMException('Dismissed', 'NotFoundError'))")
+                expect(page.locator('#usb-flash')).to_be_enabled()
+                expect(page.locator('#usb-close')).to_be_enabled()
+                page.evaluate('navigator.serial.requestPort = window.originalRequestPort')
+                page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path='/tmp/termokontur-usb-setup-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/10-usb-setup.jpg'),type='jpeg',quality=85)
                 page.click('#usb-flash');expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)

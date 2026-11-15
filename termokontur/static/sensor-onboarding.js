@@ -49,6 +49,7 @@ function usbSettings(){
       setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked,epoch:Math.floor(Date.now()/1000)}};
 }
 async function usbRun(flash){
+  if(usbBusy)return;
   let serial=null,flashed=false;
   try{
     const data=usbSettings();if(!data)return;
@@ -56,8 +57,8 @@ async function usbRun(flash){
     if(flash&&!$("usb-new-board").checked)throw Error("Подтвердите удаление данных платы или нажмите «Настроить без прошивки».");
     if(flash&&!usbInstaller)throw Error("Сначала загрузите комплект USB-прошивки");
     // Request permission while the click still has browser user activation.
-    const port=await navigator.serial.requestPort({filters:[{usbVendorId:0x303a}]});
     usbSetBusy(true);
+    const port=await navigator.serial.requestPort({filters:[{usbVendorId:0x303a}]});
     const usb=await import("./sensor-usb.mjs");
     if(flash){
       usbStatus("Проверяем комплект и записываем прошивку. Не отключайте USB.");$("usb-progress").hidden=false;$("usb-progress").value=0;
