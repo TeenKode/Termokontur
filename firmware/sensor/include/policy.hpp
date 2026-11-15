@@ -15,6 +15,12 @@ inline bool valid_ack(double value, uint64_t first, uint64_t sent_end) {
 inline uint32_t retry_delay(uint32_t send_s, uint32_t failures) {
   return std::min<uint32_t>(send_s, 3600u << std::min<uint32_t>(failures, 4));
 }
+// Only spend radio energy on a clock preflight when a measurement is due,
+// the RTC time is not trusted and the battery permits Wi-Fi.
+inline bool needs_clock_preflight(bool trusted_clock, bool measurement_due,
+                                  bool wifi_allowed) {
+  return !trusted_clock && measurement_due && wifi_allowed;
+}
 // This gate is shared by normal work, provisioning and pending OTA diagnostics.
 inline bool work_allowed(bool usb_connected, uint64_t elapsed,
                          uint64_t cool_until) {
