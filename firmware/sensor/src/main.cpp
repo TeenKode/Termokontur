@@ -693,10 +693,16 @@ static void ota(cJSON *meta, uint16_t mv) {
   }
   last_error = "ota_failed";
 }
-static bool sync(sensor::Journal &journal, uint16_t mv) {
-  if (!wifi_up())
-    return false;
-  if (!sync_time()) return false;
+static bool sync(sensor::Journal &journal, uint16_t mv,
+                 bool time_prepared = false) {
+  // Reuse the trusted server time and Wi-Fi connection obtained before the
+  // first measurement. Keep both operations within one radio-on budget.
+  if (!time_prepared) {
+    if (!wifi_up())
+      return false;
+    if (!sync_time())
+      return false;
+  }
   if (time(nullptr) < 1700000000) {
     last_error = "time_required";
     return false;
@@ -1085,15 +1091,29 @@ extern "C" void app_main() {
                                              &ota_state) == ESP_OK &&
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
+  const bool measurement_due =
+      cfg.enabled &&
+      rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure;
+  // Hardware RESET and power loss invalidate RTC time. Obtain a validated
+  // HTTPS server timestamp before sampling so the first reading has a date.
+  // If offline or below the Wi-Fi threshold, preserve the untimed reading.
+  const bool clock_preflight = sensor::needs_clock_preflight(
+      time_quality != 0, measurement_due, mv >= cfg.wifi_min_mv);
+  bool time_prepared = false;
+  if (clock_preflight) {
+    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    if (wifi_up()) {
+      time_prepared = sync_time();
+    } else {
+      stop_network();
+    }
+  }
   Record measurement{};
   measurement.boot = rt.boot;
   measurement.uptime = rt.uptime + esp_timer_get_time() / 1000000;
   measurement.battery = mv;
   measurement.interval = cfg.measure_s;
-  bool measured =
-      cfg.enabled &&
-      rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure &&
-      sensor_read(measurement);
+  bool measured = measurement_due && sensor_read(measurement);
   if (charging()) {
     rt.charging = true;
     sleep_for(cfg.measure_s);
@@ -1126,8 +1146,11 @@ extern "C" void app_main() {
   }
   auto now = time(nullptr);
   if ((rt.next_send == 0 || now >= rt.next_send) && mv >= cfg.wifi_min_mv) {
-    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
-    bool ok = sync(journal, mv);
+    if (!clock_preflight)
+      deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    // Do not start another full Wi-Fi session if the time preflight failed.
+    bool ok = (!clock_preflight || time_prepared) &&
+              sync(journal, mv, time_prepared);
     stop_network();
     now = time(nullptr);
     if (ok) {
