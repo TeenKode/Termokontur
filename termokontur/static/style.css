@@ -561,3 +561,21 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 .reading-history-item strong{font-size:14px;overflow-wrap:anywhere}
 .reading-history-item small{color:var(--muted,#718096);font-size:12px;overflow-wrap:anywhere}
 #readings-table td:nth-last-child(-n+2){white-space:normal}
+
+/* Autonomous sensor management reuses the existing light/dark panel palette. */
+@media(max-width:700px){.navigation{overflow-x:auto}.navigation .nav-button{flex:0 0 auto;width:auto}}
+.sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
+.sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
+.sensor-form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:16px 0}
+.sensor-form label{display:flex;flex-direction:column;gap:6px;flex:1 1 210px;min-width:0}
+.sensor-form label.archive-toggle{flex-direction:row;align-items:center}
+.sensor-form input:not([type=checkbox]),.sensor-form select{width:100%;min-width:0}
+#sensor-detail details{padding:16px 0;border-top:1px solid var(--border,#dce4eb)}
+#sensor-chart{display:block;width:100%;height:260px}
+#sensor-code-dialog input{width:100%;margin:8px 0 18px}
+#sensor-events{padding-left:20px;line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:600px){.sensor-form{display:block}.sensor-form label{margin:12px 0}.sensor-form button{margin:5px 5px 5px 0}.sensor-cards{grid-template-columns:1fr}}
+
+.sensor-usb-dialog{width:min(780px,96vw);max-height:90vh;overflow:auto}.sensor-usb-dialog form>p,.sensor-usb-dialog details{margin:14px 0}.sensor-usb-dialog progress{width:100%}.usb-log{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:12px}.sensor-claim{padding:16px 0;border-bottom:1px solid var(--border,#ddd)}.sensor-claim .sensor-form{margin-top:12px}
+
+.sensor-usb-dialog .archive-toggle{display:flex;flex-direction:row;gap:10px;white-space:normal;align-items:flex-start}.sensor-usb-dialog .archive-toggle input{flex:0 0 16px;width:16px;height:16px;margin-top:2px}.sensor-usb-dialog textarea{width:100%;max-width:100%}.sensor-usb-dialog details{min-width:0}.sensor-usb-dialog label{min-width:0}

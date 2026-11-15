@@ -142,7 +142,7 @@ def status() -> dict:
         else:
             result["state"] = "queued"
             result["phase"] = "preparing"
-            result["message"] = "Запрос принят. Ожидаем запуска системной службы."
+            result["message"] = "Обновление в очереди. Ожидаем запуска."
 
     if not result["message"]:
         result["message"] = "Можно проверить наличие новой версии."
@@ -186,15 +186,15 @@ def check() -> dict:
 
     if result["state"] not in ("queued", "installing"):
         result["message"] = (
-            "Доступна новая сборка. Можно установить обновление."
-            if result["available"] else "Установлена актуальная сборка."
+            "Доступно обновление."
+            if result["available"] else "Установлена последняя сборка."
         )
     return result
 
 
 def request() -> dict:
     if not supported():
-        raise RuntimeError("На сервере не настроена служба автообновления")
+        raise RuntimeError("Автообновление на сервере не настроено")
     if status()["state"] in ("queued", "installing"):
         raise RuntimeError("Обновление уже запущено")
     marker = directory() / "update-request"
@@ -205,4 +205,4 @@ def request() -> dict:
     except FileExistsError as exc:
         raise RuntimeError("Обновление уже ожидает выполнения") from exc
     return {"ok": True, "state": "queued",
-            "message": "Запрос принят. Ожидаем запуска системной службы."}
+            "message": "Обновление в очереди. Ожидаем запуска."}

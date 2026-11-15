@@ -33,7 +33,7 @@ from . import __version__
 # A content fingerprint changes whenever JavaScript OR CSS changes, even between
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
-    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
+    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
 ).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
@@ -59,10 +59,19 @@ async def startup():
     auth.bootstrap()
     settings.bootstrap()
     app.state.maintenance_task = asyncio.create_task(scheduled_maintenance())
+    from . import sensor_mqtt
+    app.state.sensor_mqtt_task = asyncio.create_task(sensor_mqtt.worker())
 
 
 @app.on_event("shutdown")
 async def stop_maintenance():
+    mqtt_task = getattr(app.state, "sensor_mqtt_task", None)
+    if mqtt_task:
+        mqtt_task.cancel()
+        try:
+            await mqtt_task
+        except asyncio.CancelledError:
+            pass
     task = getattr(app.state, "maintenance_task", None)
     if task:
         task.cancel()
@@ -110,7 +119,7 @@ def authenticated(request: Request) -> bool:
 
 def require_admin(request: Request):
     if not authenticated(request):
-        raise HTTPException(401, "Необходимо войти в систему")
+        raise HTTPException(401, "Войдите в панель")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin:
@@ -262,7 +271,7 @@ async def _limited_tls_file(file: UploadFile | None) -> bytes | None:
         return None
     raw = await file.read(tls.MAX_UPLOAD + 1)
     if len(raw) > tls.MAX_UPLOAD:
-        raise HTTPException(413, "Размер сертификата или ключа превышает 256 КБ.")
+        raise HTTPException(413, "Максимум 256 КБ на файл.")
     return raw
 
 
@@ -545,7 +554,7 @@ def change_password(payload: PasswordIn, response: Response):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not changed:
-        raise HTTPException(403, "Текущий пароль указан неверно")
+        raise HTTPException(403, "Неверный текущий пароль")
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True, "relogin_required": True}
 
@@ -618,7 +627,7 @@ def restore_backup(payload: RestoreBackupIn, response: Response):
 async def import_backup(request: Request):
     length = request.headers.get("content-length")
     if length is not None and (not length.isdigit() or int(length) > maintenance.MAX_IMPORT_BYTES):
-        raise HTTPException(413, "Размер файла превышает 100 МБ")
+        raise HTTPException(413, "Максимальный размер файла — 100 МБ")
     destination = maintenance.backup_dir()
     temp_path = None
     try:
@@ -629,7 +638,7 @@ async def import_backup(request: Request):
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > maintenance.MAX_IMPORT_BYTES:
-                    raise HTTPException(413, "Размер файла превышает 100 МБ")
+                    raise HTTPException(413, "Максимальный размер файла — 100 МБ")
                 tmp.write(chunk)
         temp_path.chmod(0o600)
         maintenance.inspect(temp_path)
@@ -710,19 +719,19 @@ def create_room(payload: RoomIn):
     if not data["building"] or not data["name"] or not data["kind"]:
         raise HTTPException(422, "Заполните название, корпус и тип помещения")
     if data["min_temp"] >= data["max_temp"]:
-        raise HTTPException(422, "Минимальная температура должна быть ниже максимальной")
+        raise HTTPException(422, "Минимум должен быть ниже максимума")
     try:
         return db.create_room(data["building"], data["floor"], data["name"], data["kind"],
                               data["min_temp"], data["max_temp"])
     except sqlite3.IntegrityError:
-        raise HTTPException(409, "В этом корпусе кабинет с таким названием уже существует")
+        raise HTTPException(409, "Кабинет с таким названием уже есть в этом корпусе")
 
 @app.post("/api/rooms/bulk", dependencies=[Depends(require_admin)])
 def bulk_rooms(payload: RoomsBulkIn):
     data = payload.model_dump()
     names = [name.strip() for name in data.pop("names")]
     if any(len(name) > 100 or not name for name in names):
-        raise HTTPException(422, "Неверные названия помещений")
+        raise HTTPException(422, "Проверьте названия помещений")
     if data["min_temp"] >= data["max_temp"]:
         raise HTTPException(422, "Минимум должен быть ниже максимума")
     try:
@@ -739,7 +748,7 @@ def patch_room(room_id: int, payload: RoomPatch):
         raise HTTPException(404, "Кабинет не найден")
     patch = payload.model_dump(exclude_unset=True)
     if any(value is None for value in patch.values()):
-        raise HTTPException(422, "Поля нельзя обнулять")
+        raise HTTPException(422, "Заполните обязательные поля")
     for key, value in patch.items():
         if isinstance(value, str):
             patch[key] = value.strip()
@@ -882,3 +891,10 @@ def ingest(payload: IngestIn, x_api_key: str | None = Header(default=None)):
     except ValueError as e:
         raise HTTPException(422, str(e))
     return {"reading": reading, "inserted": inserted}
+
+
+from . import sensors
+app.include_router(sensors.router(require_admin))
+
+from . import sensor_onboarding
+app.include_router(sensor_onboarding.router(require_admin))

@@ -80,7 +80,7 @@ function beginRequest(path,method){
   };
 }
 window.addEventListener("offline",()=>{
-  networkFailed=true;operationStatus("Нет подключения к сети. Проверьте соединение и повторите действие.","error");
+  networkFailed=true;operationStatus("Нет сети. Проверьте подключение.","error");
 });
 window.addEventListener("online",()=>{
   networkFailed=false;
@@ -96,8 +96,8 @@ async function api(path, method = "GET", body) {
     try {response=await fetch(path, opts);}
     catch(error){
       networkFailed=true;
-      operationStatus("Не удалось связаться с сервером. Проверьте подключение и повторите действие.","error");
-      throw new Error("Нет связи с сервером. Проверьте сеть и повторите действие.");
+      operationStatus("Сервер недоступен. Проверьте подключение.","error");
+      throw new Error("Нет связи с сервером. Проверьте сеть.");
     }
     if(networkFailed){networkFailed=false;operationStatus("");}
     if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
@@ -125,7 +125,7 @@ function setTab(name) {
   if(!target || (selectedTab===name && !target.hidden))return false;
   scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
-  for(const view of ["overview","rooms","readings","settings"]) {
+  for(const view of ["overview","rooms","readings","sensors","settings"]) {
     const active=view===name;
     show("view-"+view,active);
     const button=document.querySelector('[data-tab="'+view+'"]');
@@ -167,7 +167,7 @@ function renderDaily() {
   $("daily-counts").textContent=(selected.length-missing.length)+" из "+selected.length;
   const area=$("daily-missing");area.replaceChildren();
   if(!missing.length){
-    area.append(el("p","daily-complete",selected.length?"Все помещения сдали показания за сегодня.":"Нет помещений в выбранном корпусе."));
+    area.append(el("p","daily-complete",selected.length?"Показания получены по всем помещениям.":"Нет помещений в выбранном корпусе."));
     return;
   }
   area.append(el("p","daily-heading","Нет измерений: "+missing.length));
@@ -197,7 +197,7 @@ function renderOverview() {
     tbody.append(tr);
   }
   show("overview-empty",filtered.length===0);
-  $("overview-empty").textContent=overview.length?"По заданному фильтру помещений нет.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
+  $("overview-empty").textContent=overview.length?"Помещения не найдены.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
 }
 function shortDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7):"—";}
 function fullDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4):"—";}
@@ -250,7 +250,7 @@ function renderHistory(){
   const today=series[series.length-1],yesterday=series[series.length-2];
   $("avg-today").textContent=temperature(today.average);
   $("avg-today-desc").textContent=today.average==null?
-    "Сегодня пока нет показаний. Средняя появится после первого измерения.":
+    "За сегодня показаний пока нет.":
     "По "+today.rooms_measured+" из "+today.rooms_total+" кабинетов · "+historyData.timezone;
   const change=$("avg-change");
   change.className="dashboard-change";
@@ -298,7 +298,7 @@ function renderBuildingSummary(){
   if(!historyData)return;
   const buildings=historyData.buildings||[];
   if(!buildings.length){
-    target.append(el("p","building-summary-empty","Активных зданий пока нет."));
+    target.append(el("p","building-summary-empty","Здания пока не добавлены."));
     return;
   }
   buildings.forEach((building,index)=>{
@@ -311,8 +311,8 @@ function renderBuildingSummary(){
     card.append(el("div","building-card-value",temperature(today.average)));
     const diff=today.average==null||yesterday?.average==null?null:today.average-yesterday.average;
     const change=el("span","building-card-change",
-      diff==null?"Нет данных для сравнения":Math.abs(diff)<0.005?"Без изменений ко вчера":
-      (diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C ко вчера");
+      diff==null?"Нет данных для сравнения":Math.abs(diff)<0.005?"Без изменений за сутки":
+      (diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C за сутки");
     card.append(change);
     const meta=el("div","building-card-meta");
     meta.append(el("span","","Показания: "+today.rooms_measured+" из "+today.rooms_total),
@@ -493,7 +493,7 @@ function renderRooms(){
     }
     const actions=cell(row,"");
     const duplicate=el("button","","Копировать");
-    duplicate.title="Создать новый кабинет с теми же параметрами";
+    duplicate.title="Копировать параметры кабинета";
     duplicate.addEventListener("click",()=>openRoom(room,true));
     actions.append(duplicate);
     if(room.active){
@@ -510,7 +510,7 @@ function renderRooms(){
     tbody.append(row);
   }
   show("rooms-empty",matching.length===0);
-  if(!matching.length)$("rooms-empty").textContent=allRooms.length?"По заданному фильтру помещений нет.":"Добавьте первое помещение.";
+  if(!matching.length)$("rooms-empty").textContent=allRooms.length?"Помещения не найдены.":"Добавьте первое помещение.";
 }
 function renderReadings(){
   const tbody=$("readings-table");tbody.replaceChildren();
@@ -617,17 +617,17 @@ async function pairing(room){
   } catch(error){toast(error.message,true);}
 }
 async function unbindMax(room,user){
-  if(!confirm("Отвязать «"+maxUserName(user)+"» от помещения «"+room.name+"»? После отвязки сотрудник не сможет отправлять показания для этого кабинета."))return;
+  if(!confirm("Отвязать «"+maxUserName(user)+"» от помещения «"+room.name+"»? Сотрудник потеряет доступ к кабинету."))return;
   try{
     await api("/api/rooms/"+room.id+"/max-bindings/"+encodeURIComponent(user.user_id),"DELETE");
     await refresh();
-    toast("Профиль MAX отвязан от помещения");
+    toast("Сотрудник отключён от помещения");
   }catch(error){toast(error.message,true);}
 }
 async function restoreRoom(room){
   try{
     await api("/api/rooms/"+room.id,"PATCH",{active:true});
-    await refresh();toast("Помещение восстановлено, история измерений сохранена");
+    await refresh();toast("Помещение восстановлено. История сохранена.");
   }catch(error){toast(error.message,true);}
 }
 async function disableRoom(room) {
@@ -647,6 +647,7 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
+  if(name==="sensors")refreshSensors();
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
 $("search-rooms").addEventListener("input",renderOverview);
@@ -793,7 +794,7 @@ async function loadSettings() {
     for(const checkbox of document.querySelectorAll('[name="remind-day"]'))
       checkbox.checked=settingsCache.reminder_days.includes(Number(checkbox.value));
     $("max-status").textContent=settingsCache.max_token_configured?"Токен MAX настроен":"Токен MAX отсутствует";
-    $("max-webhook-mode").textContent=settingsCache.max_mode==="webhook"?"Обнаружен прежний режим webhook. Для получения сообщений через Long Polling отключите webhook кнопкой ниже.":"Long Polling включён. Публичный IP не требуется; служба MAX получает сообщения исходящими запросами.";
+    $("max-webhook-mode").textContent=settingsCache.max_mode==="webhook"?"Включён webhook. Отключите его кнопкой ниже для перехода на Long Polling.":"Long Polling включён. Публичный IP не требуется.";
     $("switch-polling").hidden=settingsCache.max_mode!=="webhook";
     $("ingest-status").textContent=settingsCache.ingest_key_configured?"Ключ датчиков настроен":"Нет ключа для датчиков";
     document.title=settingsCache.organization_name+" — Термоконтур";
@@ -935,7 +936,7 @@ $("general-settings-form").addEventListener("submit",async event=>{
     organization_name:$("setting-organization").value.trim(),
     timezone:$("setting-timezone").value.trim(),
     stale_hours:Number($("setting-stale").value)
-  },"Параметры организации сохранены");
+  },"Настройки организации сохранены");
   if(saved)await refresh();
 });
 $("reminders-settings-form").addEventListener("submit",async event=>{
@@ -1028,7 +1029,7 @@ async function loadNotificationHistory(){
     const batches=await api("/api/notifications/history");
     const target=$("notification-history");target.replaceChildren();
     if(!batches.length){
-      target.append(el("p","hint","Пока нет сообщений от администратора."));
+      target.append(el("p","hint","Сообщений пока нет."));
       return;
     }
     for(const item of batches){
@@ -1072,8 +1073,8 @@ $("notification-compose-form").addEventListener("submit",async event=>{
       request_id,text,user_ids,silent:$("notification-silent").checked
     });
     feedback.textContent=result.already_queued
-      ?"Сообщение уже находится в очереди. Повторная рассылка не создана."
-      :"Поставлено в очередь: "+result.queued+". Доставку выполняет служба MAX.";
+      ?"Сообщение уже в очереди."
+      :"Поставлено в очередь: "+result.queued+". Ожидается отправка через MAX.";
     $("notification-text").value="";
     notificationRequestId=null;
     toast("Сообщение поставлено в очередь для "+result.queued+" сотрудников");
@@ -1122,18 +1123,18 @@ function passwordFeedback(){
   const value=$("new-password").value,confirmValue=$("confirm-password").value;
   const hint=$("password-feedback");
   hint.classList.remove("valid","invalid");
-  if(!value){hint.textContent="Минимум 8 символов. Спецсимволы не обязательны.";return;}
+  if(!value){hint.textContent="От 8 до 256 символов.";return;}
   if(value.length<8){
-    hint.textContent="Недостаточная длина: "+value.length+" из 8 символов";
+    hint.textContent="Символов: "+value.length+" из 8 символов";
     hint.classList.add("invalid");
   }else if(confirmValue && value!==confirmValue){
     hint.textContent="Пароли не совпадают";
     hint.classList.add("invalid");
   }else if(confirmValue){
-    hint.textContent="Пароль подходит, значения совпадают";
+    hint.textContent="Пароли совпадают";
     hint.classList.add("valid");
   }else{
-    hint.textContent="Длина подходит. Повторите пароль ниже.";
+    hint.textContent="Повторите пароль ниже.";
     hint.classList.add("valid");
   }
 }
@@ -1310,7 +1311,7 @@ async function loadUpdateStatus(){
   }catch(error){
     $("update-status-text").textContent=
       ["queued","installing"].includes(updateState)
-        ?"Связь с сервером временно потеряна. Продолжаем проверять состояние…"
+        ?"Нет связи с сервером. Ожидаем подключения…"
         :"Не удалось получить состояние обновления: "+error.message;
   }finally{updatePolling=false;}
 }
@@ -1398,7 +1399,7 @@ function renderMaxCodes(){
     ].filter(Boolean).join(" · ")));
     label.append(check,info);list.append(label);
   }
-  if(!visible.length)list.append(el("p","max-codes-empty","Кабинеты не найдены. Попробуйте снять ограничения фильтра."));
+  if(!visible.length)list.append(el("p","max-codes-empty","Кабинеты не найдены. Измените фильтры."));
   const toggle=$("max-codes-select-all");
   const selectedVisible=visible.filter(r=>selectedMaxRooms.has(r.id)).length;
   toggle.checked=!!visible.length&&selectedVisible===visible.length;
@@ -1412,7 +1413,7 @@ function renderMaxCodes(){
 function renderActiveMaxCodes(){
   const list=$("max-active-codes-list");list.replaceChildren();
   if(!activeMaxCodes.length){
-    list.append(el("p","max-codes-empty","Действующих неиспользованных кодов нет."));
+    list.append(el("p","max-codes-empty","Действующих кодов нет."));
     return;
   }
   for(const item of activeMaxCodes){
@@ -1426,7 +1427,7 @@ function renderActiveMaxCodes(){
       try{
         await api("/api/rooms/"+item.room_id+"/pairing","DELETE");
         issuedMaxCodes=issuedMaxCodes.filter(c=>c.id!==item.room_id);
-        renderIssuedMaxCodes();await loadMaxCodes();toast("Неиспользованный код отозван");
+        renderIssuedMaxCodes();await loadMaxCodes();toast("Код отозван");
       }catch(error){revoke.disabled=false;toast(error.message,true);}
     });
     record.append(details,revoke);list.append(record);
@@ -1549,7 +1550,7 @@ $("max-codes-download-issued").addEventListener("click",downloadIssuedMaxCodes);
 async function loadMaxDiagnostics() {
   const target=$("max-diagnostics");
   if(!settingsCache?.max_token_configured) {
-    target.textContent="MAX: токен не задан. Сохраните токен, затем проверьте подключение.";
+    target.textContent="Сохраните токен MAX и повторите проверку.";
     return;
   }
   target.textContent="Проверка MAX: токен, служба и способ получения событий…";
@@ -1559,43 +1560,43 @@ async function loadMaxDiagnostics() {
     if(state.token_valid===true) {
       lines.push("Токен действителен"+(state.bot_username?" (бот @"+state.bot_username+")":"")+".");
     } else if(state.token_valid===false) {
-      lines.push("ОШИБКА: MAX отклонил токен (401). Проверьте, от какого бота он получен, и сохраните действующий токен.");
+      lines.push("MAX отклонил токен. Сохраните действующий токен бота.");
     } else if(state.api_check_error) {
-      lines.push("Не удалось проверить токен через MAX API. Проверьте интернет, DNS и TLS-сертификаты на сервере.");
+      lines.push("MAX недоступен. Проверьте интернет и сертификаты сервера.");
     }
     if(!state.worker_running) {
       lines.push("Служба обработки MAX не отвечает. На сервере проверьте: systemctl status termokontur-max и journalctl -u termokontur-max -n 60.");
     } else if(state.worker_mode==="waiting_for_token") {
-      lines.push("Служба MAX работает, но ещё ожидает токен. Если токен только что сохранён, повторите проверку через несколько секунд.");
+      lines.push("Служба MAX ожидает токен. Если он сохранён, повторите проверку через несколько секунд.");
     } else {
       lines.push("Служба MAX работает ("+(state.worker_mode==="webhook"?"приём через webhook":"Long Polling")+").");
     }
     if(state.mode==="webhook") {
       if(state.webhook_check_error) lines.push("Не удалось проверить подписку webhook в MAX.");
       else if(state.webhook_registered) lines.push("Webhook зарегистрирован в MAX.");
-      else if(state.token_valid===true) lines.push("ВНИМАНИЕ: webhook не найден в MAX. Проверьте публичный HTTPS-адрес.");
+      else if(state.token_valid===true) lines.push("Webhook не найден. Проверьте публичный HTTPS-адрес.");
     } else {
       if(state.polling_blocked_by_webhook) {
-        lines.push("ОШИБКА: для этого бота уже зарегистрирован webhook. MAX не передаёт события через Long Polling при активном webhook. Проверьте подписку другого проекта или используйте отдельного бота.");
+        lines.push("У бота включён webhook. Отключите его или используйте отдельного бота для Long Polling.");
       } else if(state.webhook_check_error) {
-        lines.push("Не удалось проверить, нет ли конфликтующей webhook-подписки.");
+        lines.push("Не удалось проверить webhook.");
       } else if(state.token_valid===true) {
-        lines.push("Long Polling разрешён: конфликтующих webhook-подписок нет.");
+        lines.push("Long Polling доступен.");
       }
     }
     if(state.mode==="polling") {
       const errors={
-        tls_certificate:"ОШИБКА TLS: Python не доверяет сертификату MAX. Установите необходимые CA в Debian и укажите SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt для служб termokontur и termokontur-max.",
-        authorization:"ОШИБКА: Long Polling получает отказ авторизации. Проверьте токен.",
+        tls_certificate:"Сервер не доверяет сертификату MAX. Установите корневые сертификаты по инструкции docs/max-long-polling.md.",
+        authorization:"MAX отклонил подключение. Проверьте токен.",
         rate_limit:"MAX временно ограничил количество запросов. Бот повторит попытку.",
         connection:"Нет связи с API MAX из службы опроса. Проверьте DNS, прокси и исходящий HTTPS.",
         api_error:"MAX возвращает ошибку API; проверьте журнал службы.",
         invalid_response:"MAX возвращает неожиданный ответ; проверьте журнал службы.",
-        event_processing:"Предыдущее событие ещё обрабатывается; служба повторит попытку."
+        event_processing:"Сообщение ещё обрабатывается. Повторная попытка — автоматически."
       };
       if(state.poll_last_error) lines.push(errors[state.poll_last_error]||"Ошибка опроса MAX, проверьте журнал службы.");
       if(state.poll_last_success_at) lines.push("Последний успешный опрос: "+when(state.poll_last_success_at)+".");
-      else if(state.worker_running&&state.token_valid===true) lines.push("Успешных циклов опроса с текущим токеном пока нет.");
+      else if(state.worker_running&&state.token_valid===true) lines.push("Сообщения с текущим токеном ещё не получены.");
     }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
@@ -1617,7 +1618,7 @@ $("maintenance-form").addEventListener("submit",async event=>{
     backup_interval_days:Number($("setting-backup-interval").value),
     backup_keep:Number($("setting-backup-keep").value),
     retention_days:Number($("setting-retention").value)
-  },"Параметры резервного копирования и хранения сохранены");
+  },"Настройки копирования и хранения сохранены");
 });
 const bytesToText=bytes=>bytes>1024*1024?(bytes/1024/1024).toFixed(1)+" МБ":Math.round(bytes/1024)+" КБ";
 async function loadBackups(){

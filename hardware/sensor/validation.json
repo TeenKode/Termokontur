@@ -1,0 +1,518 @@
+[
+  {
+    "sheet": "01-power",
+    "expected_nets": {
+      "CHG_5V": [
+        [
+          "J1",
+          "VBUS"
+        ],
+        [
+          "A2",
+          "IN+"
+        ]
+      ],
+      "USB_RETURN": [
+        [
+          "J1",
+          "GND_USB"
+        ],
+        [
+          "A2",
+          "IN-"
+        ]
+      ],
+      "BAT_PLUS": [
+        [
+          "BT1",
+          "1"
+        ],
+        [
+          "A2",
+          "B+"
+        ]
+      ],
+      "BAT_MINUS": [
+        [
+          "BT1",
+          "2"
+        ],
+        [
+          "A2",
+          "B-"
+        ]
+      ],
+      "PROT_PLUS": [
+        [
+          "A2",
+          "OUT+"
+        ],
+        [
+          "SW1",
+          "1"
+        ]
+      ],
+      "VBAT_SW": [
+        [
+          "SW1",
+          "2"
+        ],
+        [
+          "A1",
+          "5V"
+        ],
+        [
+          "C2",
+          "1"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "A2",
+          "OUT-"
+        ],
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "C2",
+          "2"
+        ],
+        [
+          "C3",
+          "2"
+        ]
+      ],
+      "3V3": [
+        [
+          "A1",
+          "3V3"
+        ],
+        [
+          "C3",
+          "1"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:22:57+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/e49e9a87-86c1-57e0-aa2e-7f8ddb819f01",
+          "violations": []
+        }
+      ],
+      "source": "01-power.kicad_sch"
+    }
+  },
+  {
+    "sheet": "02-charge-adc",
+    "expected_nets": {
+      "CHG_5V": [
+        [
+          "R2",
+          "1"
+        ]
+      ],
+      "USB_BASE": [
+        [
+          "Q1",
+          "2"
+        ],
+        [
+          "R2",
+          "2"
+        ],
+        [
+          "R3",
+          "1"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "R3",
+          "2"
+        ],
+        [
+          "Q1",
+          "1"
+        ],
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "R5",
+          "2"
+        ],
+        [
+          "C1",
+          "2"
+        ]
+      ],
+      "USB_DET_N": [
+        [
+          "Q1",
+          "3"
+        ],
+        [
+          "R1",
+          "2"
+        ],
+        [
+          "A1",
+          "GPIO4"
+        ]
+      ],
+      "3V3": [
+        [
+          "R1",
+          "1"
+        ],
+        [
+          "A1",
+          "3V3"
+        ]
+      ],
+      "VBAT_SW": [
+        [
+          "R4",
+          "1"
+        ]
+      ],
+      "VBAT_ADC": [
+        [
+          "R4",
+          "2"
+        ],
+        [
+          "R5",
+          "1"
+        ],
+        [
+          "C1",
+          "1"
+        ],
+        [
+          "A1",
+          "GPIO3"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:23:00+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/7afc613d-dd99-59b7-b88e-4e807792e91e",
+          "violations": []
+        }
+      ],
+      "source": "02-charge-adc.kicad_sch"
+    }
+  },
+  {
+    "sheet": "03-i2c",
+    "expected_nets": {
+      "3V3": [
+        [
+          "A1",
+          "3V3"
+        ],
+        [
+          "A3",
+          "VCC"
+        ],
+        [
+          "R6",
+          "1"
+        ],
+        [
+          "R7",
+          "1"
+        ],
+        [
+          "C4",
+          "1"
+        ]
+      ],
+      "SDA": [
+        [
+          "A1",
+          "GPIO6"
+        ],
+        [
+          "A3",
+          "SDA"
+        ],
+        [
+          "R6",
+          "2"
+        ]
+      ],
+      "SCL": [
+        [
+          "A1",
+          "GPIO7"
+        ],
+        [
+          "A3",
+          "SCL"
+        ],
+        [
+          "R7",
+          "2"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "A3",
+          "GND"
+        ],
+        [
+          "C4",
+          "2"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:23:02+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/59f81cfb-7631-5adb-8fbe-300c9e4d1e13",
+          "violations": []
+        }
+      ],
+      "source": "03-i2c.kicad_sch"
+    }
+  },
+  {
+    "sheet": "04-bme280",
+    "expected_nets": {
+      "3V3": [
+        [
+          "A1",
+          "3V3"
+        ],
+        [
+          "A3",
+          "VCC"
+        ],
+        [
+          "R6",
+          "1"
+        ],
+        [
+          "R7",
+          "1"
+        ],
+        [
+          "C4",
+          "1"
+        ],
+        [
+          "A3",
+          "CSB"
+        ]
+      ],
+      "SDA": [
+        [
+          "A1",
+          "GPIO6"
+        ],
+        [
+          "A3",
+          "SDA"
+        ],
+        [
+          "R6",
+          "2"
+        ]
+      ],
+      "SCL": [
+        [
+          "A1",
+          "GPIO7"
+        ],
+        [
+          "A3",
+          "SCL"
+        ],
+        [
+          "R7",
+          "2"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "A3",
+          "GND"
+        ],
+        [
+          "C4",
+          "2"
+        ],
+        [
+          "A3",
+          "SDO"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:23:03+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/babb4000-5d57-50d3-ad9f-7589d062b5ce",
+          "violations": []
+        }
+      ],
+      "source": "04-bme280.kicad_sch"
+    }
+  },
+  {
+    "sheet": "05-dht",
+    "expected_nets": {
+      "3V3": [
+        [
+          "A1",
+          "3V3"
+        ],
+        [
+          "A3",
+          "VCC"
+        ],
+        [
+          "R8",
+          "1"
+        ]
+      ],
+      "DATA": [
+        [
+          "A1",
+          "GPIO5"
+        ],
+        [
+          "A3",
+          "DATA"
+        ],
+        [
+          "R8",
+          "2"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "A3",
+          "GND"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:23:05+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/3dda96de-fb6f-56ba-af1d-27a136fec267",
+          "violations": []
+        }
+      ],
+      "source": "05-dht.kicad_sch"
+    }
+  },
+  {
+    "sheet": "06-ds18b20",
+    "expected_nets": {
+      "3V3": [
+        [
+          "A1",
+          "3V3"
+        ],
+        [
+          "U1",
+          "3"
+        ],
+        [
+          "R8",
+          "1"
+        ],
+        [
+          "C5",
+          "1"
+        ]
+      ],
+      "DQ": [
+        [
+          "A1",
+          "GPIO5"
+        ],
+        [
+          "U1",
+          "2"
+        ],
+        [
+          "R8",
+          "2"
+        ]
+      ],
+      "GND_SYS": [
+        [
+          "A1",
+          "GND"
+        ],
+        [
+          "U1",
+          "1"
+        ],
+        [
+          "C5",
+          "2"
+        ]
+      ]
+    },
+    "erc": {
+      "$schema": "https://schemas.kicad.org/erc.v1.json",
+      "coordinate_units": "mm",
+      "date": "2026-11-15T15:23:07+0000",
+      "kicad_version": "9.0.2",
+      "sheets": [
+        {
+          "path": "/",
+          "uuid_path": "/2c218f46-df2e-57f0-a8c0-549f905ac8d0",
+          "violations": []
+        }
+      ],
+      "source": "06-ds18b20.kicad_sch"
+    }
+  }
+]

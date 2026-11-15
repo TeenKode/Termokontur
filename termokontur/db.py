@@ -187,6 +187,9 @@ def initialize() -> None:
         }:
             conn.execute("ALTER TABLE notification_recipients ADD COLUMN delivered_at TEXT")
 
+        from . import sensors
+        sensors.initialize(conn)
+
 def room_list(active_only: bool = True) -> list[dict]:
     """Admin room catalog with MAX assignments, fetched without N+1 queries."""
     with connect() as conn:
