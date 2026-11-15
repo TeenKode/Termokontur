@@ -46,7 +46,7 @@ payload['web-manifest.json'] = (json.dumps({
                 'parts': [{'path': 'factory.bin', 'offset': 0}]}]
 }, indent=2) + '\n').encode()
 payload['flash-sensor.py'] = (ROOT / 'scripts/flash-sensor.py').read_bytes()
-for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md'):
+for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md', 'SETUP.md'):
     payload[name] = (ROOT / 'docs/sensors' / name).read_bytes()
 manifest = {'version': version, 'source_commit': commit, 'chip': 'esp32c3',
             'flash_size': '4MB', 'files': {
