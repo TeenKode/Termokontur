@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix="sensor-guide-") as tmp:
                 page.wait_for_selector("#app-root", state="visible")
                 page.evaluate("window.termokonturTheme.setPreference('light')")
                 page.click('[data-tab="sensors"]')
-                expect(page.locator("#sensor-state")).to_contain_text("Добавьте")
+                expect(page.locator("#sensor-state")).to_contain_text("Подключите первый датчик")
                 capture(page, "01-sensors")
                 page.click("#sensor-add")
                 page.fill("#sensor-new-name", "Демо: датчик кабинета 101")

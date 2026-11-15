@@ -65,5 +65,5 @@ test("theme bootstraps before stylesheet, includes dialogs and canvas colors",()
   assert.match(css,/html\[data-theme="dark"\] \.heatmap-table/);
   assert.match(js,/const chartGrid=dark\?/);
   assert.match(js,/const historyGrid=dark\?/);
-  assert.ok(py.includes('"app.js", "sensors.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"'));
+  assert.ok(py.includes('"app.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"'));
 });

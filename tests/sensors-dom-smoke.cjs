@@ -31,7 +31,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   d.getElementById("login-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>!d.getElementById("app-root").hidden);
   await until(()=>d.getElementById("reading-room").options.length===1);
-  d.querySelector('[data-tab="sensors"]').click();await until(()=>d.getElementById("sensor-state").textContent.includes("Добавьте"));
+  d.querySelector('[data-tab="sensors"]').click();await until(()=>d.getElementById("sensor-state").textContent.includes("Подключите первый датчик"));
   // jsdom has no native modal rendering; implement only dialog open state.
   for(const dialog of d.querySelectorAll("dialog")){dialog.showModal=()=>dialog.setAttribute("open","");dialog.close=()=>dialog.removeAttribute("open");}
   d.getElementById("sensor-add").click();d.getElementById("sensor-new-name").value="Датчик <тест>";

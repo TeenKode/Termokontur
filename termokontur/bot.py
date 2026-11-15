@@ -35,12 +35,12 @@ def _heartbeat(mode: str) -> None:
     """Expose whether the MAX background service is alive, without disclosing secrets."""
     db.set_state("max_worker_heartbeat", f"{db.utc_now()}|{mode}")
 
-HELP = ("Термоконтур — сбор температуры.\n"
+HELP = ("Термоконтур — показания температуры.\n"
         "/bind КОД — привязать кабинет (код выдаёт администратор)\n"
         "/rooms — мои кабинеты\n"
         "/today — статус замеров за сегодня\n"
-        "/temp 21,5 — отправить температуру для единственного кабинета\n"
-        "/temp ID 21,5 — отправить для кабинета с указанным ID\n"
+        "/temp 21,5 — температура для одного кабинета\n"
+        "/temp ID 21,5 — температура для выбранного кабинета\n"
         "/unbind ID — отключить кабинет\n"
         "/help — помощь")
 
@@ -53,7 +53,7 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
     action = parts[0].lower().split("@")[0]
     if action == "/bind":
         if len(parts) != 2:
-            return "Введите /bind КОД — код получите у администратора."
+            return "Запросите код у администратора и отправьте /bind КОД."
         room = db.bind_code(user_id, parts[1], event_id)
         if room is None:
             return "Код недействителен или истёк. Запросите новый."
@@ -91,7 +91,7 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
             return "Сначала привяжите кабинет: /bind КОД"
         if len(values) == 1:
             if len(allowed) != 1:
-                return "У вас несколько кабинетов. Укажите /temp ID 21,5"
+                return "Укажите кабинет: /temp ID 21,5"
             room = allowed[0]
             raw = values[0]
         elif len(values) == 2 and values[0].isdigit():

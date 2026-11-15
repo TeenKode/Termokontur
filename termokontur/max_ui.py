@@ -112,18 +112,18 @@ def _select(uid: str, change: bool) -> str:
     rooms = db.bound_rooms(uid)
     if not rooms:
         _set(uid, "bind")
-        return "Сначала привяжите кабинет. Нажмите «Кабинеты» или отправьте код подключения, полученный у администратора."
+        return "Отправьте код кабинета, полученный у администратора."
     if len(rooms) == 1:
         return _choose_room(uid, rooms[0]["id"], change)
     _set(uid, "change_room" if change else "send_room")
-    return "Выберите кабинет для изменения показания за сегодня:" if change else "Выберите кабинет для сегодняшнего замера:"
+    return "Выберите кабинет для изменения показания за сегодня:" if change else "Выберите кабинет для измерения:"
 
 
 def _choose_room(uid: str, room_id: int, change: bool) -> str:
     room = _room(uid, room_id)
     if not room:
         _set(uid)
-        return "Этот кабинет вам не привязан или отключён. Выберите действие в меню."
+        return "Кабинет отключён или недоступен. Вернитесь в меню."
     _, start, end = _today()
     with db.connect() as conn:
         previous = _current(conn, room_id, start, end)
@@ -132,20 +132,20 @@ def _choose_room(uid: str, room_id: int, change: bool) -> str:
         _set(uid, "send_value", room_id)
         if change:
             return (f"За сегодня ещё не передавали показание для {room_label}.\n"
-                    "Выберите температуру для первого замера или введите её вручную.")
-        return f"{room_label}\nВыберите температуру кнопкой или нажмите «Ввести вручную» (например, 21,5)."
+                    "Укажите температуру.")
+        return f"{room_label}\nВыберите температуру или введите вручную, например 21,5."
     source_label = {"max": "сотрудником через MAX", "manual": "администратором",
                     "ha": "датчиком"}.get(previous["source"], "другим способом")
     if previous["source"] != "max":
         _set(uid)
         return (f"Сегодня для {room_label} уже передано {previous['value']:g} °C "
                 f"({source_label}).\nЭто измерение нельзя изменять через MAX. "
-                "При необходимости обратитесь к администратору.")
+                "Обратитесь к администратору.")
     _set(uid, "change_value", room_id)
     return (f"Сегодня для {room_label} уже передано {previous['value']:g} °C "
             f"({source_label}).\n"
-            "Вы можете исправить общее показание кнопкой или нажать «Ввести вручную». "
-            "В истории сохранятся первоначальный автор и автор исправления.")
+            "Укажите новую температуру. "
+            "Первое показание и авторы сохранятся в истории.")
 
 def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     if not NUMBER.fullmatch(raw.strip()):
@@ -200,7 +200,7 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
                 next_mode = "send_value"
                 message = "Показание за сегодня не найдено. Выберите температуру для первого замера."
             elif mode == "c" and previous["source"] != "max":
-                message = "Текущее показание получено не через MAX. Через MAX изменить его нельзя: используйте соответствующий источник."
+                message = "Это показание нельзя изменить через MAX. Обратитесь к администратору."
             elif mode == "c" and previous["value"] == value:
                 message = f"Показание не изменилось: {room['name']} — {value:g} °C."
             elif mode == "c":
@@ -256,10 +256,9 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     verb = "Исправлено" if mode == "c" else "Сохранено"
     result = f"{verb}: {room['building']} / {room['name']} — {value:g} °C."
     if value < room["min_temp"] or value > room["max_temp"]:
-        result += (f"\nВнимание: температура вне установленной нормы "
+        result += (f"\nТемпература вне нормы "
                    f"({room['min_temp']:g}–{room['max_temp']:g} °C).")
-    return (result + "\nПоказание общее для всех сотрудников кабинета. "
-            "При исправлении сохраняется история изменений.")
+    return result
 
 def handle_callback(uid: str, payload: str, event_id: str) -> str:
     parts = payload.split(":")
@@ -268,7 +267,7 @@ def handle_callback(uid: str, payload: str, event_id: str) -> str:
     action = parts[1] if len(parts) > 1 else ""
     if action == "home":
         _set(uid)
-        return "Главное меню. Выберите действие:"
+        return "Выберите действие:"
     if action == "send":
         return _select(uid, False)
     if action == "change":
@@ -278,7 +277,7 @@ def handle_callback(uid: str, payload: str, event_id: str) -> str:
         rooms = db.bound_rooms(uid)
         if not rooms:
             _set(uid, "bind")
-            return "Пока нет привязанных кабинетов. Отправьте код подключения, полученный у администратора."
+            return "Кабинеты не подключены. Отправьте код от администратора."
         return "Ваши кабинеты:\n" + "\n".join(
             f"• {r['building']} / {r['name']} (ID {r['id']})" for r in rooms[:25])
     if action == "today":
@@ -313,7 +312,7 @@ def handle_callback(uid: str, payload: str, event_id: str) -> str:
             return "Нет доступа к этому кабинету."
         if action == "manual":
             _set(uid, "change_manual" if mode == "c" else "send_manual", room_or_page)
-            return "Введите показание одним сообщением, например 21,5 (допустимо −40…60 °C)."
+            return "Введите температуру от −40 до 60 °C, например 21,5."
         if len(parts) != 6:
             return "Некорректное значение кнопки."
         return _write(uid, room_or_page, mode, parts[5], "max:callback:" + event_id)
@@ -325,7 +324,7 @@ def handle_message(uid: str, text: str, event_id: str) -> str | None:
     clean = text.strip()
     if clean.lower() in ("меню", "главное меню"):
         _set(uid)
-        return "Главное меню. Выберите действие:"
+        return "Выберите действие:"
     s = _session(uid)
     if s["local_day"] != _today()[0]:
         _set(uid)
@@ -351,10 +350,10 @@ def handle_start(uid: str, payload: str, event_id: str) -> str:
     if payload and CODE.fullmatch(payload):
         room = db.bind_code(uid, payload, event_id)
         if room is None:
-            return "Код подключения не подошёл или истёк. Введите действующий код от администратора."
+            return "Код недействителен или истёк. Запросите новый у администратора."
         return f"Кабинет привязан: {room['building']} / {room['name']}.\nТеперь выберите «Отправить за сегодня»."
     rooms = db.bound_rooms(uid)
     if rooms:
-        return "Термоконтур — сбор температуры.\nВыберите действие кнопкой ниже. Ваших кабинетов: " + str(len(rooms)) + "."
+        return "Термоконтур. Ваших кабинетов: " + str(len(rooms)) + "."
     _set(uid, "bind")
-    return "Термоконтур — сбор температуры.\nДля начала отправьте код подключения кабинета от администратора. После этого используйте кнопки ниже."
+    return "Термоконтур. Отправьте код кабинета, полученный у администратора."
