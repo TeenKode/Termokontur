@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/workspace/Termokontur/hardware/sensor/01-power.kicad_sch</source>
+    <date>2026-11-15T15:22:57+0000</date>
+    <tool>Eeschema 9.0.2+dfsg-1</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>01-power.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="A1">
+      <value>ESP32-C3 SuperMini</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="SuperMini_power" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>c691427b-a6da-5707-a4e5-04b2db4aa4dd</tstamps>
+    </comp>
+    <comp ref="A2">
+      <value>TP4056 + защита</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="TP4056_protected" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>f15b02c4-ea2f-573e-8300-3bf1c3080402</tstamps>
+    </comp>
+    <comp ref="BT1">
+      <value>BL-5C, 1S</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="Battery_Cell" description="Single-cell battery"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <property name="ki_keywords" value="battery cell"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>42e37ec5-00f6-508d-b2ac-6b34fe3080ef</tstamps>
+    </comp>
+    <comp ref="C2">
+      <value>47u / 10V *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <property name="ki_keywords" value="cap capacitor"/>
+      <property name="ki_fp_filters" value="C_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>6617d123-fd04-582f-a6d3-9d33c01d0542</tstamps>
+    </comp>
+    <comp ref="C3">
+      <value>47u / 10V *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <property name="ki_keywords" value="cap capacitor"/>
+      <property name="ki_fp_filters" value="C_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>87fe12c3-fb7e-575f-841e-bb9f175288cf</tstamps>
+    </comp>
+    <comp ref="J1">
+      <value>USB-C TP4056</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="USB_charge" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>a3eea369-b7e1-56b4-b301-366827713167</tstamps>
+    </comp>
+    <comp ref="SW1">
+      <value>разомкнуть при USB</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Switch" part="SW_SPST" description="Single Pole Single Throw (SPST) switch"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="01-power.kicad_sch"/>
+      <property name="ki_keywords" value="switch lever"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>14ccc59f-bd46-5884-a73a-fb39620841c8</tstamps>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="Battery_Cell">
+      <description>Single-cell battery</description>
+      <docs>~</docs>
+      <fields>
+        <field name="Reference">BT</field>
+        <field name="Value">Battery_Cell</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Single-cell battery</field>
+      </fields>
+      <pins>
+        <pin num="1" name="+" type="passive"/>
+        <pin num="2" name="-" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Device" part="C">
+      <description>Unpolarized capacitor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>C_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">C</field>
+        <field name="Value">C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Unpolarized capacitor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Switch" part="SW_SPST">
+      <description>Single Pole Single Throw (SPST) switch</description>
+      <docs>~</docs>
+      <fields>
+        <field name="Reference">SW</field>
+        <field name="Value">SW_SPST</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Single Pole Single Throw (SPST) switch</field>
+      </fields>
+      <pins>
+        <pin num="1" name="A" type="passive"/>
+        <pin num="2" name="B" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="SuperMini_power">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">SuperMini_power</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="3V3" name="3V3" type="passive"/>
+        <pin num="5V" name="5V" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="TP4056_protected">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">TP4056_protected</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="B+" name="B+" type="passive"/>
+        <pin num="B-" name="B-" type="passive"/>
+        <pin num="IN+" name="IN+" type="passive"/>
+        <pin num="IN-" name="IN-" type="passive"/>
+        <pin num="OUT+" name="OUT+" type="passive"/>
+        <pin num="OUT-" name="OUT-" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="USB_charge">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">USB_charge</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="GND_USB" name="GND_USB" type="passive"/>
+        <pin num="VBUS" name="VBUS" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries>
+    <library logical="Device">
+      <uri>/usr/share/kicad/symbols/Device.kicad_sym</uri>
+    </library>
+    <library logical="Switch">
+      <uri>/usr/share/kicad/symbols/Switch.kicad_sym</uri>
+    </library>
+    <library logical="Termokontur">
+      <uri>/workspace/Termokontur/hardware/sensor/Termokontur.kicad_sym</uri>
+    </library>
+  </libraries>
+  <nets>
+    <net code="1" name="/3V3" class="Default">
+      <node ref="A1" pin="3V3" pinfunction="3V3" pintype="passive"/>
+      <node ref="C3" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/BAT_MINUS" class="Default">
+      <node ref="A2" pin="B-" pinfunction="B-" pintype="passive"/>
+      <node ref="BT1" pin="2" pinfunction="-" pintype="passive"/>
+    </net>
+    <net code="3" name="/BAT_PLUS" class="Default">
+      <node ref="A2" pin="B+" pinfunction="B+" pintype="passive"/>
+      <node ref="BT1" pin="1" pinfunction="+" pintype="passive"/>
+    </net>
+    <net code="4" name="/CHG_5V" class="Default">
+      <node ref="A2" pin="IN+" pinfunction="IN+" pintype="passive"/>
+      <node ref="J1" pin="VBUS" pinfunction="VBUS" pintype="passive"/>
+    </net>
+    <net code="5" name="/GND_SYS" class="Default">
+      <node ref="A1" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="A2" pin="OUT-" pinfunction="OUT-" pintype="passive"/>
+      <node ref="C2" pin="2" pintype="passive"/>
+      <node ref="C3" pin="2" pintype="passive"/>
+    </net>
+    <net code="6" name="/PROT_PLUS" class="Default">
+      <node ref="A2" pin="OUT+" pinfunction="OUT+" pintype="passive"/>
+      <node ref="SW1" pin="1" pinfunction="A" pintype="passive"/>
+    </net>
+    <net code="7" name="/USB_RETURN" class="Default">
+      <node ref="A2" pin="IN-" pinfunction="IN-" pintype="passive"/>
+      <node ref="J1" pin="GND_USB" pinfunction="GND_USB" pintype="passive"/>
+    </net>
+    <net code="8" name="/VBAT_SW" class="Default">
+      <node ref="A1" pin="5V" pinfunction="5V" pintype="passive"/>
+      <node ref="C2" pin="1" pintype="passive"/>
+      <node ref="SW1" pin="2" pinfunction="B" pintype="passive"/>
+    </net>
+  </nets>
+</export>
