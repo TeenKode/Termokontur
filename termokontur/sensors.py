@@ -284,6 +284,8 @@ def router(require_admin):
             if (not d["enabled"] or not d["enrollment_hash"] or d["enrollment_until"] < time.time()
                     or not hmac.compare_digest(d["enrollment_hash"], digest(payload.code))):
                 raise HTTPException(403, "Код недействителен; обратитесь к администратору")
+            if not conn.execute("SELECT 1 FROM rooms WHERE id=? AND active=1", (d["room_id"],)).fetchone():
+                raise HTTPException(403, "Помещение отключено")
             if d["hardware_id"] and d["hardware_id"] != payload.hardware_id:
                 raise HTTPException(409, "Код уже привязан к другой плате")
             # Deterministic per-code credential lets a lost enrollment response be retried.

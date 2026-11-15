@@ -10,6 +10,7 @@ import sqlite3
 import struct
 import time
 import zipfile
+import zlib
 from pathlib import PurePosixPath
 
 from cryptography.exceptions import InvalidSignature
@@ -205,7 +206,9 @@ def inspect_kit(data):
         if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):
             raise ValueError("В комплекте неверно указан исходный коммит")
         return version, sha, commit, image
-    except (ValueError, KeyError, TypeError, IndexError, struct.error, UnicodeError, zipfile.BadZipFile) as exc:
+    except (zipfile.BadZipFile, RuntimeError, zlib.error):
+        raise HTTPException(422, "Неверный комплект: ZIP повреждён, зашифрован или использует неподдерживаемое сжатие") from None
+    except (ValueError, KeyError, TypeError, IndexError, struct.error, UnicodeError) as exc:
         raise HTTPException(422, "Неверный комплект: " + str(exc)) from None
 
 
@@ -229,9 +232,12 @@ def router(require_admin):
 
     @r.post('/auth/prove')
     def prove(payload: Proof, request: Request):
+        # Invalid proofs roll back their transaction; their rate limit must persist.
         with db.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             throttle(conn, request, fingerprint(payload.public_key), proof=True)
+        with db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             verify(conn, payload)
             fp = remember(conn, payload)
             identity = conn.execute('SELECT * FROM sensor_identities WHERE fingerprint=?', (fp,)).fetchone()
