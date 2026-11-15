@@ -196,9 +196,10 @@ def inspect_kit(data):
             magic, kind, subtype, offset, size, name, flags = struct.unpack_from('<HBBII16sI', image, pos)
             if magic != 0x50aa:
                 break
-            actual[name.split(b'\0', 1)[0].decode()] = (offset, size)
-        if actual != {'nvs': (0x9000,0x6000), 'otadata': (0xf000,0x2000), 'ota_0': (0x20000,0x1c0000),
-                       'ota_1': (0x1e0000,0x1c0000), 'datalog': (0x3a0000,0x60000)}:
+            actual[name.split(b'\0', 1)[0].decode()] = (kind, subtype, offset, size)
+        if actual != {'nvs': (1,2,0x9000,0x6000), 'otadata': (1,0,0xf000,0x2000),
+                       'phy_init': (1,1,0x11000,0x1000), 'ota_0': (0,16,0x20000,0x1c0000),
+                       'ota_1': (0,17,0x1e0000,0x1c0000), 'datalog': (1,64,0x3a0000,0x60000)}:
             raise ValueError("Неизвестная таблица разделов")
         commit = manifest['source_commit']
         if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):

@@ -5,6 +5,7 @@ import json
 import struct
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -154,10 +155,18 @@ def kit(version='0.1.4', mutate=None):
     struct.pack_into('<I',image,0x20000+32,0xabcd5432)
     image[0x20000+48:0x20000+80]=version.encode().ljust(32,b'\0')
     image[0x20000+80:0x20000+112]=b'termokontur-sensor'.ljust(32,b'\0')
-    for i,(name,kind,subtype,offset,size) in enumerate([
-        ('nvs',1,2,0x9000,0x6000),('otadata',1,0,0xf000,0x2000),
-        ('ota_0',0,16,0x20000,0x1c0000),('ota_1',0,17,0x1e0000,0x1c0000),('datalog',1,64,0x3a0000,0x60000)]):
-        struct.pack_into('<HBBII16sI',image,0x8000+32*i,0x50aa,kind,subtype,offset,size,name.encode().ljust(16,b'\0'),0)
+    # Use the real firmware layout, so the server test catches missing partitions.
+    rows = (Path(__file__).resolve().parents[1]/'firmware/sensor/partitions.csv').read_text().splitlines()
+    named_subtypes = {'nvs':2,'ota':0,'phy':1,'ota_0':16,'ota_1':17}
+    i = 0
+    for row in rows:
+        if not row.strip() or row.startswith('#'):
+            continue
+        name,kind,subtype,offset,size = [field.strip() for field in row.split(',')]
+        kind = {'data':1,'app':0}[kind]
+        subtype = named_subtypes[subtype] if subtype in named_subtypes else int(subtype,0)
+        struct.pack_into('<HBBII16sI',image,0x8000+32*i,0x50aa,kind,subtype,int(offset,0),int(size,0),name.encode().ljust(16,b'\0'),0)
+        i += 1
     if mutate: mutate(image)
     manifest={'version':version,'source_commit':'a'*40,'files':{'factory.bin':{'sha256':hashlib.sha256(image).hexdigest(),'size':len(image)}}}
     out=io.BytesIO()
@@ -176,7 +185,7 @@ def test_installer_upload_integrity_version_and_authenticated_download(admin, cl
     assert hashlib.sha256(downloaded.content).hexdigest()==info['sha256']
     assert downloaded.headers['cache-control']=='no-store'
     assert admin.post('/api/sensors/installer',files={'file':('kit.zip',data)}).json()['id']==ident
-    for invalid in [b'not a zip',kit('0.1.3'),kit(mutate=lambda b:b.__setitem__(0x9000,1)),kit(mutate=lambda b:b.__setitem__(12,4))]:
+    for invalid in [b'not a zip',kit('0.1.3'),kit(mutate=lambda b:b.__setitem__(0x9000,1)),kit(mutate=lambda b:b.__setitem__(12,4)),kit(mutate=lambda b:b.__setitem__(0x8002,0))]:
         assert admin.post('/api/sensors/installer',files={'file':('kit.zip',invalid)}).status_code==422
     # Valid but different content cannot replace an already installed version.
     changed=kit(mutate=lambda b:b.__setitem__(0x20,1))
