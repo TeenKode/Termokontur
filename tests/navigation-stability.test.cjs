@@ -32,7 +32,7 @@ function node({hidden=false,dataset={},top=0}={}){
 }
 let viewport;
 function harness(){
-  const names=["overview","readings","rooms","settings"];
+  const names=["overview","readings","rooms","sensors","settings"];
   const categories=["summary","general","notifications","max","sensors","backups","security","updates"];
   const views=Object.fromEntries(names.map(name=>[name,node({hidden:name!=="overview"})]));
   const nav=Object.fromEntries(names.map(name=>[name,node()]));

@@ -1,0 +1,63 @@
+name: Sensors
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Journal power-cut and policy tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/journal.cpp -o /tmp/journal-test
+          /tmp/journal-test
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/policy.cpp -o /tmp/policy-test
+          /tmp/policy-test
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-sensor-${{ runner.os }}-6.9.0-${{ hashFiles('firmware/sensor/platformio.ini') }}
+      - name: Build ESP32-C3 image and rollback bootloader
+        run: |
+          python -m pip install platformio==6.1.18
+          pio run -d firmware/sensor
+          python scripts/check-sensor-build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termokontur-sensor-esp32c3
+          include-hidden-files: true
+          path: |
+            firmware/sensor/.pio/build/esp32-c3-supermini/firmware.bin
+            firmware/sensor/.pio/build/esp32-c3-supermini/bootloader.bin
+            firmware/sensor/.pio/build/esp32-c3-supermini/partitions.bin
+            firmware/sensor/.pio/build/esp32-c3-supermini/ota_data_initial.bin
+            firmware/sensor/sdkconfig.esp32-c3-supermini
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: DOM and API integration
+        run: |
+          npm install --prefix /tmp/sensor-dom --no-audit --no-fund jsdom@26.1.0
+          NODE_PATH=/tmp/sensor-dom/node_modules node tests/sensors-dom-smoke.cjs
+      - name: Sensor setup, history and configuration at desktop and mobile sizes
+        run: python tests/sensors-browser-smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sensor-browser-screenshots
+          path: /tmp/termokontur-sensors-*.png

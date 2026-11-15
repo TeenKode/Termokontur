@@ -33,7 +33,7 @@ from . import __version__
 # A content fingerprint changes whenever JavaScript OR CSS changes, even between
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
-    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
+    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "sensors.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
 ).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
@@ -59,10 +59,19 @@ async def startup():
     auth.bootstrap()
     settings.bootstrap()
     app.state.maintenance_task = asyncio.create_task(scheduled_maintenance())
+    from . import sensor_mqtt
+    app.state.sensor_mqtt_task = asyncio.create_task(sensor_mqtt.worker())
 
 
 @app.on_event("shutdown")
 async def stop_maintenance():
+    mqtt_task = getattr(app.state, "sensor_mqtt_task", None)
+    if mqtt_task:
+        mqtt_task.cancel()
+        try:
+            await mqtt_task
+        except asyncio.CancelledError:
+            pass
     task = getattr(app.state, "maintenance_task", None)
     if task:
         task.cancel()
@@ -882,3 +891,7 @@ def ingest(payload: IngestIn, x_api_key: str | None = Header(default=None)):
     except ValueError as e:
         raise HTTPException(422, str(e))
     return {"reading": reading, "inserted": inserted}
+
+
+from . import sensors
+app.include_router(sensors.router(require_admin))

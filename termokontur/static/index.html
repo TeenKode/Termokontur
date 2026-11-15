@@ -10,6 +10,7 @@
   <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/sensors.js?v=__ASSET_FINGERPRINT__" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
@@ -35,6 +36,7 @@
         <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
         <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
         <button type="button" data-tab="rooms" class="nav-button"><span class="nav-icon">▤</span>Помещения</button>
+        <button type="button" data-tab="sensors" class="nav-button"><span class="nav-icon">◉</span>Датчики</button>
         <button type="button" data-tab="settings" class="nav-button"><span class="nav-icon">⚙</span>Настройки</button>
       </nav>
       <div class="sidebar-foot">
@@ -160,6 +162,22 @@
           <div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Корпус</th><th>Кабинет</th><th>°C</th><th>Источник</th><th>Автор</th><th>Изменения</th></tr></thead><tbody id="readings-table"></tbody></table></div>
           <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
         </div>
+      </section>
+
+      <section id="view-sensors" class="view" hidden>
+        <div class="heading"><div><h1>Автономные датчики</h1><p>Температура и влажность каждые 30 минут. Накопленные данные приходят раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn primary" type="button">+ Подключить датчик</button></div></div>
+        <p id="sensor-state" role="status" aria-live="polite"></p>
+        <div id="sensor-cards" class="sensor-cards"></div>
+        <div id="sensor-detail" class="panel" hidden>
+          <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ История CSV</button></div>
+          <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить обмен</label><button class="btn secondary">Сохранить привязку</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
+          <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Записи без достоверной даты показаны только в таблице.</p></div>
+          <details><summary>Настройки измерений и энергопотребления</summary><p>Изменения доставляются при следующем обмене. Порог питания требует проверки на вашей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
+          <details><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить назначение</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
+          <details open><summary>Последние измерения</summary><div class="table-scroll"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Время / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
+          <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
+        </div>
+        <details class="panel"><summary>Home Assistant / MQTT</summary><p>Передаётся последнее измерение. История с интервалом 30 минут остаётся в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
       </section>
 
       <section id="view-rooms" class="view" hidden>
@@ -607,5 +625,7 @@
     </div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик</h2><p>Создание разрешает регистрацию одной платы. Код действует 7 суток и погасится после первого обмена.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
+<dialog id="sensor-code-dialog"><h2>Настройка с телефона</h2><p>Подключитесь к Wi-Fi датчика, откройте http://192.168.4.1 и введите эти данные. Имя сети и пароль выводятся в USB-монитор при запуске режима настройки.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
 </body>
 </html>

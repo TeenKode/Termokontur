@@ -125,7 +125,7 @@ function setTab(name) {
   if(!target || (selectedTab===name && !target.hidden))return false;
   scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
-  for(const view of ["overview","rooms","readings","settings"]) {
+  for(const view of ["overview","rooms","readings","sensors","settings"]) {
     const active=view===name;
     show("view-"+view,active);
     const button=document.querySelector('[data-tab="'+view+'"]');
@@ -647,6 +647,7 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
+  if(name==="sensors")refreshSensors();
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
 $("search-rooms").addEventListener("input",renderOverview);

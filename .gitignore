@@ -9,3 +9,6 @@ data/
 *.sqlite3-wal
 .coverage
 dist/
+
+.pio/
+firmware/sensor/sdkconfig.esp32-c3-supermini
