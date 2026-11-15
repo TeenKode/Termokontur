@@ -42,10 +42,10 @@ def check_pair(cert: str, key: str, password: str = "") -> str:
     if not cert and not key:
         return ""
     if not cert or not key:
-        return "Нужны оба файла: сертификат и соответствующий закрытый ключ."
+        return "Загрузите сертификат и его закрытый ключ."
     for file in (cert, key):
         if not Path(file).is_file() or not os.access(file, os.R_OK):
-            return "Файл сертификата или ключа не найден либо недоступен процессу панели."
+            return "Сертификат или ключ недоступен. Загрузите файлы заново."
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         # An empty string avoids an interactive OpenSSL password prompt.
@@ -60,7 +60,7 @@ def check_pair(cert: str, key: str, password: str = "") -> str:
             return "Срок действия сертификата истёк."
     except (ValueError, ssl.SSLError, OSError) as exc:
         LOG.info("TLS validation failed: %s", type(exc).__name__)
-        return "Неправильный сертификат или ключ: проверьте формат, совпадение пары и пароль."
+        return "Не удалось проверить сертификат. Проверьте ключ, формат файлов и пароль."
     return ""
 
 
@@ -112,7 +112,7 @@ def upload(cert: bytes | None, key: bytes | None, password: str = "") -> dict:
     if cert is None and key is None:
         raise ValueError("Выберите хотя бы один файл.")
     if any(len(part) > MAX_UPLOAD for part in (cert, key) if part is not None):
-        raise ValueError("Размер каждого файла не должен превышать 256 КБ.")
+        raise ValueError("Максимум 256 КБ на файл.")
     if len(password) > 256:
         raise ValueError("Слишком длинный пароль закрытого ключа.")
     old_cert, old_key, old_password = current_pair()
@@ -125,7 +125,7 @@ def upload(cert: bytes | None, key: bytes | None, password: str = "") -> dict:
         cert_bytes = _pem_cert(cert) if cert is not None else Path(old_cert).read_bytes()
         key_bytes = _pem_key(key, effective_password) if key is not None else Path(old_key).read_bytes()
     except (ValueError, OSError, TypeError) as exc:
-        raise ValueError("Не удалось прочитать сертификат или ключ (PEM/DER).") from exc
+        raise ValueError("Не удалось прочитать файлы. Используйте формат PEM или DER.") from exc
     if len(cert_bytes) > MAX_UPLOAD or len(key_bytes) > MAX_UPLOAD:
         raise ValueError("Размер преобразованного файла превышает 256 КБ.")
     if b"ENCRYPTED" not in key_bytes:

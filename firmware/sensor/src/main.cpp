@@ -1,5 +1,12 @@
 #include "cJSON.h"
 #include "driver/gpio.h"
+#include "driver/usb_serial_jtag.h"
+#include "bootloader_random.h"
+#include "mbedtls/ecdsa.h"
+#include "mbedtls/platform_util.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <mutex>
 #include "driver/i2c.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -28,6 +35,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "policy.hpp"
+#include "sensor_drivers.hpp"
+#include "setup_password.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -58,10 +67,12 @@ struct State {
   uint32_t boots = 0, ota_failures = 0, ota_generation = 0;
   int64_t saved_time = 0;
 };
+static mbedtls_ecdsa_context identity_key;
+static std::string identity_public, identity_fingerprint;
 static Config cfg;
 static State state;
 static std::string ssid, password, server, device, code, token, ca,
-    ntp = "pool.ntp.org";
+    ntp = "pool.ntp.org", sensor_type = "sht4x", setup_password;
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
@@ -151,6 +162,57 @@ static bool valid_config(const Config &c) {
          c.wifi_min_mv <= c.ota_min_mv && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
          c.adc_scale_ppm >= 1600000 && c.adc_scale_ppm <= 2400000;
 }
+static int identity_rng(void *, unsigned char *out, size_t size) {
+  esp_fill_random(out, size);
+  return 0;
+}
+static std::string bytes_hex(const uint8_t *data, size_t size) {
+  static const char hex[] = "0123456789abcdef";
+  std::string out(size * 2, '0');
+  for (size_t i = 0; i < size; ++i) {
+    out[2*i] = hex[data[i] >> 4]; out[2*i+1] = hex[data[i] & 15];
+  }
+  return out;
+}
+static std::string hardware_id() {
+  uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  return bytes_hex(mac, sizeof mac);
+}
+static bool identity_init() {
+  mbedtls_ecdsa_init(&identity_key);
+  uint8_t secret[32] = {}, pub[65], hash[32];
+  int loaded = load_blob("identity", secret, sizeof secret);
+  if (loaded < 0) return false; // Never replace a corrupt key silently.
+  // Enable hardware entropy before RF/ADC start; disable it before battery ADC use.
+  bootloader_random_enable();
+  int err;
+  size_t len = 0;
+  if (!loaded) {
+    err = mbedtls_ecdsa_genkey(&identity_key, MBEDTLS_ECP_DP_SECP256R1, identity_rng, nullptr);
+    if (!err) err = mbedtls_ecp_write_key_ext(&identity_key, &len, secret, sizeof secret);
+    if (!err && (len != sizeof secret || !save_blob("identity", secret, sizeof secret))) err = -1;
+  } else {
+    err = mbedtls_ecp_read_key(MBEDTLS_ECP_DP_SECP256R1, &identity_key, secret, sizeof secret);
+    if (!err) err = mbedtls_ecp_keypair_calc_public(&identity_key, identity_rng, nullptr);
+  }
+  bootloader_random_disable();
+  mbedtls_platform_zeroize(secret, sizeof secret);
+  if (!err) err = mbedtls_ecp_write_public_key(&identity_key, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, pub, sizeof pub);
+  if (err || len != sizeof pub || mbedtls_sha256(pub, sizeof pub, hash, 0)) return false;
+  identity_public = bytes_hex(pub, sizeof pub);
+  identity_fingerprint = bytes_hex(hash, sizeof hash);
+  return true;
+}
+static std::string identity_sign(const std::string &message) {
+  if (message.rfind("TK-AUTH-1\n", 0) || message.size() > 400 ||
+      message.find("\n" + identity_fingerprint + "\n" + hardware_id() + "\n") == std::string::npos)
+    return "";
+  uint8_t hash[32], signature[MBEDTLS_ECDSA_MAX_LEN]; size_t len = 0;
+  if (mbedtls_sha256((const uint8_t *)message.data(), message.size(), hash, 0) ||
+      mbedtls_ecdsa_write_signature(&identity_key, MBEDTLS_MD_SHA256, hash, sizeof hash,
+                                    signature, sizeof signature, &len, identity_rng, nullptr)) return "";
+  return bytes_hex(signature, len);
+}
 static bool save_provision() {
   cJSON *j = cJSON_CreateObject();
   add(j, "ssid", ssid);
@@ -161,6 +223,8 @@ static bool save_provision() {
   add(j, "token", token);
   add(j, "ca", ca);
   add(j, "ntp", ntp);
+  add(j, "sensor_type", sensor_type);
+  add(j, "setup_password", setup_password);
   auto s = stringify(j);
   cJSON_Delete(j);
   return save_blob("provision", s.c_str(), s.size() + 1);
@@ -190,9 +254,18 @@ static bool load_provision() {
   token = text(j, "token");
   ca = text(j, "ca");
   ntp = text(j, "ntp");
+  sensor_type = text(j, "sensor_type");
+  if (sensor_type.empty()) sensor_type = "sht4x";
+  setup_password = text(j, "setup_password");
   cJSON_Delete(j);
-  return !ssid.empty() && server.rfind("https://", 0) == 0 &&
-         device.size() == 19 && (!code.empty() || !token.empty());
+  if (!setup_password.empty() && !sensor::valid_setup_password(setup_password)) {
+    setup_password.clear();
+    last_error = "setup_password_invalid";
+    return false;
+  }
+  return sensor::supported(sensor_type.c_str()) && !ssid.empty() && server.rfind("https://", 0) == 0 &&
+         ((device.size() == 19 && (!code.empty() || !token.empty())) ||
+          (code.empty() && !identity_public.empty()));
 }
 struct PartitionFlash : sensor::Flash {
   const esp_partition_t *p;
@@ -354,8 +427,10 @@ static std::string post(const std::string &path, const std::string &body,
       }
     }
   }
+  int status = esp_http_client_get_status_code(h);
   esp_http_client_close(h);
   esp_http_client_cleanup(h);
+  if (auth && status == 401) { token.clear(); save_provision(); }
   if (result.empty())
     last_error = "https_sync_failed";
   return result;
@@ -415,59 +490,14 @@ static uint16_t battery_mv() {
   adc_oneshot_del_unit(adc);
   return ok ? (uint64_t)(total / 16) * cfg.adc_scale_ppm / 1000000 : 0;
 }
-static uint8_t crc8(const uint8_t *p, int n) {
-  uint8_t c = 255;
-  while (n--) {
-    c ^= *p++;
-    for (int i = 0; i < 8; i++)
-      c = c & 128 ? (c << 1) ^ 0x31 : c << 1;
-  }
-  return c;
-}
 static bool sensor_read(Record &r) {
-  if (charging())
-    return false;
-  i2c_config_t i{};
-  i.mode = I2C_MODE_MASTER;
-  i.sda_io_num = GPIO_NUM_6;
-  i.scl_io_num = GPIO_NUM_7;
-  i.sda_pullup_en = GPIO_PULLUP_DISABLE;
-  i.scl_pullup_en = GPIO_PULLUP_DISABLE;
-  i.master.clk_speed = 100000;
-  if (i2c_param_config(I2C_NUM_0, &i) != ESP_OK ||
-      i2c_driver_install(I2C_NUM_0, i.mode, 0, 0, 0) != ESP_OK) {
-    r.error = 2;
-    return true;
-  }
-  uint8_t cmd = 0xfd, b[6];
-  auto e =
-      i2c_master_write_to_device(I2C_NUM_0, 0x44, &cmd, 1, pdMS_TO_TICKS(100));
-  vTaskDelay(pdMS_TO_TICKS(10));
-  if (e == ESP_OK && !charging())
-    e = i2c_master_read_from_device(I2C_NUM_0, 0x44, b, 6, pdMS_TO_TICKS(100));
-  else
-    e = ESP_FAIL;
-  i2c_driver_delete(I2C_NUM_0);
-  if (charging())
-    return false;
-  if (e != ESP_OK) {
-    r.error = 2;
-    return true;
-  }
-  if (crc8(b, 2) != b[2] || crc8(b + 3, 2) != b[5]) {
-    r.error = 1;
-    return true;
-  }
-  r.temperature = lround((-45 + 175.0 * ((b[0] << 8) | b[1]) / 65535) * 1000);
-  r.humidity =
-      lround(std::max(0.0, std::min(100.0, -6 + 125.0 * ((b[3] << 8) | b[4]) /
-                                                    65535)) *
-             1000);
-  return true;
+  if (charging()) return false;
+  sensor::read_sensor(sensor_type.c_str(), r);
+  return !charging();
 }
-static void config_from(cJSON *j) {
+static bool config_from(cJSON *j, bool local = false) {
   if (!cJSON_IsObject(j))
-    return;
+    return false;
   Config c = cfg;
 #define GET(field) c.field = number(j, #field, c.field)
   GET(version);
@@ -484,13 +514,48 @@ static void config_from(cJSON *j) {
   auto en = cJSON_GetObjectItemCaseSensitive(j, "enabled");
   if (cJSON_IsBool(en))
     c.enabled = cJSON_IsTrue(en);
-  if (c.version > cfg.version && valid_config(c) &&
-      save_blob("config", &c, sizeof c))
-    cfg = c;
+  if ((local || c.version > cfg.version) && valid_config(c) &&
+      save_blob("config", &c, sizeof c)) { cfg = c; return true; }
+  return false;
+}
+static cJSON *identity_payload() {
+  auto *j = cJSON_CreateObject();
+  add(j, "public_key", identity_public);
+  add(j, "hardware_id", hardware_id());
+  add(j, "sensor_type", sensor_type);
+  add(j, "firmware", FW_VERSION);
+  return j;
+}
+static bool identity_authenticate() {
+  auto *j = identity_payload();
+  auto body = stringify(j); cJSON_Delete(j);
+  auto response = post("/api/sensors/auth/challenge", body, false);
+  j = cJSON_Parse(response.c_str());
+  auto challenge = text(j, "challenge"), message = text(j, "message");
+  cJSON_Delete(j);
+  auto expected = "TK-AUTH-1\n" + challenge + "\n" + identity_fingerprint + "\n" +
+                  hardware_id() + "\n" + sensor_type + "\n" + FW_VERSION;
+  if (challenge.size() != 64 || message != expected) return false;
+  auto signature = identity_sign(message);
+  if (signature.empty()) return false;
+  j = identity_payload(); add(j, "challenge", challenge); add(j, "signature", signature);
+  body = stringify(j); cJSON_Delete(j);
+  response = post("/api/sensors/auth/prove", body, false);
+  j = cJSON_Parse(response.c_str());
+  auto status = text(j, "status"), id = text(j, "device_id"), credential = text(j, "token");
+  cJSON_Delete(j);
+  if (status != "approved") {
+    last_error = status == "pending" ? "authorization_pending" : "authorization_required";
+    return false;
+  }
+  if (id.size() != 19 || id.rfind("tk-", 0) || credential.size() != 64) return false;
+  device = id; token = credential;
+  return save_provision();
 }
 static bool enroll() {
   if (!token.empty())
     return true;
+  if (code.empty()) return identity_authenticate();
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char hw[13];
@@ -501,6 +566,7 @@ static bool enroll() {
   add(j, "code", code);
   add(j, "hardware_id", hw);
   add(j, "model", MODEL);
+  add(j, "sensor_type", sensor_type);
   auto b = stringify(j);
   cJSON_Delete(j);
   auto response = post("/api/sensors/enroll", b, false);
@@ -628,6 +694,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
     add(j, "model", MODEL);
+    add(j, "sensor_type", sensor_type);
     add(j, "firmware", FW_VERSION);
     num(j, "next_seq", state.next);
     num(j, "lost", lost);
@@ -663,7 +730,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
           cJSON_AddNullToObject(x, "humidity");
         } else {
           num(x, "temperature", r.temperature / 1000.0);
-          num(x, "humidity", r.humidity / 1000.0);
+          if (r.humidity == sensor::NO_HUMIDITY)
+            cJSON_AddNullToObject(x, "humidity");
+          else num(x, "humidity", r.humidity / 1000.0);
         }
         num(x, "battery_mv", r.battery);
         num(x, "interval_s", r.interval);
@@ -726,42 +795,39 @@ static std::string setup_nonce;
 static std::atomic<bool> configured{false};
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
-      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Заполните сеть Wi-Fi и данные из панели «Термоконтур».</p><form id="f"><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>Адрес сервера HTTPS<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Идентификатор датчика<input name="device" required></label><label>Код подключения<input name="code" required></label><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>На телефоне должны быть правильно выставлены дата и время.</small><script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
+      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><label>Корневой сертификат PEM (для своего центра сертификации)<textarea name="ca" rows="4"></textarea></label><label>Сервер времени<input name="ntp" value="pool.ntp.org" required></label><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><small>Проверьте дату и время на телефоне.</small><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.epoch=Math.floor(Date.now()/1000);b.csrf='NONCE';try{const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch{document.getElementById('result').textContent='Соединение прервано. Проверьте состояние датчика в панели.';}};</script></html>)HTML";
   html.replace(html.find("NONCE"), 5, setup_nonce);
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, html.c_str(), html.size());
 }
-static esp_err_t setup_save(httpd_req_t *req) {
-  if (charging() || req->content_len <= 0 || req->content_len > 11000)
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                               "Charging or oversized request");
-  std::string body(req->content_len, '\0');
-  size_t n = 0;
-  while (n < body.size()) {
-    int got = httpd_req_recv(req, body.data() + n, body.size() - n);
-    if (got <= 0)
-      return ESP_FAIL;
-    n += got;
-  }
-  cJSON *j = cJSON_Parse(body.c_str());
-  if (!j)
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+static std::mutex provision_mutex;
+static std::string provision_apply(cJSON *j, bool require_nonce) {
+  std::lock_guard<std::mutex> lock(provision_mutex);
+  if (configured || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca"), nt = text(j, "ntp");
+  std::string kind = text(j, "sensor_type");
+  if (kind.empty()) kind = "sht4x";
+  std::string entered_setup_password = text(j, "setup_password");
+  bool random_setup_password = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "random_setup_password"));
+  bool setup_password_valid = random_setup_password ||
+      ((entered_setup_password.empty() || sensor::valid_setup_password(entered_setup_password)) &&
+       entered_setup_password == text(j, "setup_password_confirm"));
   int64_t epoch = number(j, "epoch");
-  bool valid = text(j, "csrf") == setup_nonce && !s.empty() && s.size() <= 32 &&
+  bool valid = sensor::supported(kind.c_str()) && (!require_nonce || text(j, "csrf") == setup_nonce) && !s.empty() && s.size() <= 32 &&
                (p.empty() || (p.size() >= 8 && p.size() <= 63)) &&
                url.rfind("https://", 0) == 0 && url.size() > 8 &&
                url.size() <= 240 && url.find('@') == std::string::npos &&
                url.find_first_of("?#\r\n") == std::string::npos &&
-               id.size() == 19 && id.rfind("tk-", 0) == 0 && key.size() >= 32 &&
-               key.size() <= 100 && root.size() <= 8000 && !nt.empty() &&
+               ((id.empty() && key.empty()) || (id.size() == 19 && id.rfind("tk-", 0) == 0 &&
+                 (key.empty() || (key.size() >= 32 && key.size() <= 100)))) && root.size() <= 8000 && !nt.empty() &&
                nt.size() <= 100 && epoch >= 1700000000 && epoch <= 4102444800;
-  cJSON_Delete(j);
-  if (!valid)
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                               "Check fields and phone clock");
+  if (!valid) return "Проверьте поля и дату на телефоне.";
+  if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
+  if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
+  auto config = cJSON_GetObjectItemCaseSensitive(j, "config");
+  if (config && !config_from(config, true)) return "Проверьте параметры. Не удалось сохранить настройки.";
   while (url.back() == '/')
     url.pop_back();
   ssid = s;
@@ -772,19 +838,78 @@ static esp_err_t setup_save(httpd_req_t *req) {
   token.clear();
   ca = root;
   ntp = nt;
+  sensor_type = kind;
+  setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
+                                                  random_setup_password);
   state.saved_time = epoch;
-  if (!save_provision() || !save_state())
-    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                               "Flash write failed");
+  if (!save_provision() || !save_state()) return "Не удалось сохранить настройки в памяти платы.";
   configured = true;
+  return "";
+}
+static esp_err_t setup_save(httpd_req_t *req) {
+  if (req->content_len <= 0 || req->content_len > 11000)
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Слишком большой запрос.");
+  std::string body(req->content_len, '\0'); size_t n = 0;
+  while (n < body.size()) {
+    int got = httpd_req_recv(req, body.data()+n, body.size()-n);
+    if (got <= 0) return ESP_FAIL;
+    n += got;
+  }
+  auto j = cJSON_Parse(body.c_str());
+  if (!j) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Не удалось прочитать запрос. Повторите настройку.");
+  auto error = provision_apply(j, true); cJSON_Delete(j);
+  if (!error.empty()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, error.c_str());
   return httpd_resp_sendstr(req, "Saved");
+}
+static void usb_setup_task(void *) {
+  setvbuf(stdin, nullptr, _IONBF, 0);
+  fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
+  std::string line; bool overflow = false;
+  while (!configured) {
+    char bytes[256]; int size = read(STDIN_FILENO, bytes, sizeof bytes);
+    for (int i=0; i<size; ++i) {
+      if (bytes[i] == '\r') continue;
+      if (bytes[i] != '\n') {
+        if (line.size() < 12288 && !overflow) line += bytes[i];
+        else overflow = true;
+        continue;
+      }
+      if (!overflow && line.rfind("TKRPC ",0) == 0) {
+        auto j = cJSON_Parse(line.c_str()+6);
+        if (j) {
+          auto out = cJSON_CreateObject();
+          add(out,"id",text(j,"id"));
+          auto cmd=text(j,"cmd");
+          if (cmd == "hello") {
+            num(out,"protocol",1); add(out,"public_key",identity_public);
+            add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
+            add(out,"firmware",FW_VERSION); add(out,"sensor_type",sensor_type);
+            cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
+          } else if (cmd == "sign") {
+            auto signature=identity_sign(text(j,"message"));
+            if (signature.empty()) add(out,"error","Не удалось подтвердить плату. Повторите подключение.");
+            else add(out,"signature",signature);
+          } else if (cmd == "configure") {
+            auto error=provision_apply(j,false);
+            if (error.empty()) cJSON_AddBoolToObject(out,"saved",true);
+            else add(out,"error",error);
+          } else add(out,"error","Команда не поддерживается. Проверьте версию прошивки.");
+          auto response=stringify(out); cJSON_Delete(out); cJSON_Delete(j);
+          printf("\nTKRPC %s\n",response.c_str()); fflush(stdout);
+        }
+      }
+      line.clear(); overflow=false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  vTaskDelete(nullptr);
 }
 static void setup_ap() {
   if (!start_wifi(true))
     return;
   auto rnd = hex64(((uint64_t)esp_random() << 32) | esp_random());
   std::string apname = "Termokontur-" + rnd.substr(12),
-              pass = rnd.substr(0, 12);
+              pass = setup_password.empty() ? rnd.substr(0, 12) : setup_password;
   setup_nonce = hex64(((uint64_t)esp_random() << 32) | esp_random());
   wifi_config_t w{};
   strncpy((char *)w.ap.ssid, apname.c_str(), sizeof w.ap.ssid);
@@ -795,6 +920,7 @@ static void setup_ap() {
   esp_wifi_set_config(WIFI_IF_AP, &w);
   if (esp_wifi_start() != ESP_OK)
     return;
+  xTaskCreate(usb_setup_task, "usb_setup", 16384, nullptr, 4, nullptr);
   printf("\nSETUP Wi-Fi: %s\nSETUP password: %s\nOpen http://192.168.4.1\n",
          apname.c_str(), pass.c_str());
   httpd_handle_t h = nullptr;
@@ -820,8 +946,10 @@ static void setup_ap() {
     vTaskDelay(pdMS_TO_TICKS(500));
   httpd_stop(h);
   stop_network();
-  if (configured)
+  if (configured) {
+    if (usb_serial_jtag_is_connected()) sleep_for(cfg.measure_s);
     esp_restart();
+  }
 }
 extern "C" void app_main() {
   gpio_config_t g{};
@@ -855,6 +983,7 @@ extern "C" void app_main() {
   }
   if (nvs_open("sensor", NVS_READWRITE, &nv) != ESP_OK)
     sleep_for(3600);
+  if (!identity_init()) { printf("Identity invalid; preserve NVS\n"); sleep_for(3600); }
   int loaded = load_blob("state", &state, sizeof state);
   if (loaded < 0) {
     printf("State CRC/schema invalid; preserve Flash\n");
@@ -887,7 +1016,7 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     physical = gpio_get_level(GPIO_NUM_9) == 0;
   }
-  if (!provisioned || physical) {
+  if (!provisioned || physical || usb_serial_jtag_is_connected()) {
     setup_ap();
     sleep_for(1800);
   }
@@ -993,7 +1122,7 @@ extern "C" void app_main() {
           now + (state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s)
                                         : cfg.send_s);
     } else {
-      uint32_t backoff = sensor::retry_delay(cfg.send_s, rt.failures);
+      uint32_t backoff = last_error == "authorization_pending" ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
       rt.failures++;
       rt.next_send = now + backoff;
     }
@@ -1002,6 +1131,7 @@ extern "C" void app_main() {
     rt.charging = true;
   auto remaining = (int64_t)rt.next_measure - (int64_t)rt.uptime -
                    esp_timer_get_time() / 1000000;
+  if (last_error == "authorization_pending") remaining = std::min<int64_t>(remaining > 0 ? remaining : cfg.measure_s, 300);
   sleep_for(remaining > 0 ? std::min((int64_t)cfg.measure_s, remaining)
                           : cfg.measure_s);
 }

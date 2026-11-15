@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/sensors.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/sensor-onboarding.js?v=__ASSET_FINGERPRINT__" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
@@ -18,11 +19,11 @@
       <button type="button" class="theme-toggle login-theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
       <div class="brand large"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
       <h1>Контроль температуры</h1>
-      <p>Единая панель мониторинга помещений и журнал измерений.</p>
+      <p>Температура помещений и история измерений.</p>
       <form id="login-form">
         <label for="password">Пароль администратора</label>
         <div class="password-field"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
-        <button type="submit" class="btn primary full">Войти в систему</button>
+        <button type="submit" class="btn primary full">Войти</button>
         <div id="login-error" class="form-error" role="alert"></div>
       </form>
     </div>
@@ -31,7 +32,7 @@
   <div id="app-root" class="shell" hidden>
     <aside class="sidebar">
       <div class="brand"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
-      <div class="nav-caption">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+      <div class="nav-caption">РАЗДЕЛЫ</div>
       <nav class="navigation" aria-label="Разделы">
         <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
         <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
@@ -56,18 +57,18 @@
 
       <section id="view-overview" class="view">
         <div class="heading">
-          <div><h1>Температура в школе</h1><p>Динамика среднесуточной температуры по кабинетам и контроль сбора показаний.</p></div>
+          <div><h1>Температура в школе</h1><p>Средняя температура и показания за сегодня.</p></div>
           <button type="button" class="btn primary" id="quick-reading">+ Добавить измерение</button>
         </div>
         <div class="dashboard-hero">
           <div class="dashboard-hero-main">
             <span class="dashboard-eyebrow">СРЕДНЯЯ ТЕМПЕРАТУРА ПО ЗДАНИЯМ СЕГОДНЯ</span>
             <div class="dashboard-hero-value" id="avg-today">—</div>
-            <p id="avg-today-desc">Ожидаем показания кабинетов</p>
-            <span id="avg-change" class="dashboard-change">Динамика появится после двух дней измерений</span>
+            <p id="avg-today-desc">Показаний пока нет</p>
+            <span id="avg-change" class="dashboard-change">Для сравнения нужны измерения за два дня</span>
           </div>
           <div class="dashboard-hero-coverage">
-            <span class="dashboard-eyebrow">ОХВАТ ПОМЕЩЕНИЙ СЕГОДНЯ</span>
+            <span class="dashboard-eyebrow">ПОКАЗАНИЯ ЗА СЕГОДНЯ</span>
             <strong id="today-coverage">—</strong>
             <p id="today-coverage-desc">Кабинеты с показаниями</p>
             <progress id="coverage-progress" max="100" value="0" aria-label="Доля кабинетов с показаниями сегодня"></progress>
@@ -77,7 +78,7 @@
 
         <div class="panel dashboard-trend-panel">
           <div class="panel-heading dashboard-trend-heading">
-            <div><h2>Среднесуточная температура по зданиям</h2><p>Отдельная линия для каждого здания и общая средняя. Внутри здания каждый кабинет учитывается один раз за день.</p></div>
+            <div><h2>Среднесуточная температура по зданиям</h2><p>Средняя по каждому зданию и по школе. Каждый кабинет имеет равный вес.</p></div>
             <div class="dashboard-controls">
               <label for="building-filter">Корпус
                 <select id="building-filter"><option value="">Все корпуса</option></select>
@@ -93,16 +94,16 @@
               <button type="button" class="btn secondary" id="history-export">↓ CSV</button>
             </div>
           </div>
-          <div id="history-state" class="history-state" role="status" aria-live="polite">Загружаем историю температур…</div>
+          <div id="history-state" class="history-state" role="status" aria-live="polite">Загружаем историю…</div>
           <div id="history-content" hidden>
             <div id="history-chart-frame" class="history-chart-frame">
               <canvas id="history-chart" width="900" height="310" role="img" aria-label="График средней суточной температуры помещений"></canvas>
               <div id="history-tooltip" class="history-tooltip" hidden></div>
             </div>
             <div id="history-legend" class="history-legend" aria-label="Обозначения линий на графике"></div>
-            <p id="history-empty" class="history-empty" hidden>За этот период нет показаний. После первого измерения здесь появится график.</p>
+            <p id="history-empty" class="history-empty" hidden>За этот период нет показаний.</p>
             <details class="history-details">
-              <summary>Посмотреть среднюю по школе за каждый день</summary>
+              <summary>Средняя по школе за день</summary>
               <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинеты</th><th>Отклонения</th><th>Измерений</th></tr></thead><tbody id="history-table"></tbody></table></div>
             </details>
           </div>
@@ -110,10 +111,10 @@
 
         <div class="panel building-panel">
           <div class="panel-heading">
-            <div><h2>Сравнение зданий</h2><p>Средняя за сегодня, изменение со вчера и доля кабинетов с показаниями.</p></div>
+            <div><h2>Сравнение зданий</h2><p>Температура за сегодня, изменение за сутки и сбор показаний.</p></div>
           </div>
           <div id="building-summary" class="building-summary-grid" aria-live="polite"></div>
-          <div class="building-matrix-heading"><h3>Средняя температура зданий по дням</h3><p>Цветом выделены дни с неполным охватом и помещения с температурой за пределами своих нормативов.</p></div>
+          <div class="building-matrix-heading"><h3>Средняя температура зданий по дням</h3><p>Цвет показывает пропуски измерений и отклонения от нормы.</p></div>
           <div class="table-scroll building-matrix-scroll"><table class="building-matrix-table">
             <thead id="building-matrix-head"></thead><tbody id="building-matrix-body"></tbody>
           </table></div>
@@ -122,21 +123,21 @@
 
         <div class="metrics overview-metrics">
           <article class="metric"><span class="metric-label">Всего помещений</span><strong id="count-total">0</strong><small>Активных кабинетов</small></article>
-          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>По последнему свежему показанию</small></article>
+          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>По последнему актуальному измерению</small></article>
           <article class="metric"><span class="metric-label">Отклонения</span><strong id="count-alert" class="bad">0</strong><small>Ниже или выше нормы</small></article>
           <article class="metric"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">0</strong><small>Требуется измерение</small></article>
         </div>
 
         <details class="room-drilldown">
-          <summary>Подробнее: средняя температура каждого кабинета по дням</summary>
+          <summary>Температура кабинетов по дням</summary>
         <div class="panel dashboard-heatmap-panel">
           <div class="panel-heading">
-            <div><h2>Температура по кабинетам</h2><p id="heatmap-description">Среднесуточная температура каждого кабинета за последние дни.</p></div>
+            <div><h2>Температура по кабинетам</h2><p id="heatmap-description">Средняя температура за день.</p></div>
             <input id="heatmap-search" type="search" placeholder="Найти кабинет" aria-label="Поиск кабинета в таблице средних температур">
           </div>
           <div class="heatmap-guide"><span class="heatmap-guide-normal">В норме</span><span class="heatmap-guide-low">Ниже нормы</span><span class="heatmap-guide-high">Выше нормы</span><span class="heatmap-guide-empty">Нет показаний</span></div>
           <div class="table-scroll heatmap-scroll"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
-          <p id="heatmap-empty" class="empty" hidden>Нет кабинетов по выбранному фильтру.</p>
+          <p id="heatmap-empty" class="empty" hidden>Кабинеты не найдены.</p>
         </div>
 
         </details>
@@ -146,7 +147,7 @@
         </div>
         <div class="panel">
           <div class="panel-heading">
-            <div><h2>Последние показания</h2><p>Статус каждого помещения по последнему измерению.</p></div>
+            <div><h2>Последние показания</h2><p>Температура и отклонения от нормы.</p></div>
             <div class="filter-row"><input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета"></div>
           </div>
           <div class="table-scroll"><table><thead><tr><th>Помещение</th><th>Корпус</th><th>Температура</th><th>Норма</th><th>Получено</th><th>Статус</th></tr></thead><tbody id="overview-table"></tbody></table></div>
@@ -165,33 +166,35 @@
       </section>
 
       <section id="view-sensors" class="view" hidden>
-        <div class="heading"><div><h1>Автономные датчики</h1><p>Температура и влажность каждые 30 минут. Накопленные данные приходят раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn primary" type="button">+ Подключить датчик</button></div></div>
+        <div class="heading"><div><h1>Автономные датчики</h1><p>По умолчанию: измерения каждые 30 минут, передача раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
         <p id="sensor-state" role="status" aria-live="polite"></p>
+        <details class="panel"><summary>Комплект USB-прошивки</summary><p id="sensor-installer-status">Загружаем сведения о комплекте…</p><p>Загрузите ZIP версии 0.1.4 или новее. Один комплект подходит для всех новых плат.</p><form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form></details>
+        <article class="panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="sensor-detail" class="panel" hidden>
-          <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ История CSV</button></div>
-          <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить обмен</label><button class="btn secondary">Сохранить привязку</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
-          <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Записи без достоверной даты показаны только в таблице.</p></div>
-          <details><summary>Настройки измерений и энергопотребления</summary><p>Изменения доставляются при следующем обмене. Порог питания требует проверки на вашей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
-          <details><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить назначение</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
-          <details open><summary>Последние измерения</summary><div class="table-scroll"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Время / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
+          <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
+          <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
+          <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Измерения без точной даты есть только в таблице.</p></div>
+          <details><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
+          <details><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
+          <details open><summary>Последние измерения</summary><div class="table-scroll"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
         </div>
-        <details class="panel"><summary>Home Assistant / MQTT</summary><p>Передаётся последнее измерение. История с интервалом 30 минут остаётся в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
+        <details class="panel"><summary>Home Assistant / MQTT</summary><p>В Home Assistant передаётся последнее измерение. Полная история хранится в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
       </section>
 
       <section id="view-rooms" class="view" hidden>
-        <div class="heading"><div><h1>Управление помещениями</h1><p>Корпуса, нормативы и привязка сотрудников к MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
+        <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и сотрудники MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
         <div class="panel">
-          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус или сотрудник MAX" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Экспорт кабинетов CSV</button></div>
+          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус или сотрудник MAX" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Скачать CSV</button></div>
           <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
-        <div class="info-strip"><strong>Как подключить учителя?</strong> В столбце «Привязка MAX» показаны сотрудники, их имена из профилей MAX и кнопки отвязки. При первом обращении сотрудника бот получает имя и фамилию; пока этих данных нет, отображается ID. В разделе «Коды MAX» можно выдать коды для нескольких кабинетов, скопировать их, скачать CSV и отозвать ещё не использованные коды.</div>
+        <div class="info-strip"><strong>Как подключить учителя?</strong> Откройте «Коды MAX», выберите кабинеты и создайте коды. Передайте каждому сотруднику его команду /bind.</div>
       </section>
       <section id="view-settings" class="view" hidden>
         <div class="heading settings-heading">
-          <div><h1>Настройки</h1><p>Управляйте системой, подключениями, уведомлениями и сохранностью данных.</p></div>
+          <div><h1>Настройки</h1><p>Подключения, уведомления и резервные копии.</p></div>
           <span class="settings-managed">Параметры хранятся на сервере</span>
         </div>
         <div class="settings-layout">
@@ -212,7 +215,7 @@
           </nav>
           <div class="settings-content">
             <div class="settings-pane" data-settings-view="summary">
-              <div class="settings-section-heading"><h2>Состояние системы</h2><p>Основные настройки и доступность подключений — в одном месте.</p></div>
+              <div class="settings-section-heading"><h2>Состояние системы</h2><p>Состояние подключений и настроек.</p></div>
               <div class="settings-summary-grid">
                 <article class="settings-summary-card">
                   <span class="settings-summary-label">Организация</span>
@@ -253,21 +256,21 @@
                 <article class="settings-summary-card"><span class="settings-summary-label">Оформление</span><strong id="settings-summary-theme">Как на устройстве</strong><small>Настройка для этого браузера</small><button type="button" data-settings-target="appearance">Изменить тему</button></article>
               </div>
               <div class="settings-guidance">
-                <h3>Быстрая проверка после настройки</h3>
-                <p>Убедитесь, что у сотрудников выпущены коды подключения MAX, хотя бы один кабинет получает показания, а резервное копирование включено. Секретные токены не отображаются повторно.</p>
+                <h3>После настройки</h3>
+                <p>Проверьте приём показаний, подключение MAX и резервное копирование.</p>
               </div>
             </div>
             <div class="settings-pane" data-settings-view="general" hidden>
-              <div class="settings-section-heading"><h2>Организация</h2><p>Название панели, локальное время и актуальность измерений.</p></div>
+              <div class="settings-section-heading"><h2>Организация</h2><p>Название, часовой пояс и срок актуальности показаний.</p></div>
               <article class="panel settings-panel">
                 <form id="general-settings-form" class="settings-form">
                   <label for="setting-organization">Название организации<input id="setting-organization" maxlength="100" required autocomplete="organization"></label>
                   <label for="setting-timezone">Часовой пояс<input id="setting-timezone" list="timezone-options" required autocomplete="off"></label>
                   <datalist id="timezone-options"><option value="Asia/Vladivostok"></option><option value="Europe/Moscow"></option><option value="Asia/Yekaterinburg"></option><option value="Asia/Krasnoyarsk"></option><option value="Asia/Irkutsk"></option><option value="Asia/Yakutsk"></option><option value="UTC"></option></datalist>
-                  <p class="hint">Время в журналах и расписание уведомлений рассчитываются в этом часовом поясе. Например, для Комсомольска-на-Амуре — Asia/Vladivostok.</p>
+                  <p class="hint">Часовой пояс для суточного сбора и уведомлений. Например: Asia/Vladivostok.</p>
                   <label for="setting-stale">Считать показания устаревшими через, часов<input id="setting-stale" type="number" min="1" max="168" required></label>
-                  <p class="hint">Если новых измерений нет дольше заданного времени, помещение отображается без актуальных данных.</p>
-                  <div class="settings-save"><span class="settings-save-feedback" id="general-save-feedback" role="status" aria-live="polite">Изменения сохраняются после нажатия кнопки.</span><button type="submit" class="btn primary">Сохранить</button></div>
+                  <p class="hint">После этого срока показания считаются устаревшими.</p>
+                  <div class="settings-save"><span class="settings-save-feedback" id="general-save-feedback" role="status" aria-live="polite">Нажмите «Сохранить», чтобы применить изменения.</span><button type="submit" class="btn primary">Сохранить</button></div>
                 </form>
               </article>
             </div>
@@ -277,14 +280,14 @@
                 <h3>Оформление панели</h3>
                 <div class="theme-choices" role="radiogroup" aria-label="Выбор оформления">
                   <label class="theme-choice"><input type="radio" name="theme-preference" value="system"><span class="theme-preview theme-preview-system" aria-hidden="true"></span><span class="theme-choice-title">Как на устройстве</span><small>Автоматически, по теме системы</small></label>
-                  <label class="theme-choice"><input type="radio" name="theme-preference" value="light"><span class="theme-preview" aria-hidden="true"></span><span class="theme-choice-title">Светлая</span><small>Светлая рабочая панель</small></label>
-                  <label class="theme-choice"><input type="radio" name="theme-preference" value="dark"><span class="theme-preview theme-preview-dark" aria-hidden="true"></span><span class="theme-choice-title">Тёмная</span><small>Приглушённые поверхности и ясные показатели</small></label>
+                  <label class="theme-choice"><input type="radio" name="theme-preference" value="light"><span class="theme-preview" aria-hidden="true"></span><span class="theme-choice-title">Светлая</span><small>Светлый фон</small></label>
+                  <label class="theme-choice"><input type="radio" name="theme-preference" value="dark"><span class="theme-preview theme-preview-dark" aria-hidden="true"></span><span class="theme-choice-title">Тёмная</span><small>Тёмный фон</small></label>
                 </div>
-                <p class="hint">Изменения применяются сразу и сохраняются в этом браузере. Другие пользователи и настройки сервера не затрагиваются.</p>
+                <p class="hint">Тема применяется сразу и сохраняется в этом браузере.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="notifications" hidden>
-              <div class="settings-section-heading"><h2>Уведомления</h2><p>Напоминания по расписанию, температурные предупреждения и сообщения сотрудникам через MAX.</p></div>
+              <div class="settings-section-heading"><h2>Уведомления</h2><p>Напоминания, предупреждения и сообщения через MAX.</p></div>
               <article class="panel settings-panel">
                 <h3>Напоминания о пропущенных измерениях</h3>
                 <form id="reminders-settings-form" class="settings-form">
@@ -293,7 +296,7 @@
                     <div class="field-grid"><label for="setting-time">Время отправки<input id="setting-time" type="time" required></label><label for="setting-window">Окно отправки, минут<input id="setting-window" type="number" min="1" max="240" required></label></div>
                     <fieldset class="weekdays"><legend>Дни недели</legend><label><input type="checkbox" name="remind-day" value="0">Пн</label><label><input type="checkbox" name="remind-day" value="1">Вт</label><label><input type="checkbox" name="remind-day" value="2">Ср</label><label><input type="checkbox" name="remind-day" value="3">Чт</label><label><input type="checkbox" name="remind-day" value="4">Пт</label><label><input type="checkbox" name="remind-day" value="5">Сб</label><label><input type="checkbox" name="remind-day" value="6">Вс</label></fieldset>
                   </div>
-                  <p class="hint">Учитывается часовой пояс организации. Исключение каникул и праздников пока не предусмотрено.</p>
+                  <p class="hint">Время организации. Каникулы и праздники не учитываются.</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="reminders-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить напоминания</button></div>
                 </form>
               </article>
@@ -304,12 +307,12 @@
                   <div id="alert-options" class="settings-dependent">
                     <label for="setting-alert-cooldown">Не повторять предупреждение раньше чем через, минут<input id="setting-alert-cooldown" type="number" min="5" max="1440" required></label>
                   </div>
-                  <p class="hint">Предупреждения отправляются только по автоматическим показаниям датчиков. При ручном вводе сотрудник видит выход за норму сразу в ответе бота. Пределы задаются для каждого кабинета в разделе «Помещения».</p>
+                  <p class="hint">По данным датчиков предупреждение приходит в MAX, при ручном вводе — в ответе бота. Нормы задаются в разделе «Помещения».</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="alerts-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить предупреждения</button></div>
                 </form>
               </article>
               <article class="panel settings-panel">
-                <div class="notification-title-row"><div><h3>Написать сотрудникам</h3><p class="hint">Разовые сообщения через MAX. Один сотрудник получает одно сообщение, даже если у него несколько кабинетов.</p></div></div>
+                <div class="notification-title-row"><div><h3>Написать сотрудникам</h3><p class="hint">Каждый сотрудник получит одно сообщение, независимо от числа кабинетов.</p></div></div>
                 <form id="notification-compose-form" class="settings-form">
                   <div class="field-grid">
                     <label for="notification-audience">Получатели
@@ -329,10 +332,10 @@
                     <div id="notification-selected-users" class="notification-user-list"></div>
                   </div>
                   <label for="notification-text">Текст сообщения
-                    <textarea id="notification-text" rows="5" maxlength="2000" required placeholder="Например: Просим отправить показания температуры до 10:00."></textarea>
+                    <textarea id="notification-text" rows="5" maxlength="2000" required placeholder="Например: Отправьте температуру до 10:00."></textarea>
                   </label>
                   <div class="notification-compose-footer">
-                    <label class="settings-toggle"><input id="notification-silent" type="checkbox">Тихая доставка (без push-оповещения)</label>
+                    <label class="settings-toggle"><input id="notification-silent" type="checkbox">Без звукового уведомления (push)</label>
                     <span id="notification-text-count" class="hint">0 / 2000</span>
                   </div>
                   <div id="notification-recipient-summary" class="notification-recipient-summary" role="status" aria-live="polite">Загружаем получателей…</div>
@@ -346,27 +349,27 @@
               </article>
               <article class="panel settings-panel">
                 <div class="notification-title-row">
-                  <div><h3>История отправок</h3><p class="hint">Доставка подтверждается после ответа MAX. При сбоях система повторяет попытки автоматически.</p></div>
+                  <div><h3>История отправок</h3><p class="hint">Статус «Доставлено» означает, что MAX принял сообщение. Ошибки отправки повторяются автоматически.</p></div>
                   <button type="button" id="notification-refresh-history" class="btn secondary">Обновить</button>
                 </div>
                 <div id="notification-history" class="notification-history" aria-live="polite"><p class="hint">Загружаем историю…</p></div>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="max" hidden>
-              <div class="settings-section-heading"><h2>Бот MAX</h2><p>Подключение сотрудников, доставка сообщений и диагностика.</p></div>
+              <div class="settings-section-heading"><h2>Бот MAX</h2><p>Токен бота и проверка связи.</p></div>
               <article class="panel settings-panel">
                 <h3>Доступ бота</h3>
                 <form id="max-settings-form" class="settings-form">
                   <p id="max-status" class="hint"></p>
                   <label for="setting-max-token">Новый токен бота MAX<input id="setting-max-token" type="password" autocomplete="off" placeholder="Введите токен для замены"></label>
-                  <p class="hint">Действующий токен скрыт. Для замены сохраните новый токен, старый будет отменён в настройках панели.</p>
+                  <p class="hint">Для замены введите новый токен и сохраните.</p>
                   <div class="heading-actions"><button type="submit" class="btn primary">Сохранить токен</button><button type="button" id="clear-max-token" class="btn secondary">Отключить MAX</button></div>
                 </form>
               </article>
               <article class="panel settings-panel">
-                <h3>Long Polling — получение сообщений</h3>
-                <p id="max-webhook-mode" class="hint" role="status">Long Polling работает без публичного IP, домена и входящих соединений. Служба MAX периодически запрашивает новые события и отправляет ответы.</p>
-                <p class="hint">После сохранения токена отправьте боту <code>/start</code>. Для корректного HTTPS системные сертификаты (включая сертификаты Минцифры, если требуются для API MAX) должны быть добавлены в Debian. Проверяйте состояние ниже.</p>
+                <h3>Получение сообщений</h3>
+                <p id="max-webhook-mode" class="hint" role="status">Бот получает сообщения без публичного IP и домена.</p>
+                <p class="hint">Сохраните токен, отправьте боту <code>/start</code> и проверьте подключение.</p>
                 <button type="button" class="btn secondary" id="switch-polling" hidden>Отключить старый webhook и включить Long Polling</button>
                 <div class="settings-divider"></div>
                 <h3>Диагностика доставки</h3>
@@ -375,18 +378,18 @@
               </article>
             </div>
             <div class="settings-pane" data-settings-view="sensors" hidden>
-              <div class="settings-section-heading"><h2>Датчики и API</h2><p>Управление общим ключом приёма показаний от датчиков и Home Assistant.</p></div>
+              <div class="settings-section-heading"><h2>Датчики и API</h2><p>Общий ключ для Home Assistant и внешних датчиков. Автономные датчики подключаются в разделе «Датчики».</p></div>
               <article class="panel settings-panel">
                 <h3>Ключ датчиков</h3>
                 <p id="ingest-status" class="hint"></p>
-                <p class="hint">Ключ передаётся в заголовке X-Api-Key при отправке измерений на /api/ingest. Сохраняйте его только в доверенных устройствах.</p>
+                <p class="hint">Для интеграции: заголовок X-Api-Key, адрес /api/ingest.</p>
                 <button type="button" id="rotate-ingest" class="btn secondary">Создать или заменить ключ</button>
                 <div id="ingest-reveal" class="secret-reveal" hidden><p>Скопируйте ключ сейчас. Повторно он не отображается.</p><code id="ingest-value"></code><button type="button" id="copy-ingest" class="btn secondary">Копировать ключ</button></div>
-                <p class="hint">Замена ключа немедленно прекращает приём измерений со старым ключом. Обновите настройки всех подключённых устройств.</p>
+                <p class="hint">После замены обновите ключ во всех интеграциях. Старый ключ сразу перестанет работать.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="backups" hidden>
-              <div class="settings-section-heading"><h2>Данные и резервные копии</h2><p>Автоматическое резервирование, хранение измерений и восстановление.</p></div>
+              <div class="settings-section-heading"><h2>Данные и резервные копии</h2><p>Копирование, хранение и восстановление данных.</p></div>
               <article class="panel settings-panel">
                 <h3>Автоматическое обслуживание</h3>
                 <form id="maintenance-form" class="settings-form">
@@ -395,16 +398,16 @@
                     <label for="setting-backup-keep">Количество автокопий<input id="setting-backup-keep" type="number" min="1" max="100" required></label>
                   </div>
                   <label for="setting-retention">Удалять измерения старше, дней (0 — хранить)<input id="setting-retention" type="number" min="0" max="3650" required></label>
-                  <p class="hint">При включении очистки минимум 30 дней. Удаление старых измерений необратимо без резервной копии.</p>
+                  <p class="hint">Минимальный срок — 30 дней. Удалённые измерения можно вернуть только из копии.</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="maintenance-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить обслуживание</button></div>
                 </form>
               </article>
               <article class="panel settings-panel">
                 <h3>Сохранённые резервные копии</h3>
-                <p class="hint">Копии находятся на сервере отдельно от базы. Для защиты от поломки диска скачивайте резервные копии на другое устройство.</p>
+                <p class="hint">Скачивайте копии на другое устройство на случай поломки сервера.</p>
                 <div class="heading-actions">
                   <button type="button" id="backup-create" class="btn primary">Создать копию</button>
-                  <button type="button" id="backup-import" class="btn secondary">Импорт SQLite</button>
+                  <button type="button" id="backup-import" class="btn secondary">Загрузить копию SQLite</button>
                   <input id="backup-upload-file" type="file" accept=".sqlite3,.db,.sqlite" hidden>
                 </div>
                 <p class="hint">Файлы содержат настройки и идентификаторы MAX. Храните их в защищённом месте.</p>
@@ -419,31 +422,31 @@
                   <label>Текущий пароль<div class="password-field"><input id="old-password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-password-target="old-password" aria-pressed="false" aria-label="Показать текущий пароль">Показать</button></div></label>
                   <label>Новый пароль (от 8 символов)<div class="password-field"><input id="new-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="new-password" aria-pressed="false" aria-label="Показать новый пароль">Показать</button></div></label>
                   <label>Повтор нового пароля<div class="password-field"><input id="confirm-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required><button type="button" class="password-toggle" data-password-target="confirm-password" aria-pressed="false" aria-label="Показать подтверждение пароля">Показать</button></div></label>
-                  <p class="password-hint" id="password-feedback" role="status" aria-live="polite">Можно использовать только буквы или цифры — спецсимволы не обязательны.</p>
+                  <p class="password-hint" id="password-feedback" role="status" aria-live="polite">От 8 до 256 символов.</p>
                   <button type="submit" class="btn primary">Изменить пароль</button>
-                  <p class="hint">От 8 до 256 символов. После смены пароля все активные сеансы будут завершены.</p>
+                  <p class="hint">После смены пароля всем пользователям потребуется войти заново.</p>
                 </form>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="tls" hidden>
-              <div class="settings-section-heading"><h2>HTTPS-сертификат</h2><p>Защищённое подключение без отдельного Nginx.</p></div>
+              <div class="settings-section-heading"><h2>HTTPS-сертификат</h2><p>Сертификат для защищённого подключения.</p></div>
               <article class="panel settings-panel">
                 <h3>Состояние HTTPS</h3>
                 <p id="tls-status" class="hint" role="status" aria-live="polite">Проверяем настройки HTTPS…</p>
                 <div id="tls-details" class="tls-details" hidden></div>
-                <p id="tls-proxy-warning" class="hint" hidden>Сейчас сайт уже открыт по HTTPS, но встроенный TLS выключен. Возможно, используется обратный прокси. Учитывайте его настройки при переключении.</p>
+                <p id="tls-proxy-warning" class="hint" hidden>HTTPS уже работает через внешний сервер. Перед включением встроенного HTTPS проверьте его настройки.</p>
                 <form id="tls-form" class="settings-form" enctype="multipart/form-data">
                   <label>Сертификат (PEM, CRT, CER или DER)
                     <input id="tls-certificate" type="file" name="certificate" accept=".pem,.crt,.cer,.der">
                   </label>
-                  <p class="hint">Рекомендуется полный сертификат с цепочкой промежуточных УЦ (fullchain.pem).</p>
+                  <p class="hint">Загрузите сертификат с полной цепочкой (fullchain.pem).</p>
                   <label>Закрытый ключ (PEM, KEY или DER)
                     <input id="tls-key" type="file" name="key" accept=".pem,.key,.der">
                   </label>
                   <label>Пароль закрытого ключа (если зашифрован)
                     <input id="tls-password" type="password" name="password" autocomplete="new-password" placeholder="Для обычного ключа не требуется">
                   </label>
-                  <p class="hint">Можно заменить только сертификат или ключ — вторая часть будет взята из сохранённой пары. Максимум 256 КБ на файл. Закрытый ключ никогда не показывается в панели. По HTTP загружайте его только через доверенную сеть или SSH-туннель.</p>
+                  <p class="hint">Можно заменить один файл из сохранённой пары. Максимум 256 КБ на файл. По HTTP загружайте ключ только через доверенную сеть или SSH-туннель.</p>
                   <div class="settings-save">
                     <span id="tls-feedback" class="settings-save-feedback" role="status" aria-live="polite">Выберите один или два файла.</span>
                     <button type="submit" class="btn primary">Загрузить и проверить</button>
@@ -454,14 +457,14 @@
                   <button type="button" id="tls-remove" class="btn secondary" disabled>Убрать сертификат</button>
                 </div>
                 <p id="tls-next" class="hint" hidden>После перезапуска откройте сайт: <a id="tls-next-link" href="#" rel="noopener"></a>. Для внутреннего УЦ понадобится доверие к нему на компьютерах.</p>
-                <p class="hint">До настройки сертификата HTTP работает на порту 8092. После применения сертификата HTTPS работает на стандартном порту 443 (без указания порта в адресе). Если включён reverse-proxy, проверьте его upstream и свободен ли порт 443.</p>
+                <p class="hint">HTTP: порт 8092. HTTPS: порт 443. Перед переключением убедитесь, что порт 443 свободен; при внешнем прокси проверьте его настройки.</p>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="updates" hidden>
               <div class="settings-section-heading"><h2>Обновление системы</h2><p>Установленная версия, GitHub и журнал установки.</p></div>
           <article class="panel settings-panel">
             <h2>Обновление системы</h2>
-            <p class="settings-section-intro">Сравнение версий и безопасное обновление без командной строки.</p>
+            <p class="settings-section-intro">Проверьте и установите новую версию.</p>
             <div class="update-versions">
               <div class="update-version-item">
                 <span>Установлено</span>
@@ -488,7 +491,7 @@
                 <div id="update-progress-fill" class="update-progress-fill"></div>
               </div>
               <ol id="update-phase-list" class="update-phase-list" aria-label="Этапы установки"></ol>
-              <p class="hint">Индикатор показывает этап, а не процент загрузки. При перезапуске сервера соединение может временно пропасть.</p>
+              <p class="hint">При перезапуске связь с сервером временно пропадёт.</p>
             </div>
             <div id="update-meta" class="update-meta" hidden>
               <span id="update-elapsed"></span>
@@ -515,7 +518,7 @@
 
   <dialog id="room-dialog">
     <form method="dialog" id="room-form" class="dialog-form">
-      <div class="dialog-head"><div><h2 id="room-dialog-title">Новое помещение</h2><p>Заполните параметры помещения.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
+      <div class="dialog-head"><div><h2 id="room-dialog-title">Новое помещение</h2><p>Укажите корпус, название и норму температуры.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
       <input id="edit-room-id" type="hidden">
       <label>Корпус <input id="room-building" type="text" maxlength="100" placeholder="Например, Старшая школа" required></label>
       <div class="field-grid"><label>Помещение <input id="room-name" type="text" maxlength="100" placeholder="Кабинет 201" required></label><label>Этаж <input id="room-floor" type="text" maxlength="30" placeholder="2"></label></div>
@@ -534,7 +537,7 @@
       <label>Префикс номера<input id="bulk-prefix" value="Кабинет "></label>
       <label>Кабинеты<textarea id="bulk-list" rows="5" required placeholder="101-110&#10;112&#10;114&#10;Кабинет информатики"></textarea></label>
       <div class="field-grid"><label>Минимум °C<input id="bulk-min" type="number" min="-40" max="60" step="0.1" value="18" required></label><label>Максимум °C<input id="bulk-max" type="number" min="-40" max="60" step="0.1" value="24" required></label></div>
-      <p id="bulk-preview" class="bulk-preview">Укажите кабинеты для предварительного просмотра.</p>
+      <p id="bulk-preview" class="bulk-preview">Введите список кабинетов.</p>
       <div class="dialog-actions"><button type="button" id="cancel-bulk" class="btn secondary">Отмена</button><button type="submit" class="btn primary">Добавить</button></div>
     </form>
   </dialog>
@@ -550,7 +553,7 @@
 
   <dialog id="reading-history-dialog">
     <div class="dialog-form">
-      <div class="dialog-head"><div><h2>История показания</h2><p id="reading-history-subtitle">Первоначальный замер и исправления сотрудников.</p></div><button type="button" id="reading-history-close" class="x-button" aria-label="Закрыть">×</button></div>
+      <div class="dialog-head"><div><h2>История показания</h2><p id="reading-history-subtitle">Первое измерение и исправления.</p></div><button type="button" id="reading-history-close" class="x-button" aria-label="Закрыть">×</button></div>
       <div id="reading-history-content" class="reading-history-list" aria-live="polite"></div>
       <div class="dialog-actions"><button type="button" class="btn secondary" id="reading-history-done">Закрыть</button></div>
     </div>
@@ -559,7 +562,7 @@
   <dialog id="max-codes-dialog">
     <form id="max-codes-form" class="dialog-form">
       <div class="dialog-head">
-        <div><h2>Коды подключения MAX</h2><p>Создание, выдача и отзыв одноразовых кодов для кабинетов.</p></div>
+        <div><h2>Коды подключения MAX</h2><p>Выдайте сотрудникам коды для подключения кабинетов.</p></div>
         <button type="button" id="close-max-codes" class="x-button" aria-label="Закрыть">×</button>
       </div>
       <section class="max-code-section" aria-labelledby="max-new-heading">
@@ -586,7 +589,7 @@
       </section>
       <section id="max-codes-issued" class="max-code-section max-code-result" aria-labelledby="max-issued-heading" hidden>
         <h3 id="max-issued-heading">Новые коды — сохраните сейчас</h3>
-        <p class="hint">Эти коды отображаются только до закрытия окна. Скопируйте команды или скачайте CSV, чтобы передать каждому сотруднику его код.</p>
+        <p class="hint">Скопируйте команды или скачайте CSV до закрытия окна. Повторно коды не показываются.</p>
         <div class="max-codes-toolbar">
           <button id="max-codes-copy-all" type="button" class="btn secondary">Копировать все команды</button>
           <button id="max-codes-download-issued" type="button" class="btn secondary">Скачать CSV</button>
@@ -598,7 +601,7 @@
           <h3 id="max-active-heading">Действующие коды</h3>
           <button type="button" id="max-codes-reload" class="text-button">Обновить</button>
         </div>
-        <p class="hint">Здесь видны кабинеты, срок действия и возможность отзыва. Сам текст ранее выданных кодов не сохраняется: для замены создайте новый код.</p>
+        <p class="hint">Ранее выданные коды скрыты. Чтобы заменить код, создайте новый.</p>
         <div id="max-active-codes-list" class="max-active-code-list" aria-live="polite"></div>
       </section>
     </form>
@@ -625,7 +628,22 @@
     </div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик</h2><p>Создание разрешает регистрацию одной платы. Код действует 7 суток и погасится после первого обмена.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
-<dialog id="sensor-code-dialog"><h2>Настройка с телефона</h2><p>Подключитесь к Wi-Fi датчика, откройте http://192.168.4.1 и введите эти данные. Имя сети и пароль выводятся в USB-монитор при запуске режима настройки.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
+<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик</h2><p>Код для одной платы. Действует 7 дней, используется один раз.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
+<dialog id="sensor-code-dialog"><h2>Настройка с телефона</h2><p>Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
+<dialog id="sensor-usb-dialog" class="sensor-usb-dialog"><form id="sensor-usb-form" class="dialog-form">
+<h2>Прошивка и подключение по USB</h2><p>Укажите параметры и подключите плату. Доступ будет выдан автоматически.</p>
+<p id="sensor-usb-support" class="hint"></p>
+<div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
+<label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
+<label>Wi-Fi 2,4 ГГц<input id="usb-ssid" maxlength="32" required autocomplete="off"></label><label>Пароль Wi-Fi<input id="usb-wifi-password" type="password" maxlength="63" autocomplete="new-password"></label>
+<label>HTTPS-адрес панели<input id="usb-server" type="url" required></label></div>
+<p class="hint">Панель должна быть доступна из сети датчика. Перед подключением USB SuperMini разомкните SW1 и отключите USB зарядки TP4056.</p>
+<details><summary>Дополнительные параметры</summary><label>Корневой сертификат PEM (для собственного CA)<textarea id="usb-ca" rows="3"></textarea></label><label>Сервер времени NTP<input id="usb-ntp" value="pool.ntp.org" maxlength="100" required></label>
+<label>Пароль сети настройки (необязательно)<input id="usb-setup-password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите пароль сети настройки<input id="usb-setup-confirm" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
+<label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Случайный пароль сети настройки</label><div id="usb-config-fields" class="field-grid"></div><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
+<label class="archive-toggle"><input id="usb-new-board" type="checkbox"> Подтверждаю удаление всех данных платы: настроек, ключа и журнала. Для обновления работающего датчика используйте его карточку.</label>
+<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" role="status" aria-live="polite"></p><pre id="usb-log" class="usb-log" hidden></pre>
+<div class="heading-actions"><button id="usb-flash" class="btn primary" type="submit">Прошить и настроить</button><button id="usb-configure" class="btn secondary" type="button">Настроить без прошивки</button><button id="usb-close" class="btn secondary" type="button">Закрыть</button></div>
+</form></dialog>
 </body>
 </html>

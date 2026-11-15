@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/workspace/Termokontur/hardware/sensor/05-dht.kicad_sch</source>
+    <date>2026-11-15T15:23:05+0000</date>
+    <tool>Eeschema 9.0.2+dfsg-1</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>05-dht.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="A1">
+      <value>ESP32-C3 SuperMini</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="SuperMini_DATA" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="05-dht.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>f41c4126-dc46-5b01-95ca-2d65e29eae6a</tstamps>
+    </comp>
+    <comp ref="A3">
+      <value>DHT11 / DHT22</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="DHT_module" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="05-dht.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>1ac7c1e4-e2be-537a-ace1-b2cfb77649d8</tstamps>
+    </comp>
+    <comp ref="R8">
+      <value>4k7 *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description="Resistor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="05-dht.kicad_sch"/>
+      <property name="ki_keywords" value="R res resistor"/>
+      <property name="ki_fp_filters" value="R_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>27d6cb39-b13a-5b79-8e9f-113f429b2a7d</tstamps>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="R">
+      <description>Resistor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>R_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">R</field>
+        <field name="Value">R</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Resistor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="DHT_module">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">DHT_module</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="DATA" name="DATA" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="VCC" name="VCC" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="SuperMini_DATA">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">SuperMini_DATA</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="3V3" name="3V3" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="GPIO5" name="GPIO5" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries>
+    <library logical="Device">
+      <uri>/usr/share/kicad/symbols/Device.kicad_sym</uri>
+    </library>
+    <library logical="Termokontur">
+      <uri>/workspace/Termokontur/hardware/sensor/Termokontur.kicad_sym</uri>
+    </library>
+  </libraries>
+  <nets>
+    <net code="1" name="/3V3" class="Default">
+      <node ref="A1" pin="3V3" pinfunction="3V3" pintype="passive"/>
+      <node ref="A3" pin="VCC" pinfunction="VCC" pintype="passive"/>
+      <node ref="R8" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/DATA" class="Default">
+      <node ref="A1" pin="GPIO5" pinfunction="GPIO5" pintype="passive"/>
+      <node ref="A3" pin="DATA" pinfunction="DATA" pintype="passive"/>
+      <node ref="R8" pin="2" pintype="passive"/>
+    </net>
+    <net code="3" name="/GND_SYS" class="Default">
+      <node ref="A1" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="A3" pin="GND" pinfunction="GND" pintype="passive"/>
+    </net>
+  </nets>
+</export>

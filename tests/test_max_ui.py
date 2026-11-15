@@ -91,7 +91,7 @@ def test_multiple_rooms_choose_one_then_manual_input(client):
     assert "102" in process_update(
         _callback(7, f"tk:room:s:{second['id']}:{day}", "c2")
     )[1]
-    assert "Введите показание" in process_update(
+    assert "Введите температуру" in process_update(
         _callback(7, f"tk:manual:s:{second['id']}:{day}", "c3")
     )[1]
     assert "Сохранено" in process_update(_message(7, "20,7", "m2"))[1]
@@ -456,7 +456,7 @@ def test_manual_max_deviation_pushes_once_to_other_assigned_colleagues(client):
     settings.update({"alerts_enabled": "1"})
     settings.set_secret("max_token", "testing-alerts-to-colleagues-123")
     first = max_ui._write("7", room["id"], "s", "16", "max:message:abnormal-1")
-    assert "вне установленной нормы" in first
+    assert "вне нормы" in first
     queued = max_delivery.pending()
     assert len(queued) == 1
     assert queued[0]["user_id"] == "8"
@@ -468,7 +468,7 @@ def test_manual_max_deviation_pushes_once_to_other_assigned_colleagues(client):
     # Correcting another person's reading produces at most one notice per
     # recipient and day. The correcting employee sees a direct warning.
     other = max_ui._write("8", room["id"], "c", "17", "max:callback:abnormal-2")
-    assert "вне установленной нормы" in other
+    assert "вне нормы" in other
     assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]
     max_ui._write("7", room["id"], "c", "15", "max:callback:abnormal-3")
     assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]

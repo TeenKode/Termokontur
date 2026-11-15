@@ -31,7 +31,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   d.getElementById("login-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>!d.getElementById("app-root").hidden);
   await until(()=>d.getElementById("reading-room").options.length===1);
-  d.querySelector('[data-tab="sensors"]').click();await until(()=>d.getElementById("sensor-state").textContent.includes("Добавьте"));
+  d.querySelector('[data-tab="sensors"]').click();await until(()=>d.getElementById("sensor-state").textContent.includes("Подключите первый датчик"));
   // jsdom has no native modal rendering; implement only dialog open state.
   for(const dialog of d.querySelectorAll("dialog")){dialog.showModal=()=>dialog.setAttribute("open","");dialog.close=()=>dialog.removeAttribute("open");}
   d.getElementById("sensor-add").click();d.getElementById("sensor-new-name").value="Датчик <тест>";
@@ -49,6 +49,15 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   d.querySelector('#sensor-config-form input[name="measure_s"]').value="3600";
   d.getElementById("sensor-config-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>d.getElementById("sensor-detail-state").textContent.includes("1 / 2"));
+  const rekey=await api("/api/sensors/devices/"+id+"/rekey",{});
+  const ds=await api("/api/sensors/enroll",{device_id:id,code:rekey.code,hardware_id:"0123456789ab",model:"c3-sht40-v1",sensor_type:"ds18b20"});
+  const dsPayload={...payload,sensor_type:"ds18b20",next_seq:3,records:[{...payload.records[0],seq:2,humidity:null}]};
+  const dsResult=await fetchWithCookies('/api/sensors/devices/'+id+'/sync',{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ds.token},body:JSON.stringify(dsPayload)});
+  assert.ok(dsResult.ok,await dsResult.clone().text());
+  d.getElementById("sensor-refresh").click();
+  await until(()=>d.getElementById("sensor-detail-state").textContent.includes("DS18B20"));
+  assert.equal(d.querySelectorAll("#sensor-records tr").length,2);
+  assert.equal(d.querySelector("#sensor-records tr").children[3].textContent,"—");
   w.termokonturTheme.setPreference("dark");assert.equal(d.documentElement.dataset.theme,"dark");
   assert.deepEqual(errors,[]);
   process.stdout.write("DOM/API smoke passed: login, creation, code, enrollment, ingest, detail, safe text, config queue and theme event. Layout not tested.\n");

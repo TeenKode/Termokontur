@@ -19,6 +19,12 @@ jobs:
           /tmp/journal-test
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/policy.cpp -o /tmp/policy-test
           /tmp/policy-test
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/setup_password.cpp -o /tmp/setup-password-test
+          /tmp/setup-password-test
+      - name: Sensor protocol and conversion vectors
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/test/hal -I firmware/sensor/include firmware/sensor/test/drivers.cpp -o /tmp/sensor-drivers-test
+          /tmp/sensor-drivers-test
       - uses: actions/cache@v4
         with:
           path: ~/.platformio
@@ -56,8 +62,12 @@ jobs:
           NODE_PATH=/tmp/sensor-dom/node_modules node tests/sensors-dom-smoke.cjs
       - name: Sensor setup, history and configuration at desktop and mobile sizes
         run: python tests/sensors-browser-smoke.py
+      - name: USB onboarding and automatic authorization (simulated board)
+        run: python tests/sensor-onboarding-browser.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: sensor-browser-screenshots
-          path: /tmp/termokontur-sensors-*.png
+          path: |
+            /tmp/termokontur-sensors-*.png
+            /tmp/termokontur-usb-*.png

@@ -46,8 +46,23 @@ payload['web-manifest.json'] = (json.dumps({
                 'parts': [{'path': 'factory.bin', 'offset': 0}]}]
 }, indent=2) + '\n').encode()
 payload['flash-sensor.py'] = (ROOT / 'scripts/flash-sensor.py').read_bytes()
-for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md'):
+for name in ('BENCH.md', 'FLASHING.md', 'README.md', 'HARDWARE.md', 'PROTOCOL.md', 'VALIDATION.md', 'SENSOR-TYPES.md', 'SETUP.md', 'SCHEMATICS.md', 'USB-ONBOARDING.md'):
     payload[name] = (ROOT / 'docs/sensors' / name).read_bytes()
+# Preserve relative Markdown image links inside the offline kit.
+for folder in ('images', 'schematics'):
+    source = ROOT / 'docs/sensors' / folder
+    for artifact in sorted(source.rglob('*')):
+        if artifact.is_file():
+            payload[folder + '/' + artifact.relative_to(source).as_posix()] = artifact.read_bytes()
+for artifact in sorted((ROOT / 'hardware/sensor').rglob('*')):
+    if artifact.is_file():
+        payload['hardware/' + artifact.relative_to(ROOT / 'hardware/sensor').as_posix()] = artifact.read_bytes()
+payload['hardware/README.md'] = payload['hardware/README.md'].replace(
+    b'../../docs/sensors/SCHEMATICS.md', b'../SCHEMATICS.md')
+payload['SCHEMATICS.md'] = payload['SCHEMATICS.md'].replace(
+    b'../../hardware/sensor/README.md', b'hardware/README.md')
+payload['HARDWARE.md'] = payload['HARDWARE.md'].replace(
+    b'../../hardware/sensor/README.md', b'hardware/README.md')
 manifest = {'version': version, 'source_commit': commit, 'chip': 'esp32c3',
             'flash_size': '4MB', 'files': {
                 name: {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}

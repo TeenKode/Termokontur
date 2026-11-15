@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 errors=[];page.on("pageerror",lambda e:errors.append(str(e)))
                 page.goto(base);page.fill("#password","browser-smoke-password");page.click('#login-form button[type="submit"]')
                 page.wait_for_selector("#app-root",state="visible")
-                page.click('[data-tab="sensors"]');expect(page.locator('#sensor-state')).to_contain_text('Добавьте')
+                page.click('[data-tab="sensors"]');expect(page.locator('#sensor-state')).to_contain_text('Подключите первый датчик')
                 page.click("#sensor-add");page.fill("#sensor-new-name","Датчик <тест>")
                 with page.expect_response(lambda r:r.url.endswith('/api/sensors/devices') and r.request.method=='POST') as response:
                     page.click('#sensor-add-form button:not([type="button"])')

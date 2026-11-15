@@ -114,7 +114,7 @@ def test_keys_disable_configuration_and_migration(admin):
     assert sync(admin,d,headers,batch()).json()["config"]["measure_s"]==3600
     db.initialize();db.initialize()
     with db.connect() as conn:
-        assert conn.execute("SELECT count(*) FROM sensor_migrations").fetchone()[0]==1
+        assert [r[0] for r in conn.execute("SELECT version FROM sensor_migrations ORDER BY version")] == [1, 2]
     admin.patch(f'/api/sensors/devices/{d["device_id"]}',json={"name":"12","room_id":room["id"],"enabled":False})
     assert sync(admin,d,headers,batch()).status_code==403
     admin.patch(f'/api/sensors/devices/{d["device_id"]}',json={"name":"12","room_id":room["id"],"enabled":True})
@@ -236,3 +236,62 @@ def test_reuse_board_requires_disabling_previous_registration(admin):
     admin.patch(f'/api/sensors/devices/{d["device_id"]}',json={"name":"Старый архив","room_id":room["id"],"enabled":False})
     assert admin.post("/api/sensors/enroll",json=body).status_code==200
     assert sync(admin,d,headers,batch()).status_code==401
+
+
+@pytest.mark.parametrize("kind", ["dht11", "dht22", "sht3x", "sht4x", "aht20", "bme280", "ds18b20"])
+def test_sensor_types_enroll_sync_and_replay(admin, kind):
+    d, enrollment, headers, room = setup_sensor(admin)
+    enrollment["sensor_type"] = kind
+    assert admin.post("/api/sensors/enroll", json=enrollment).status_code == 200
+    sample = record(humidity=None if kind == "ds18b20" else 0.0)
+    payload = batch([sample], sensor_type=kind)
+    for _ in range(2):
+        response = sync(admin, d, headers, payload)
+        assert response.status_code == 200, response.text
+    device = admin.get("/api/sensors/devices").json()[0]
+    assert device["sensor_type"] == kind
+    history = admin.get(f"/api/sensors/devices/{d['device_id']}/records").json()
+    assert len(history) == 1
+    assert history[0]["humidity"] == sample["humidity"]
+    assert len(admin.get("/api/readings").json()) == 1
+
+
+def test_ds18b20_negative_temperature_and_no_fake_humidity(admin):
+    d, enrollment, headers, _ = setup_sensor(admin)
+    enrollment["sensor_type"] = "ds18b20"
+    assert admin.post("/api/sensors/enroll", json=enrollment).status_code == 200
+    payload = batch([record(temperature=-55.0, humidity=None)], sensor_type="ds18b20")
+    assert sync(admin, d, headers, payload).status_code == 200
+    # Full sensor archive supports -55; room-temperature journal retains its -40 limit.
+    assert admin.get("/api/readings").json() == []
+    payload = batch([record(2, humidity=50.0)], next_seq=3, sensor_type="ds18b20")
+    assert sync(admin, d, headers, payload).status_code == 422
+    with db.connect() as conn:
+        device = dict(conn.execute("SELECT * FROM sensor_devices").fetchone())
+    messages = dict(sensor_mqtt.messages(device, None, sensor_mqtt.MQTTConfig().model_dump()))
+    topic = f"homeassistant/sensor/{d['device_id']}/humidity/config"
+    assert messages[topic] == ""
+
+
+def test_sensor_type_mismatch_and_missing_humidity_are_atomic(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, d, headers, batch([record(humidity=None)])).status_code == 422
+    assert sync(admin, d, headers, batch(sensor_type="dht22")).status_code == 409
+    assert sync(admin, d, headers, batch(sensor_type="unknown")).status_code == 422
+    with db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 0
+        assert conn.execute("SELECT ack_seq FROM sensor_devices").fetchone()[0] == 1
+    # Legacy payload without sensor_type still works.
+    assert sync(admin, d, headers, batch()).status_code == 200
+
+
+def test_sensor_type_migration_preserves_existing_data(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, d, headers, batch()).status_code == 200
+    with db.connect() as conn:
+        before = list(conn.execute("SELECT * FROM sensor_records"))
+        conn.execute("ALTER TABLE sensor_devices DROP COLUMN sensor_type")
+        sensors.initialize(conn)
+        sensors.initialize(conn)
+        assert conn.execute("SELECT sensor_type FROM sensor_devices").fetchone()[0] == "sht4x"
+        assert list(conn.execute("SELECT * FROM sensor_records")) == before

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db
 
 MODEL = "c3-sht40-v1"
+SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "dht11", "dht22", "ds18b20"]
 MAX_FIRMWARE = 0x1C0000
 
 
@@ -42,9 +43,9 @@ class Config(Strict):
     @model_validator(mode="after")
     def coherent(self):
         if not self.cutoff_mv <= self.wifi_min_mv <= self.ota_min_mv:
-            raise ValueError("Нужно cutoff ≤ Wi-Fi ≤ OTA")
+            raise ValueError("Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление")
         if self.send_s < self.measure_s:
-            raise ValueError("Передача не может быть чаще измерений")
+            raise ValueError("Интервал передачи должен быть не меньше интервала измерений")
         return self
 
 
@@ -64,6 +65,7 @@ class Enrollment(Strict):
     code: str = Field(min_length=32, max_length=100)
     hardware_id: str = Field(pattern=r"^[a-f0-9]{12}$")
     model: Literal["c3-sht40-v1"]
+    sensor_type: SensorType = "sht4x"
 
 
 class Record(Strict):
@@ -72,7 +74,7 @@ class Record(Strict):
     uptime_s: int = Field(ge=0, le=9007199254740991)
     measured_at: int | None = Field(default=None, ge=1700000000, le=4102444800)
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
-    temperature: float | None = Field(default=None, ge=-40, le=125, allow_inf_nan=False)
+    temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     battery_mv: int = Field(ge=2000, le=5000)
     interval_s: int = Field(ge=60, le=86400)
@@ -82,7 +84,7 @@ class Record(Strict):
     def coherent(self):
         if (self.time_quality == "unknown") != (self.measured_at is None):
             raise ValueError("Качество времени не соответствует временной метке")
-        if not self.error and (self.temperature is None or self.humidity is None):
+        if not self.error and self.temperature is None:
             raise ValueError("Нет измерения или описания ошибки")
         if self.error and (self.temperature is not None or self.humidity is not None):
             raise ValueError("Ошибочное измерение не должно содержать значения")
@@ -91,6 +93,7 @@ class Record(Strict):
 
 class Sync(Strict):
     model: Literal["c3-sht40-v1"]
+    sensor_type: SensorType = "sht4x"
     firmware: str = Field(pattern=r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
     records: list[Record] = Field(max_length=100)
     next_seq: int = Field(ge=1, le=9007199254740991)
@@ -108,6 +111,13 @@ class Sync(Strict):
         seqs = [r.seq for r in self.records]
         if seqs != sorted(set(seqs)) or any(s >= self.next_seq for s in seqs):
             raise ValueError("Неверная последовательность записей")
+        for record in self.records:
+            if not record.error:
+                if self.sensor_type == "ds18b20":
+                    if record.humidity is not None:
+                        raise ValueError("DS18B20 не измеряет влажность")
+                elif record.humidity is None:
+                    raise ValueError("Нет показания влажности")
         return self
 
 
@@ -144,6 +154,13 @@ def initialize(conn):
     CREATE TABLE IF NOT EXISTS sensor_mqtt_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
     INSERT OR IGNORE INTO sensor_migrations VALUES(1);
     """)
+    # Web and MAX services can start together; serialize the additive migration.
+    conn.execute("BEGIN IMMEDIATE")
+    if "sensor_type" not in {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}:
+        conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
+    conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
+    from . import sensor_onboarding
+    sensor_onboarding.initialize(conn)
 
 
 def digest(value):
@@ -180,7 +197,7 @@ def authenticate(conn, device, authorization):
 
 def check_room(conn, room):
     if not conn.execute("SELECT 1 FROM rooms WHERE id=? AND active=1", (room,)).fetchone():
-        raise HTTPException(422, "Выберите действующее помещение")
+        raise HTTPException(422, "Выберите активное помещение")
 
 
 def version_tuple(v):
@@ -207,8 +224,8 @@ def router(require_admin):
     @r.get("/devices", dependencies=admin)
     def devices():
         with db.connect() as conn:
-            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building "
-                    "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id ORDER BY r.building,r.name,d.name")]
+            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building,i.fingerprint identity_fingerprint "
+                    "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id LEFT JOIN sensor_identities i ON i.device_id=d.id ORDER BY r.building,r.name,d.name")]
 
     @r.post("/devices", dependencies=admin)
     def create(payload: DeviceIn):
@@ -237,9 +254,16 @@ def router(require_admin):
         code = secrets.token_urlsafe(32)
         with db.connect() as conn:
             get_device(conn, device)
+            identity = conn.execute("SELECT fingerprint FROM sensor_identities WHERE device_id=?", (device,)).fetchone()
+            if identity:
+                conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
+                conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
+                event(conn, device, "rekey", "Доступ отозван. Требуется новое разрешение.")
+                return {"device_id":device,"requires_authorization":True}
             conn.execute("UPDATE sensor_devices SET enrollment_hash=?,enrollment_until=?,token_hash=NULL WHERE id=?",
                          (digest(code), int(time.time())+7*86400, device))
-            event(conn, device, "rekey", "Ключ отозван; требуется настройка устройства")
+            conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
+            event(conn, device, "rekey", "Ключ отозван. Настройте датчик заново.")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
     @r.put("/devices/{device}/config", dependencies=admin)
@@ -271,11 +295,11 @@ def router(require_admin):
                              (previous["id"],))
                 event(conn, previous["id"], "retired", "Плата перенесена в новую регистрацию; архив сохранён")
             try:
-                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=? WHERE id=?",
-                             (payload.hardware_id, digest(token), payload.device_id))
+                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=? WHERE id=?",
+                             (payload.hardware_id, digest(token), payload.sensor_type, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
-            event(conn, payload.device_id, "enrolled", "Ключ выдан; код погасится после первого обмена")
+            event(conn, payload.device_id, "enrolled", "Ключ выдан. Код будет использован при первой передаче данных.")
         return {"token": token}
 
     @r.post("/devices/{device}/sync")
@@ -284,6 +308,8 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
+            if payload.sensor_type != d["sensor_type"]:
+                raise HTTPException(409, "Тип датчика изменился. Настройте его заново.")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]
@@ -356,13 +382,13 @@ def router(require_admin):
     async def upload(file: UploadFile = File(...)):
         image = await file.read(MAX_FIRMWARE + 1)
         if len(image) < 256 or len(image) > MAX_FIRMWARE or image[0] != 0xE9:
-            raise HTTPException(422, "Неверный размер или формат ESP-образа")
+            raise HTTPException(422, "Неверный формат или размер прошивки")
         if struct.unpack_from("<H", image, 12)[0] != 5 or struct.unpack_from("<I", image, 32)[0] != 0xABCD5432:
-            raise HTTPException(422, "Образ не предназначен для ESP32-C3")
+            raise HTTPException(422, "Выберите прошивку для ESP32-C3")
         version = image[48:80].split(b"\0", 1)[0].decode("ascii", errors="replace")
         project = image[80:112].split(b"\0", 1)[0]
         if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}", version) or project != b"termokontur-sensor":
-            raise HTTPException(422, "Неверное имя проекта или версия прошивки")
+            raise HTTPException(422, "Прошивка не подходит: проверьте проект и версию")
         with db.connect() as conn:
             try:
                 cur = conn.execute("INSERT INTO sensor_firmware(version,model,sha256,image,created_at) VALUES(?,?,?,?,?)",

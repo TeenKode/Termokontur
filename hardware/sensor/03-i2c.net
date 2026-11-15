@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/workspace/Termokontur/hardware/sensor/03-i2c.kicad_sch</source>
+    <date>2026-11-15T15:23:01+0000</date>
+    <tool>Eeschema 9.0.2+dfsg-1</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>03-i2c.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="A1">
+      <value>ESP32-C3 SuperMini</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="SuperMini_I2C" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="03-i2c.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>2f7e4956-6e4b-5bfb-ad29-b52c7a666544</tstamps>
+    </comp>
+    <comp ref="A3">
+      <value>SHT / AHT, модуль</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="Sensor_I2C" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="03-i2c.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>12a031b3-e843-56a9-940e-e62f2f70d30b</tstamps>
+    </comp>
+    <comp ref="C4">
+      <value>100n *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="03-i2c.kicad_sch"/>
+      <property name="ki_keywords" value="cap capacitor"/>
+      <property name="ki_fp_filters" value="C_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>d2a7767c-93e2-5eb5-aa66-1159cd4e494c</tstamps>
+    </comp>
+    <comp ref="R6">
+      <value>4k7 *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description="Resistor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="03-i2c.kicad_sch"/>
+      <property name="ki_keywords" value="R res resistor"/>
+      <property name="ki_fp_filters" value="R_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>e7483cbc-3289-5eeb-b5bd-b7df662d48fc</tstamps>
+    </comp>
+    <comp ref="R7">
+      <value>4k7 *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description="Resistor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="03-i2c.kicad_sch"/>
+      <property name="ki_keywords" value="R res resistor"/>
+      <property name="ki_fp_filters" value="R_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>2f0776c6-0484-5758-b6ef-83f7dfac15f9</tstamps>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="C">
+      <description>Unpolarized capacitor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>C_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">C</field>
+        <field name="Value">C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Unpolarized capacitor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Device" part="R">
+      <description>Resistor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>R_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">R</field>
+        <field name="Value">R</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Resistor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="Sensor_I2C">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">Sensor_I2C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="SCL" name="SCL" type="passive"/>
+        <pin num="SDA" name="SDA" type="passive"/>
+        <pin num="VCC" name="VCC" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="SuperMini_I2C">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">SuperMini_I2C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="3V3" name="3V3" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="GPIO6" name="GPIO6" type="passive"/>
+        <pin num="GPIO7" name="GPIO7" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries>
+    <library logical="Device">
+      <uri>/usr/share/kicad/symbols/Device.kicad_sym</uri>
+    </library>
+    <library logical="Termokontur">
+      <uri>/workspace/Termokontur/hardware/sensor/Termokontur.kicad_sym</uri>
+    </library>
+  </libraries>
+  <nets>
+    <net code="1" name="/3V3" class="Default">
+      <node ref="A1" pin="3V3" pinfunction="3V3" pintype="passive"/>
+      <node ref="A3" pin="VCC" pinfunction="VCC" pintype="passive"/>
+      <node ref="C4" pin="1" pintype="passive"/>
+      <node ref="R6" pin="1" pintype="passive"/>
+      <node ref="R7" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/GND_SYS" class="Default">
+      <node ref="A1" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="A3" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="C4" pin="2" pintype="passive"/>
+    </net>
+    <net code="3" name="/SCL" class="Default">
+      <node ref="A1" pin="GPIO7" pinfunction="GPIO7" pintype="passive"/>
+      <node ref="A3" pin="SCL" pinfunction="SCL" pintype="passive"/>
+      <node ref="R7" pin="2" pintype="passive"/>
+    </net>
+    <net code="4" name="/SDA" class="Default">
+      <node ref="A1" pin="GPIO6" pinfunction="GPIO6" pintype="passive"/>
+      <node ref="A3" pin="SDA" pinfunction="SDA" pintype="passive"/>
+      <node ref="R6" pin="2" pintype="passive"/>
+    </net>
+  </nets>
+</export>

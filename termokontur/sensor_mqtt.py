@@ -56,13 +56,17 @@ def messages(device, latest, config):
     ident = device["id"]
     base = "termokontur/" + ident
     common = {"identifiers": [ident], "name": device["name"], "manufacturer": "Термоконтур",
-              "model": sensors.MODEL, "sw_version": device["firmware"]}
+              "model": device.get("sensor_type", "sht4x"), "sw_version": device["firmware"]}
     for key, name, unit, device_class in (
         ("temperature", "Температура", "°C", "temperature"),
         ("humidity", "Влажность", "%", "humidity"),
         ("voltage", "Напряжение аккумулятора", "V", "voltage"),
         ("rssi", "Сигнал Wi-Fi", "dBm", "signal_strength"),
     ):
+        if key == "humidity" and device.get("sensor_type") == "ds18b20":
+            # Remove a retained entity when the board was previously used with T/H.
+            yield config["discovery_prefix"]+"/sensor/"+ident+"/"+key+"/config", ""
+            continue
         discovery = {"name": name, "unique_id": ident+"_"+key, "state_topic": base+"/state",
                      "value_template": "{{ value_json."+key+" }}", "device_class": device_class,
                      "unit_of_measurement": unit, "device": common,

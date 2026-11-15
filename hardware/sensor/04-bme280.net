@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/workspace/Termokontur/hardware/sensor/04-bme280.kicad_sch</source>
+    <date>2026-11-15T15:23:03+0000</date>
+    <tool>Eeschema 9.0.2+dfsg-1</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>04-bme280.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="A1">
+      <value>ESP32-C3 SuperMini</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="SuperMini_I2C" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="04-bme280.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>dda58637-2d4c-5e5e-9bda-3a25a004ff16</tstamps>
+    </comp>
+    <comp ref="A3">
+      <value>BME280, модуль</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Termokontur" part="BME280_module" description=""/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="04-bme280.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>581e0a9f-5902-5482-8139-df77327ea112</tstamps>
+    </comp>
+    <comp ref="C4">
+      <value>100n *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="04-bme280.kicad_sch"/>
+      <property name="ki_keywords" value="cap capacitor"/>
+      <property name="ki_fp_filters" value="C_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>05f0bb8f-198b-5b62-baaa-df16d45e0a8e</tstamps>
+    </comp>
+    <comp ref="R6">
+      <value>4k7 *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description="Resistor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="04-bme280.kicad_sch"/>
+      <property name="ki_keywords" value="R res resistor"/>
+      <property name="ki_fp_filters" value="R_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>6f5804ba-d7db-5d11-b1b2-ef8e0cba3aa0</tstamps>
+    </comp>
+    <comp ref="R7">
+      <value>4k7 *</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description="Resistor"/>
+      <property name="Sheetname" value=""/>
+      <property name="Sheetfile" value="04-bme280.kicad_sch"/>
+      <property name="ki_keywords" value="R res resistor"/>
+      <property name="ki_fp_filters" value="R_*"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>f6a7641a-9602-591a-921c-8d578715ef80</tstamps>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="C">
+      <description>Unpolarized capacitor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>C_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">C</field>
+        <field name="Value">C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Unpolarized capacitor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Device" part="R">
+      <description>Resistor</description>
+      <docs>~</docs>
+      <footprints>
+        <fp>R_*</fp>
+      </footprints>
+      <fields>
+        <field name="Reference">R</field>
+        <field name="Value">R</field>
+        <field name="Footprint"/>
+        <field name="Datasheet">~</field>
+        <field name="Description">Resistor</field>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="BME280_module">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">BME280_module</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="CSB" name="CSB" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="SCL" name="SCL" type="passive"/>
+        <pin num="SDA" name="SDA" type="passive"/>
+        <pin num="SDO" name="SDO" type="passive"/>
+        <pin num="VCC" name="VCC" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Termokontur" part="SuperMini_I2C">
+      <fields>
+        <field name="Reference">A</field>
+        <field name="Value">SuperMini_I2C</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="3V3" name="3V3" type="passive"/>
+        <pin num="GND" name="GND" type="passive"/>
+        <pin num="GPIO6" name="GPIO6" type="passive"/>
+        <pin num="GPIO7" name="GPIO7" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries>
+    <library logical="Device">
+      <uri>/usr/share/kicad/symbols/Device.kicad_sym</uri>
+    </library>
+    <library logical="Termokontur">
+      <uri>/workspace/Termokontur/hardware/sensor/Termokontur.kicad_sym</uri>
+    </library>
+  </libraries>
+  <nets>
+    <net code="1" name="/3V3" class="Default">
+      <node ref="A1" pin="3V3" pinfunction="3V3" pintype="passive"/>
+      <node ref="A3" pin="CSB" pinfunction="CSB" pintype="passive"/>
+      <node ref="A3" pin="VCC" pinfunction="VCC" pintype="passive"/>
+      <node ref="C4" pin="1" pintype="passive"/>
+      <node ref="R6" pin="1" pintype="passive"/>
+      <node ref="R7" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/GND_SYS" class="Default">
+      <node ref="A1" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="A3" pin="GND" pinfunction="GND" pintype="passive"/>
+      <node ref="A3" pin="SDO" pinfunction="SDO" pintype="passive"/>
+      <node ref="C4" pin="2" pintype="passive"/>
+    </net>
+    <net code="3" name="/SCL" class="Default">
+      <node ref="A1" pin="GPIO7" pinfunction="GPIO7" pintype="passive"/>
+      <node ref="A3" pin="SCL" pinfunction="SCL" pintype="passive"/>
+      <node ref="R7" pin="2" pintype="passive"/>
+    </net>
+    <net code="4" name="/SDA" class="Default">
+      <node ref="A1" pin="GPIO6" pinfunction="GPIO6" pintype="passive"/>
+      <node ref="A3" pin="SDA" pinfunction="SDA" pintype="passive"/>
+      <node ref="R6" pin="2" pintype="passive"/>
+    </net>
+  </nets>
+</export>
