@@ -53,7 +53,7 @@ static Persist state = {};
 static Rtc rtc = {};
 static bool journalHealthy = true;
 
-uint32_t crc32(const void *data, size_t n) {
+uint32_t tkCrc32(const void *data, size_t n) {
   const uint8_t *p = static_cast<const uint8_t *>(data);
   uint32_t crc = ~uint32_t(0);
   while (n--) {
@@ -65,11 +65,11 @@ uint32_t crc32(const void *data, size_t n) {
 }
 
 template <typename T> void seal(T &value) {
-  value.crc = crc32(&value, sizeof(T) - sizeof(value.crc));
+  value.crc = tkCrc32(&value, sizeof(T) - sizeof(value.crc));
 }
 template <typename T> bool valid(const T &value) {
   return value.magic == MAGIC &&
-         value.crc == crc32(&value, sizeof(T) - sizeof(value.crc));
+         value.crc == tkCrc32(&value, sizeof(T) - sizeof(value.crc));
 }
 
 bool readStateSlot(const char *path, Persist &out) {
