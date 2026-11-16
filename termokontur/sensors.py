@@ -53,6 +53,7 @@ class Config(Strict):
 class DeviceIn(Strict):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
+    model: SensorModel = MODEL
 
 
 class DevicePatch(Strict):
@@ -246,9 +247,9 @@ def router(require_admin):
         device = "tk-" + secrets.token_hex(8)
         with db.connect() as conn:
             check_room(conn, payload.room_id)
-            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at)
-                            VALUES(?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
-                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now()))
+            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model)
+                            VALUES(?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
+                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now(), payload.model))
             event(conn, device, "created", "Регистрация разрешена администратором")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
