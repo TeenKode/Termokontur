@@ -14,7 +14,7 @@ async function fetchWithCookies(url,opts={}){
  const set=response.headers.get("set-cookie");if(set)cookie=set.split(";")[0];return response;
 }
 async function api(url,body){const response=await fetchWithCookies(url,{method:body===undefined?"GET":"POST",headers:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});assert.ok(response.ok,await response.clone().text());return response.json();}
-async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw Error("DOM state timed out; errors="+errors.join(";"));}
+async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw Error("DOM state timed out; errors="+errors.join(";")+"; toast="+(dom?.window.document.getElementById("toast")?.textContent||"")+"; detail="+(dom?.window.document.getElementById("sensor-detail-state")?.textContent||""));}
 (async()=>{
  try{
   for(let i=0;i<100;i++){try{const h=await fetch(base+"/health");if(h.ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
