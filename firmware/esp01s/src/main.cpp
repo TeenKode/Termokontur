@@ -275,8 +275,8 @@ bool sht40(Entry &r) {
 }
 
 bool checkLog(uint32_t &last) {
-  last = state.ackSeq - 1;
-  if (!LittleFS.exists("/log.bin")) return true;
+  last = 0;
+  if (!LittleFS.exists("/log.bin")) { last = state.ackSeq - 1; return true; }
   File f = LittleFS.open("/log.bin", "r");
   if (!f || f.size() % sizeof(Entry)) return false;
   Entry r;
@@ -289,6 +289,7 @@ bool checkLog(uint32_t &last) {
     yield();
   }
   f.close();
+  last = max(last, state.ackSeq - 1);
   return true;
 }
 
@@ -551,7 +552,7 @@ void setup() {
   }
   if (cfg.enabled && !appendMeasurement()) journalHealthy = false;
   uint32_t period = max(uint32_t(1), cfg.sendS / cfg.measureS);
-  if (!rtc.epoch || cfg.token.isEmpty() || rtc.wakeCount >= period ||
+  if (!rtc.epoch || cfg.token.length() == 0 || rtc.wakeCount >= period ||
       !journalHealthy) syncAll();
   sleepNow();
 }
