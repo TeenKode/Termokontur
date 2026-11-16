@@ -64,6 +64,41 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                     page.locator('#sensor-title').scroll_into_view_if_needed()
                     page.screenshot(path=f'/tmp/termokontur-sensors-{width}-{theme}.png')
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'),f"horizontal overflow at {width}"
+                # BMP280 must display a real temperature without inventing humidity.
+                bmp=api.post("/api/sensors/devices",json={"name":"BMP280 кабинет","room_id":room["id"]})
+                assert bmp.status_code==200,bmp.text
+                ident=bmp.json()
+                enrollment=api.post("/api/sensors/enroll",json={
+                    "device_id":ident["device_id"],"code":ident["code"],"model":"c3-sht40-v1",
+                    "hardware_id":"aabbccddeeff","sensor_type":"bmp280",
+                })
+                assert enrollment.status_code==200,enrollment.text
+                rec={"seq":1,"boot_id":"abcdef0123456789","uptime_s":1800,
+                     "measured_at":int(time.time())-1800,"time_quality":"rtc",
+                     "temperature":22.5,"humidity":None,"battery_mv":3880,"interval_s":1800,"error":""}
+                sent=api.post('/api/sensors/devices/'+ident["device_id"]+'/sync',
+                              headers={"Authorization":"Bearer "+enrollment.json()["token"]},
+                              json={"model":"c3-sht40-v1","sensor_type":"bmp280",
+                                    "firmware":"0.1.6","records":[rec],
+                                    "next_seq":2,"lost":0,"rssi":-65,"battery_mv":3880,
+                                    "config_version":1,"boots":1})
+                assert sent.status_code==200,sent.text
+                page.set_viewport_size({"width":1440,"height":1000})
+                page.click("#sensor-refresh")
+                expect(page.locator(".sensor-card")).to_have_count(2)
+                page.locator(".sensor-card").filter(has_text="BMP280 кабинет").locator("button").click()
+                expect(page.locator("#sensor-detail-state")).to_contain_text("BMP280")
+                expect(page.locator("#sensor-records tr")).to_have_count(1)
+                assert page.locator("#sensor-records tr").first.locator("td").nth(3).text_content()=="—"
+                assert page.locator('#sensor-config-form .archive-toggle').inner_text().strip()=="Измерять температуру"
+                labels=page.evaluate("""() => {
+                    const context=document.getElementById("sensor-chart").getContext("2d");
+                    const before=context.fillText, labels=[];
+                    context.fillText=function(text,...args){ labels.push(String(text));return before.call(this,text,...args); };
+                    try{drawSensorChart();}finally{context.fillText=before;}
+                    return labels;
+                }""")
+                assert "100%" not in labels and "0%" not in labels,labels
                 assert not errors,errors
                 browser.close()
         print("Browser smoke passed: login, create/enroll, 48 records, config delivery, desktop/mobile, light/dark, no JS errors or page overflow")

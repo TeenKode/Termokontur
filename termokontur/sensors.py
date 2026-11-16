@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db
 
 MODEL = "c3-sht40-v1"
-SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "dht11", "dht22", "ds18b20"]
+SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
 MAX_FIRMWARE = 0x1C0000
 
 
@@ -113,9 +113,9 @@ class Sync(Strict):
             raise ValueError("Неверная последовательность записей")
         for record in self.records:
             if not record.error:
-                if self.sensor_type == "ds18b20":
+                if self.sensor_type in ("ds18b20", "bmp280"):
                     if record.humidity is not None:
-                        raise ValueError("DS18B20 не измеряет влажность")
+                        raise ValueError("Этот датчик не измеряет влажность")
                 elif record.humidity is None:
                     raise ValueError("Нет показания влажности")
         return self

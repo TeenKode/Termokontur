@@ -8,13 +8,13 @@ int main() {
   assert(crc8(reference, 2) == 0x92); // Sensirion datasheet CRC example.
   uint8_t scratch[] = {0x50,0x05,0x4b,0x46,0x7f,0xff,0x0c,0x10};
   assert(dallas_crc(scratch, 8) == 0x1c); // DS18B20 power-on scratchpad.
-  for (auto name : {"sht4x","sht3x","aht20","bme280","dht11","dht22","ds18b20"}) {
+  for (auto name : {"sht4x","sht3x","aht20","bme280","bmp280","dht11","dht22","ds18b20"}) {
     mock::clear(); Record r{};
     assert(supported(name));
     assert(!read_sensor(name, r));
     assert(r.error == 2); // Disconnected lines never turn into successful zeros.
   }
-  assert(!supported("bmp280"));
+  assert(supported("bmp280"));
   for (auto name : {"sht3x","sht4x"}) {
     mock::clear();
     int address = !strcmp(name,"sht3x") ? 0x45 : 0x46;
@@ -55,6 +55,31 @@ int main() {
   assert(r.humidity > 63000 && r.humidity < 64000);
   mock::registers[{0x77,0xd0}] = {0x58}; // BMP280 is rejected.
   assert(!read_sensor("bme280",r) && r.error == 2);
+  // BMP280 accepts both I2C addresses, reports Bosch reference T=25.08 C,
+  // but never reports a fabricated humidity value.
+  mock::registers[{0x77,0xfa}] = {0x7e,0xed,0x00};
+  assert(read_sensor("bmp280",r));
+  assert(r.error == 0 && r.temperature >= 25080 && r.temperature <= 25085);
+  assert(r.humidity == NO_HUMIDITY);
+  assert(mock::writes.back() == std::vector<uint8_t>({0xf4,0x21}));
+  mock::registers[{0x77,0xfa}] = {0x80, 0x00, 0x00}; // ADC_T=0x80000 invalid.
+  assert(!read_sensor("bmp280",r) && r.error == 2);
+  mock::registers[{0x77,0xfa}] = {0x7e, 0xed, 0x00};
+  mock::registers[{0x77,0xd0}] = {0x60}; // A BME280 must not be misidentified.
+  assert(!read_sensor("bmp280",r) && r.error == 2);
+  mock::clear();
+  mock::registers[{0x76,0xd0}] = {0x58};
+  mock::registers[{0x76,0xf3}] = {0};
+  mock::registers[{0x76,0x88}] = cal;
+  mock::registers[{0x76,0xfa}] = {0x7e,0xed,0x00};
+  assert(read_sensor("bmp280",r));
+  assert(r.temperature >= 25080 && r.temperature <= 25085);
+  assert(r.humidity == NO_HUMIDITY);
+  mock::registers[{0x76,0xf3}] = {0x08}; // Busy during entire retry window.
+  assert(!read_sensor("bmp280",r) && r.error == 2);
+  mock::registers[{0x76,0xf3}] = {0};
+  mock::registers[{0x76,0x88}] = {0xff,0xff,0xff,0xff,0xff,0xff};
+  assert(!read_sensor("bmp280",r) && r.error == 2);
   uint8_t dht11_sample[] = {45,5,23,4,77};
   assert(decode_dht(dht11_sample,false,r));
   assert(r.temperature == 23400 && r.humidity == 45500);
@@ -72,5 +97,5 @@ int main() {
   assert(s12(0xfff) == -1 && s12(0x800) == -2048 && s12(0x7ff) == 2047);
   assert(sizeof(Record) == 56 && sizeof(Slot) == 64);
   assert(NO_HUMIDITY < -100000); // Distinct from a valid zero-percent sample.
-  std::cout << "sensor protocol vectors, CRC, missing devices and BME compensation passed\n";
+  std::cout << "sensor protocol vectors, CRC, missing devices, BME and BMP280 compensation passed\n";
 }

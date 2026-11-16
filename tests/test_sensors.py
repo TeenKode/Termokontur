@@ -238,12 +238,12 @@ def test_reuse_board_requires_disabling_previous_registration(admin):
     assert sync(admin,d,headers,batch()).status_code==401
 
 
-@pytest.mark.parametrize("kind", ["dht11", "dht22", "sht3x", "sht4x", "aht20", "bme280", "ds18b20"])
+@pytest.mark.parametrize("kind", ["dht11", "dht22", "sht3x", "sht4x", "aht20", "bme280", "bmp280", "ds18b20"])
 def test_sensor_types_enroll_sync_and_replay(admin, kind):
     d, enrollment, headers, room = setup_sensor(admin)
     enrollment["sensor_type"] = kind
     assert admin.post("/api/sensors/enroll", json=enrollment).status_code == 200
-    sample = record(humidity=None if kind == "ds18b20" else 0.0)
+    sample = record(humidity=None if kind in ("ds18b20", "bmp280") else 0.0)
     payload = batch([sample], sensor_type=kind)
     for _ in range(2):
         response = sync(admin, d, headers, payload)
@@ -271,6 +271,24 @@ def test_ds18b20_negative_temperature_and_no_fake_humidity(admin):
     messages = dict(sensor_mqtt.messages(device, None, sensor_mqtt.MQTTConfig().model_dump()))
     topic = f"homeassistant/sensor/{d['device_id']}/humidity/config"
     assert messages[topic] == ""
+
+
+def test_bmp280_temperature_only_and_humidity_must_be_null(admin):
+    d, enrollment, headers, room = setup_sensor(admin)
+    enrollment["sensor_type"] = "bmp280"
+    assert admin.post("/api/sensors/enroll", json=enrollment).status_code == 200
+    payload = batch([record(temperature=23.4, humidity=None)], sensor_type="bmp280")
+    assert sync(admin, d, headers, payload).status_code == 200
+    assert admin.get("/api/readings").json()[0]["value"] == 23.4
+    assert admin.get(f"/api/sensors/devices/{d['device_id']}/records").json()[0]["humidity"] is None
+    payload = batch([record(2, temperature=24.0, humidity=0.0)], next_seq=3, sensor_type="bmp280")
+    assert sync(admin, d, headers, payload).status_code == 422
+    with db.connect() as conn:
+        device = dict(conn.execute("SELECT * FROM sensor_devices WHERE id=?", (d["device_id"],)).fetchone())
+        assert conn.execute("SELECT count(*) FROM sensor_records WHERE device_id=?", (d["device_id"],)).fetchone()[0] == 1
+    announcements = dict(sensor_mqtt.messages(device, None, sensor_mqtt.MQTTConfig().model_dump()))
+    assert announcements[f"homeassistant/sensor/{d['device_id']}/humidity/config"] == ""
+    assert announcements[f"homeassistant/sensor/{d['device_id']}/temperature/config"]
 
 
 def test_sensor_type_mismatch_and_missing_humidity_are_atomic(admin):

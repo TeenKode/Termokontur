@@ -48,7 +48,7 @@ async function openSensor(id){
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");configForm.replaceChildren();
     for(const [key,label,min,max] of sensorConfigFields){const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
-    const enabled=el("label","archive-toggle",d.sensor_type==="ds18b20"?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
+    const enabled=el("label","archive-toggle",["ds18b20","bmp280"].includes(d.sensor_type)?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
     const save=el("button","btn primary","Отправить настройки");configForm.append(save);
     const body=$("sensor-records");body.replaceChildren();
     for(const r of records.slice(0,100)){const tr=el("tr");cell(tr,r.seq);cell(tr,sensorWhen(r.measured_at));cell(tr,r.temperature===null?"—":r.temperature.toFixed(2));cell(tr,r.humidity===null?"—":r.humidity.toFixed(1));cell(tr,(r.battery_mv/1000).toFixed(2)+" В");cell(tr,(sensorTime[r.time_quality]||r.time_quality)+(r.error?" · "+r.error:""));body.append(tr);}
@@ -67,9 +67,13 @@ function drawSensorChart(){
   const first=points[0].measured_at,last=points.at(-1).measured_at,range=Math.max(1,last-first);
   const lo=Math.floor(Math.min(...points.map(x=>x.temperature))-1),hi=Math.ceil(Math.max(...points.map(x=>x.temperature))+1);
   const left=45,right=width-42,top=25,bottom=220;
-  ctx.fillText(lo+" °C",2,bottom);ctx.fillText(hi+" °C",2,top);ctx.fillText("100%",right+3,top);ctx.fillText("0%",right+3,bottom);
+  const hasHumidity=points.some(p=>Number.isFinite(p.humidity));
+  ctx.fillText(lo+" °C",2,bottom);ctx.fillText(hi+" °C",2,top);
+  if(hasHumidity){ctx.fillText("100%",right+3,top);ctx.fillText("0%",right+3,bottom);}
   ctx.fillText(sensorWhen(first),left,248);if(points.length>1)ctx.fillText(sensorWhen(last),Math.max(left,right-110),248);
-  for(const [key,color,min,max] of [["temperature","#14a786",lo,hi],["humidity","#508de2",0,100]]){
+  const series=[["temperature","#14a786",lo,hi]];
+  if(hasHumidity)series.push(["humidity","#508de2",0,100]);
+  for(const [key,color,min,max] of series){
     ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();let previous=null;
     for(const p of points){if(p[key]===null||!Number.isFinite(p[key])){previous=null;continue;}const x=left+(p.measured_at-first)/range*(right-left),y=bottom-(p[key]-min)/(max-min)*(bottom-top);
       if(previous===null||p.seq!==previous.seq+1||p.measured_at-previous.measured_at>2*p.interval_s)ctx.moveTo(x,y);else ctx.lineTo(x,y);previous=p;

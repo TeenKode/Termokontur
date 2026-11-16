@@ -634,7 +634,7 @@
 <h2>Прошивка и подключение по USB</h2><p>Укажите параметры и подключите плату. Доступ будет выдан автоматически.</p>
 <p id="sensor-usb-support" class="hint"></p>
 <div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
-<label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
+<label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
 <label>Wi-Fi 2,4 ГГц<input id="usb-ssid" maxlength="32" required autocomplete="off"></label><label>Пароль Wi-Fi<input id="usb-wifi-password" type="password" maxlength="63" autocomplete="new-password"></label>
 <label>HTTPS-адрес панели<input id="usb-server" readonly type="url" required></label></div>
 <p class="hint">Панель должна быть доступна из сети датчика. Перед подключением USB SuperMini разомкните SW1 и отключите USB зарядки TP4056.</p>
