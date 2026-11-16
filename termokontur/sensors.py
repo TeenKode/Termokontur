@@ -100,14 +100,14 @@ class Record(Strict):
 
 
 class Sync(Strict):
-    model: Literal["c3-sht40-v1"]
+    model: SensorModel
     sensor_type: SensorType = "sht4x"
     firmware: str = Field(pattern=r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
     records: list[Record] = Field(max_length=100)
     next_seq: int = Field(ge=1, le=9007199254740991)
     lost: int = Field(ge=0, le=9007199254740991)
     rssi: int = Field(ge=-127, le=0)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: int = Field(ge=0, le=5000)
     config_version: int = Field(ge=0)
     boots: int = Field(ge=0)
     ota_failures: int = Field(default=0, ge=0)
