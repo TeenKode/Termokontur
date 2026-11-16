@@ -13,7 +13,7 @@
 namespace sensor {
 // One sensor per board. GPIO5 is reserved for DHT / externally powered 1-Wire.
 inline bool supported(const char *s) {
-  for (auto name : {"sht4x", "sht3x", "aht20", "bme280", "dht11", "dht22", "ds18b20"})
+  for (auto name : {"sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"})
     if (!strcmp(s, name)) return true;
   return false;
 }
@@ -112,6 +112,51 @@ inline bool aht20(I2C &bus, Record &r) {
 inline uint16_t u16(const uint8_t *b) { return b[0] | (b[1] << 8); }
 inline int16_t s16(const uint8_t *b) { return static_cast<int16_t>(u16(b)); }
 inline int16_t s12(int v) { return v & 0x800 ? v - 4096 : v; }
+// BMP280 (chip ID 0x58) provides calibrated temperature and pressure, not humidity.
+// Temperature is sufficient for Termokontur; pressure is deliberately not sent.
+inline bool bmp280(I2C &bus, Record &r) {
+  uint8_t address = 0, id = 0;
+  for (uint8_t candidate : {0x76, 0x77}) {
+    if (bus.reg(candidate, 0xd0, &id, 1) && id == 0x58) {
+      address = candidate; break;
+    }
+  }
+  if (!address) return false; // Refuse BME280 (0x60), wiring faults and wrong modules.
+  uint8_t reset[] = {0xe0, 0xb6};
+  if (!bus.write(address, reset, sizeof(reset))) return false;
+  wait_ms(5);
+  bool ready = false;
+  for (int i = 0; i < 20; ++i) {
+    if (!bus.reg(address, 0xf3, &id, 1)) return false;
+    if (!(id & 0x01)) { ready = true; break; } // NVM calibration copied.
+    wait_ms(5);
+  }
+  if (!ready) return false;
+  uint8_t cal[6];
+  if (!bus.reg(address, 0x88, cal, sizeof(cal))) return false;
+  // Sanity-check calibration: all 0xff/0x00 is characteristic of a bus fault.
+  if (!u16(cal) || u16(cal) == 0xffff || !s16(cal + 2)) return false;
+  uint8_t forced[] = {0xf4, 0x21}; // temperature oversampling x1, pressure skipped, forced mode
+  if (!bus.write(address, forced, sizeof(forced))) return false;
+  wait_ms(10);
+  ready = false;
+  for (int i = 0; i < 20; ++i) {
+    if (!bus.reg(address, 0xf3, &id, 1)) return false;
+    if (!(id & 0x08)) { ready = true; break; }
+    wait_ms(5);
+  }
+  if (!ready) return false;
+  uint8_t raw[3];
+  if (!bus.reg(address, 0xfa, raw, sizeof(raw))) return false;
+  int adc = (int(raw[0]) << 12) | (int(raw[1]) << 4) | (raw[2] >> 4);
+  if (adc == 0x80000) return false;
+  double a = (adc / 16384.0 - u16(cal) / 1024.0) * s16(cal + 2);
+  double x = adc / 131072.0 - u16(cal) / 8192.0;
+  double fine = a + x * x * s16(cal + 4);
+  if (!values(r, fine / 5120.0, 0.0)) return false;
+  r.humidity = NO_HUMIDITY;
+  return true;
+}
 inline bool bme280(I2C &bus, Record &r) {
   uint8_t a = 0, id;
   for (uint8_t candidate : {0x76, 0x77})
@@ -249,6 +294,7 @@ inline bool read_sensor(const char *type, Record &r) {
     if (!strcmp(type, "sht4x") || !strcmp(type, "sht3x")) ok = sht(bus, !strcmp(type, "sht3x"), r);
     else if (!strcmp(type, "aht20")) ok = aht20(bus, r);
     else if (!strcmp(type, "bme280")) ok = bme280(bus, r);
+    else if (!strcmp(type, "bmp280")) ok = bmp280(bus, r);
     else ok = false;
   }
   if (!ok && !r.error) r.error = 2;
