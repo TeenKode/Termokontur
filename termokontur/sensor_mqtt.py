@@ -63,7 +63,7 @@ def messages(device, latest, config):
         ("voltage", "Напряжение аккумулятора", "V", "voltage"),
         ("rssi", "Сигнал Wi-Fi", "dBm", "signal_strength"),
     ):
-        if key == "humidity" and device.get("sensor_type") == "ds18b20":
+        if key == "humidity" and device.get("sensor_type") in ("ds18b20", "bmp280"):
             # Remove a retained entity when the board was previously used with T/H.
             yield config["discovery_prefix"]+"/sensor/"+ident+"/"+key+"/config", ""
             continue
