@@ -310,7 +310,7 @@ def router(require_admin):
                              (previous["id"],))
                 event(conn, previous["id"], "retired", "Плата перенесена в новую регистрацию; архив сохранён")
             try:
-                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=?,model=? WHERE id=?",
+                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=?,model=?,target_firmware=NULL WHERE id=?",
                              (payload.hardware_id, digest(token), payload.sensor_type, payload.model, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
@@ -365,8 +365,8 @@ def router(require_admin):
                 event(conn, device, "device_error", payload.error)
             conn.execute("""INSERT INTO sensor_mqtt_outbox(device_id) VALUES(?) ON CONFLICT(device_id)
                          DO UPDATE SET generation=generation+1,next_retry=0""", (device,))
-            firmware = conn.execute("SELECT id,version,sha256,length(image) size FROM sensor_firmware WHERE id=?",
-                                    (d["target_firmware"],)).fetchone()
+            firmware = conn.execute("SELECT id,version,sha256,length(image) size FROM sensor_firmware WHERE id=? AND model=?",
+                                    (d["target_firmware"], d["model"])).fetchone()
             ota = (dict(firmware) if firmware and (payload.ota_generation != d["ota_generation"] or payload.ota_failures < 3)
                    and version_tuple(firmware["version"]) > version_tuple(payload.firmware) else None)
             if ota:
@@ -417,6 +417,8 @@ def router(require_admin):
         with db.connect() as conn:
             d = get_device(conn, device)
             if firmware_id is not None:
+                if d["model"] == "esp01-sht40-v1":
+                    raise HTTPException(422, "OTA ESP-01S 1 МБ пока не поддерживается. Используйте USB–UART.")
                 fw = conn.execute("SELECT version,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
                 if not fw or fw["model"] != d["model"] or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
                     raise HTTPException(422, "Выберите более новую версию")
