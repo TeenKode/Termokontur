@@ -57,6 +57,7 @@ int main() {
   assert(!read_sensor("bme280",r) && r.error == 2);
   // BMP280 accepts both I2C addresses, reports Bosch reference T=25.08 C,
   // but never reports a fabricated humidity value.
+  mock::registers[{0x77,0xfa}] = {0x7e,0xed,0x00};
   assert(read_sensor("bmp280",r));
   assert(r.error == 0 && r.temperature >= 25080 && r.temperature <= 25085);
   assert(r.humidity == NO_HUMIDITY);
