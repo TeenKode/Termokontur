@@ -44,7 +44,7 @@ async function openSensor(id){
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
     $("sensor-detail").hidden=false;$("sensor-title").textContent=d.name;
     const isEsp01=d.model==="esp01-sht40-v1";
-    $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(isEsp?"ESP-01S (1 МБ)":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(isEsp01?"ESP-01S (1 МБ)":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
     $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");configForm.replaceChildren();
