@@ -48,7 +48,7 @@ async function openSensor(id){
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");configForm.replaceChildren();
     for(const [key,label,min,max] of sensorConfigFields){const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
-    const enabled=el("label","archive-toggle",d.sensor_type==="ds18b20"?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
+    const enabled=el("label","archive-toggle",["ds18b20","bmp280"].includes(d.sensor_type)?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
     const save=el("button","btn primary","Отправить настройки");configForm.append(save);
     const body=$("sensor-records");body.replaceChildren();
     for(const r of records.slice(0,100)){const tr=el("tr");cell(tr,r.seq);cell(tr,sensorWhen(r.measured_at));cell(tr,r.temperature===null?"—":r.temperature.toFixed(2));cell(tr,r.humidity===null?"—":r.humidity.toFixed(1));cell(tr,(r.battery_mv/1000).toFixed(2)+" В");cell(tr,(sensorTime[r.time_quality]||r.time_quality)+(r.error?" · "+r.error:""));body.append(tr);}
