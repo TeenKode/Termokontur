@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db
 
 MODEL = "c3-sht40-v1"
+SensorModel = Literal["c3-sht40-v1", "esp01-sht40-v1"]
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "dht11", "dht22", "ds18b20"]
 MAX_FIRMWARE = 0x1C0000
 
@@ -64,8 +65,13 @@ class Enrollment(Strict):
     device_id: str = Field(pattern=r"^tk-[a-f0-9]{16}$")
     code: str = Field(min_length=32, max_length=100)
     hardware_id: str = Field(pattern=r"^[a-f0-9]{12}$")
-    model: Literal["c3-sht40-v1"]
+    model: SensorModel
     sensor_type: SensorType = "sht4x"
+
+
+def valid_battery_mv(mv: int) -> bool:
+    """0 is an explicit 'not measurable' value for ESP-01 without an ADC."""
+    return mv == 0 or 2000 <= mv <= 5000
 
 
 class Record(Strict):
@@ -76,12 +82,14 @@ class Record(Strict):
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
     temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: int = Field(ge=0, le=5000)
     interval_s: int = Field(ge=60, le=86400)
     error: Literal["", "sensor_crc", "sensor_io"] = ""
 
     @model_validator(mode="after")
     def coherent(self):
+        if not valid_battery_mv(self.battery_mv):
+            raise ValueError("Недопустимое напряжение аккумулятора")
         if (self.time_quality == "unknown") != (self.measured_at is None):
             raise ValueError("Качество времени не соответствует временной метке")
         if not self.error and self.temperature is None:
@@ -108,6 +116,8 @@ class Sync(Strict):
 
     @model_validator(mode="after")
     def sequence(self):
+        if not valid_battery_mv(self.battery_mv):
+            raise ValueError("Недопустимое напряжение аккумулятора")
         seqs = [r.seq for r in self.records]
         if seqs != sorted(set(seqs)) or any(s >= self.next_seq for s in seqs):
             raise ValueError("Неверная последовательность записей")
@@ -156,8 +166,11 @@ def initialize(conn):
     """)
     # Web and MAX services can start together; serialize the additive migration.
     conn.execute("BEGIN IMMEDIATE")
-    if "sensor_type" not in {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}
+    if "sensor_type" not in columns:
         conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
+    if "model" not in columns:
+        conn.execute("ALTER TABLE sensor_devices ADD COLUMN model TEXT NOT NULL DEFAULT 'c3-sht40-v1'")
     conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
     from . import sensor_onboarding
     sensor_onboarding.initialize(conn)
@@ -213,7 +226,7 @@ def public_device(d):
     stale = max(3600, d["config"]["send_s"] * 2 + d["config"]["cool_s"])
     d["status"] = ("disabled" if not d["enabled"] else "not_enrolled" if not d["hardware_id"]
                    else "waiting" if not d["last_seen"] else "stale" if time.time() - d["last_seen"] > stale
-                   else "low_battery" if d["battery_mv"] < d["config"]["wifi_min_mv"] else "recent")
+                   else "low_battery" if d["battery_mv"] not in (None, 0) and d["battery_mv"] < d["config"]["wifi_min_mv"] else "recent")
     return d
 
 
@@ -297,8 +310,8 @@ def router(require_admin):
                              (previous["id"],))
                 event(conn, previous["id"], "retired", "Плата перенесена в новую регистрацию; архив сохранён")
             try:
-                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=? WHERE id=?",
-                             (payload.hardware_id, digest(token), payload.sensor_type, payload.device_id))
+                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=?,model=? WHERE id=?",
+                             (payload.hardware_id, digest(token), payload.sensor_type, payload.model, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
             event(conn, payload.device_id, "enrolled", "Ключ выдан. Код будет использован при первой передаче данных.")
@@ -310,8 +323,8 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
-            if payload.sensor_type != d["sensor_type"]:
-                raise HTTPException(409, "Тип датчика изменился. Настройте его заново.")
+            if payload.sensor_type != d["sensor_type"] or payload.model != d["model"]:
+                raise HTTPException(409, "Модель или тип датчика изменился. Зарегистрируйте его заново.")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]
@@ -404,8 +417,8 @@ def router(require_admin):
         with db.connect() as conn:
             d = get_device(conn, device)
             if firmware_id is not None:
-                fw = conn.execute("SELECT version FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
-                if not fw or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
+                fw = conn.execute("SELECT version,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
+                if not fw or fw["model"] != d["model"] or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
                     raise HTTPException(422, "Выберите более новую версию")
             conn.execute("UPDATE sensor_devices SET target_firmware=?,ota_failures=0,ota_generation=ota_generation+1 WHERE id=?", (firmware_id, device))
             event(conn, device, "ota", f"Назначен образ {firmware_id}")
@@ -417,8 +430,8 @@ def router(require_admin):
             d = authenticate(conn, device, authorization)
             if d["target_firmware"] != firmware_id:
                 raise HTTPException(403, "Образ не назначен устройству")
-            fw = conn.execute("SELECT image FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
-            if not fw:
+            fw = conn.execute("SELECT image,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
+            if not fw or fw["model"] != d["model"]:
                 raise HTTPException(404, "Образ не найден")
             return Response(bytes(fw["image"]), media_type="application/octet-stream")
 
