@@ -348,7 +348,7 @@ def queue_temperature_alerts() -> int:
             event_raw=f"alert:{row['room_id']}:{row['user_id']}:{row['reading_id']}:{stamp}"
             key=hashlib.sha256(event_raw.encode("utf-8")).hexdigest()
             label="ниже минимума" if state=="below" else "выше максимума"
-            msg=(f"Термоконтур: температура {label}!\n"
+            msg=(f"⚠️ Термоконтур: температура {label}!\n"
                  f"{row['building']} / {row['name']}: {row['value']:g} °C\n"
                  f"Допустимый диапазон: {row['min_temp']:g}–{row['max_temp']:g} °C.")
             conn.execute("""INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
