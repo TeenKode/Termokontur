@@ -35,7 +35,7 @@ def _heartbeat(mode: str) -> None:
     """Expose whether the MAX background service is alive, without disclosing secrets."""
     db.set_state("max_worker_heartbeat", f"{db.utc_now()}|{mode}")
 
-HELP = ("Термоконтур — показания температуры.\n"
+HELP = ("🌡️ Термоконтур — показания температуры.\n"
         "/bind КОД — привязать кабинет (код выдаёт администратор)\n"
         "/rooms — мои кабинеты\n"
         "/today — статус замеров за сегодня\n"
@@ -53,54 +53,54 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
     action = parts[0].lower().split("@")[0]
     if action == "/bind":
         if len(parts) != 2:
-            return "Запросите код у администратора и отправьте /bind КОД."
+            return "🔗 Запросите код у администратора и отправьте /bind КОД."
         room = db.bind_code(user_id, parts[1], event_id)
         if room is None:
-            return "Код недействителен или истёк. Запросите новый."
-        return f"Кабинет привязан: {room['building']} / {room['name']} (ID {room['room_id']})."
+            return "⚠️ Код недействителен или истёк. Запросите новый."
+        return f"✅ Кабинет привязан: {room['building']} / {room['name']} (ID {room['room_id']})."
     if action == "/rooms":
         items = db.bound_rooms(user_id)
         if not items:
-            return "Нет привязанных кабинетов. Введите /bind КОД."
-        return "Ваши кабинеты:\n" + "\n".join(
+            return "🔗 Нет привязанных кабинетов. Введите /bind КОД."
+        return "🏫 Ваши кабинеты:\n" + "\n".join(
             f"ID {r['id']}: {r['building']} / {r['name']}" for r in items)
     if action == "/today":
         snapshot = daily.summary()
         selected_ids = {room["id"] for room in db.bound_rooms(user_id)}
         if not selected_ids:
-            return "Нет привязанных кабинетов. Введите /bind КОД."
+            return "🔗 Нет привязанных кабинетов. Введите /bind КОД."
         selected = [room for room in snapshot["rooms"] if room["id"] in selected_ids]
-        lines = ["Показания за " + snapshot["local_date"] + ":"]
+        lines = ["📅 Показания за " + snapshot["local_date"] + ":"]
         for room in selected:
             name = room["building"] + " / " + room["name"]
             if room["daily_status"] == "missing":
-                lines.append("Нет показаний — " + name)
+                lines.append("⏳ Нет показаний — " + name)
             else:
-                lines.append(f"{room['measured_temp']:g} °C — " + name)
-        return "\n".join(lines) if len(lines) > 1 else "Все привязанные кабинеты отключены."
+                lines.append(f"✅ {room['measured_temp']:g} °C — " + name)
+        return "\n".join(lines) if len(lines) > 1 else "ℹ️ Все привязанные кабинеты отключены."
     if action == "/unbind":
         if len(parts) != 2 or not parts[1].isdigit():
-            return "Формат: /unbind ID"
+            return "⚠️ Формат: /unbind ID"
         if db.unbind(user_id, int(parts[1])):
-            return "Кабинет отвязан."
-        return "Этот кабинет не привязан."
+            return "✅ Кабинет отвязан."
+        return "ℹ️ Этот кабинет не привязан."
     if action == "/temp" or re.fullmatch(r"[-+]?\d{1,2}(?:[.,]\d)?", text):
         values = parts[1:] if action == "/temp" else parts
         allowed = db.bound_rooms(user_id)
         if not allowed:
-            return "Сначала привяжите кабинет: /bind КОД"
+            return "🔗 Сначала привяжите кабинет: /bind КОД"
         if len(values) == 1:
             if len(allowed) != 1:
-                return "Укажите кабинет: /temp ID 21,5"
+                return "🏫 Укажите кабинет: /temp ID 21,5"
             room = allowed[0]
             raw = values[0]
         elif len(values) == 2 and values[0].isdigit():
             room = next((r for r in allowed if r["id"] == int(values[0])), None)
             if not room:
-                return "Этот кабинет не привязан к вашему аккаунту."
+                return "⛔ Этот кабинет не привязан к вашему аккаунту."
             raw = values[1]
         else:
-            return "Формат: /temp 21,5 или /temp ID 21,5"
+            return "⚠️ Формат: /temp 21,5 или /temp ID 21,5"
         # Use the same transaction and shared room/day rule as callback buttons.
         # Legacy /temp commands must never bypass the common daily MAX entry.
         return max_ui._write(user_id, room["id"], "s", raw, f"max:message:{event_id}")
