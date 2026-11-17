@@ -150,7 +150,7 @@ def test_max_delivery_callbacks_edit_message_and_regular_replies_have_menu(clien
     assert queued[0]["callback_id"] == "cb-ack"
     assert queued[0]["origin_mid"] == "botmsg1"
     buttons = json.loads(queued[0]["buttons_json"])[0]["payload"]["buttons"]
-    assert buttons[0][0]["text"] == "Отправить за сегодня"
+    assert buttons[0][0]["text"] == "🌡️ Отправить за сегодня"
 
     class Client:
         def __init__(self):
