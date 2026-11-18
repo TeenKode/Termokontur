@@ -504,6 +504,12 @@ function renderReport(){
     for(const item of [d.date,d.rooms_total,d.rooms_measured,d.missing,
       reportNumber(d.coverage,"%"),d.out_of_range])cell(tr,item);
   });
+  const submitted=r.room_daily.filter(d=>d.readings>0).reverse();
+  $("report-submitted-count").textContent=submitted.length;
+  reportTable("report-submitted-body",submitted.slice(0,300),(tr,d)=>{
+    for(const item of [d.date,d.building,d.room,reportNumber(d.average," °C"),
+      d.reporter_name||"—",d.measured_at?when(d.measured_at):"—"])cell(tr,item);
+  });
   $("report-missing-count").textContent=r.missing.length;
   reportTable("report-missing-body",r.missing.slice(0,300),(tr,d)=>{
     for(const item of [d.date,d.building,d.room])cell(tr,item);
