@@ -57,6 +57,10 @@ def test_report_room_day_averages_and_coverage(client):
     assert len(report["rooms"]) == 2
     assert any(d["room_id"] == one["id"] and d["average"] == 20
                for d in report["room_daily"])
+    assert any(d["room_id"] == one["id"] and d["reporter_name"] == "Ирина Иванова"
+               for d in report["room_daily"])
+    assert any(d["room_id"] == two["id"] and d["reporter_name"] == "Автоматический датчик"
+               for d in report["room_daily"])
 
 
 def test_staff_stats_do_not_blame_shared_room_colleague(client):
