@@ -54,6 +54,11 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None)
             (building, building),
         )]
         room_ids = {room["id"] for room in rooms}
+        profiles = {str(row["user_id"]): _display(
+            row["first_name"], row["last_name"], row["username"], str(row["user_id"])
+        ) for row in conn.execute("""
+            SELECT user_id, first_name, last_name, username FROM max_users
+        """)}
         # Bounded by one-year date window; refuse exceptionally large exports.
         measurements = conn.execute("""
             SELECT r.id, r.room_id, r.value, r.source, r.reporter, r.observed_at
@@ -114,6 +119,15 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None)
             abnormal = bool(values and not room["min_temp"] <= average <= room["max_temp"])
             raw_deviations = sum(not room["min_temp"] <= v <= room["max_temp"] for v in values)
             latest = entries[-1] if entries else None
+            reporter_name = None
+            if latest:
+                if latest["source"] == "max":
+                    uid = str(latest["reporter"])[4:] if str(latest["reporter"]).startswith("MAX:") else ""
+                    reporter_name = profiles.get(uid, "MAX ID " + uid)
+                elif latest["source"] == "ha":
+                    reporter_name = "Автоматический датчик"
+                else:
+                    reporter_name = "Администратор панели"
             record = {
                 "date": day, "room_id": room["id"], "building": room["building"],
                 "room": room["name"], "average": average,
@@ -122,6 +136,7 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None)
                 "out_of_range": abnormal,
                 "source": latest["source"] if latest else None,
                 "reporter": latest["reporter"] if latest else None,
+                "reporter_name": reporter_name,
                 "measured_at": latest["observed_at"] if latest else None,
                 "min_limit": room["min_temp"], "max_limit": room["max_temp"],
             }
