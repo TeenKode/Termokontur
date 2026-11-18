@@ -615,6 +615,109 @@ def remember_max_user(user: dict) -> None:
               profile_field("last_name"), profile_field("username"), utc_now()))
 
 
+def list_max_users() -> list[dict]:
+    """All MAX profiles observed by this bot, including users without rooms.
+
+    MAX does not provide a complete subscriber directory: a person appears
+    after their first verified private message/start/callback update.
+    """
+    with connect() as conn:
+        people = {
+            row["user_id"]: {**dict(row), "rooms": []}
+            for row in conn.execute("""
+                SELECT user_id, first_name, last_name, username, seen_at
+                FROM max_users
+            """)
+        }
+        for row in conn.execute("""
+            SELECT b.user_id, r.id, r.building, r.name, r.active
+            FROM max_bindings b JOIN rooms r ON r.id=b.room_id
+            ORDER BY r.building COLLATE NOCASE, r.name COLLATE NOCASE, r.id
+        """):
+            uid = row["user_id"]
+            profile = people.setdefault(uid, {
+                "user_id": uid, "first_name": "", "last_name": "",
+                "username": "", "seen_at": None, "rooms": [],
+            })
+            profile["rooms"].append({
+                "id": row["id"], "building": row["building"],
+                "name": row["name"], "active": bool(row["active"]),
+            })
+    return sorted(people.values(), key=lambda p: (
+        not bool(p["last_name"] or p["first_name"]),
+        p["last_name"].casefold(),
+        p["first_name"].casefold(),
+        p["username"].casefold(), p["user_id"],
+    ))
+
+
+def set_max_user_rooms(user_id: str, room_ids: list[int],
+                       notify: bool = False) -> dict:
+    """Atomically replace active-room bindings; preserve inactive assignments.
+
+    Optionally queue *one* MAX notification listing only newly assigned rooms.
+    Repeating the same operation never queues another notification.
+    """
+    chosen = list(dict.fromkeys(room_ids))
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        known = conn.execute("""
+            SELECT 1 FROM max_users WHERE user_id=?
+            UNION SELECT 1 FROM max_bindings WHERE user_id=?
+        """, (user_id, user_id)).fetchone()
+        if not known:
+            raise LookupError("Пользователь MAX не найден. Сначала он должен написать боту.")
+        available = {
+            row["id"]: dict(row) for row in conn.execute("""
+                SELECT id, building, name FROM rooms WHERE active=1
+                ORDER BY building COLLATE NOCASE, name COLLATE NOCASE
+            """)
+        }
+        if any(room_id not in available for room_id in chosen):
+            raise ValueError("Нельзя назначить несуществующее или отключённое помещение")
+        old = {row["room_id"] for row in conn.execute("""
+            SELECT b.room_id FROM max_bindings b
+            JOIN rooms r ON r.id=b.room_id
+            WHERE b.user_id=? AND r.active=1
+        """, (user_id,))}
+        added = [room_id for room_id in chosen if room_id not in old]
+        removed = [room_id for room_id in old if room_id not in chosen]
+        if added or removed:
+            conn.execute("""
+                DELETE FROM max_bindings WHERE user_id=?
+                AND room_id IN (SELECT id FROM rooms WHERE active=1)
+            """, (user_id,))
+            conn.executemany(
+                "INSERT INTO max_bindings(user_id,room_id) VALUES (?,?)",
+                ((user_id, room_id) for room_id in chosen),
+            )
+        queued = False
+        if notify and added:
+            names = [f"• {available[room_id]['building']} / {available[room_id]['name']}"
+                     for room_id in added[:40]]
+            overflow = (f"\\n…и ещё {len(added) - 40} помещений."
+                        if len(added) > 40 else "")
+            notice = ("🏫 Вам назначены кабинеты в системе «Термоконтур»:\\n"
+                      + "\\n".join(names) + overflow
+                      + "\\n\\nОткройте меню бота, чтобы передать показания температуры.")
+            now = utc_now()
+            key = "max-admin-assign:" + secrets.token_hex(16)
+            conn.execute("""
+                INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)
+            """, (key, now))
+            conn.execute("""
+                INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
+                VALUES(?,?,?,?)
+            """, (key, user_id, notice[:4000], now))
+            conn.execute("""
+                INSERT INTO max_outbox_ui(event_id,delivery_mode,notify)
+                VALUES(?,'notice',1)
+            """, (key,))
+            queued = True
+    return {"user_id": user_id, "room_ids": chosen, "added": added,
+            "removed": removed, "notification_queued": queued}
+
+
 def bound_rooms(user_id: str) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
