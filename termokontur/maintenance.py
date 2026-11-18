@@ -154,4 +154,15 @@ def schedule() -> dict:
         cutoff=(now-timedelta(days=45)).isoformat(timespec="seconds")
         conn.execute("DELETE FROM max_bind_events WHERE recorded_at<?", (cutoff,))
         conn.execute("DELETE FROM reminder_deliveries WHERE updated_at<?", (cutoff,))
-    return {"created":made["name"] if made else None, "automatic_backups":len(auto)}
+    # Scheduled digests use the durable MAX outbox and do not send HTTP here.
+    # A failure must not interrupt backups, retention or maintenance.
+    from . import report_schedule
+    try:
+        dispatched = report_schedule.queue_due()
+    except (ValueError, sqlite3.Error) as exc:
+        import logging
+        logging.getLogger("termokontur.reports").warning("Report scheduling failed: %s", type(exc).__name__)
+        dispatched = {"queued": 0}
+    return {"created": made["name"] if made else None,
+            "automatic_backups": len(auto),
+            "report_digests_queued": dispatched["queued"]}
