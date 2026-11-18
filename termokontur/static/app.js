@@ -4,6 +4,8 @@ let rooms = [], allRooms = [], overview = [], readings = [], daily = null, setti
 let historyData = null, historyRequestId = 0;
 const selectedMaxRooms = new Set();
 let activeMaxCodes = [], issuedMaxCodes = [];
+let maxStaff = [], selectedMaxStaff = null;
+const maxAssignmentRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
@@ -457,6 +459,99 @@ function maxUserName(user){
   return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
     (user.username ? "@"+user.username : "MAX ID "+user.user_id);
 }
+
+function renderMaxStaff(){
+  const list=$("max-users-list");list.replaceChildren();
+  const needle=$("max-users-search").value.trim().toLocaleLowerCase("ru");
+  const onlyUnassigned=$("max-users-unassigned").checked;
+  const filtered=maxStaff.filter(user=>{
+    const active=(user.rooms||[]).filter(r=>r.active);
+    if(onlyUnassigned && active.length)return false;
+    return [user.first_name,user.last_name,user.username,user.user_id,
+      ...(user.rooms||[]).flatMap(r=>[r.name,r.building])]
+      .some(value=>String(value||"").toLocaleLowerCase("ru").includes(needle));
+  });
+  $("max-users-count").textContent=maxStaff.length+" сотрудников · "+filtered.length+" показано";
+  if(!filtered.length){
+    list.append(el("p","max-codes-empty",
+      maxStaff.length?"По выбранным условиям сотрудники не найдены.":
+      "Сотрудники пока не обращались к боту MAX."));
+    return;
+  }
+  for(const user of filtered){
+    const card=el("div","max-staff-entry");
+    const info=el("div","max-staff-info");
+    const title=el("strong","",maxUserName(user));
+    const subtitle=el("small","",[
+      user.username?"@"+user.username:"",
+      "MAX ID "+user.user_id,
+      user.seen_at?"Был в боте: "+when(user.seen_at):""
+    ].filter(Boolean).join(" · "));
+    const active=(user.rooms||[]).filter(room=>room.active);
+    const roomList=el("div","max-staff-rooms");
+    if(!active.length)roomList.append(el("span","max-unbound","Кабинеты не назначены"));
+    else for(const room of active){
+      roomList.append(el("span","max-staff-room",
+        room.building+" / "+room.name));
+    }
+    const inactive=(user.rooms||[]).filter(room=>!room.active);
+    if(inactive.length)roomList.append(el("span","max-staff-room muted",
+      "Отключённых: "+inactive.length));
+    info.append(title,subtitle,roomList);
+    const assign=el("button","btn secondary max-staff-assign","Назначить кабинеты");
+    assign.type="button";
+    assign.addEventListener("click",()=>openMaxAssignment(user));
+    card.append(info,assign);
+    list.append(card);
+  }
+}
+function filteredMaxAssignmentRooms(){
+  const needle=$("max-assignment-search").value.trim().toLocaleLowerCase("ru");
+  return rooms.filter(room=>[room.building,room.name,room.floor]
+    .some(value=>String(value||"").toLocaleLowerCase("ru").includes(needle)));
+}
+function renderMaxAssignment(){
+  const visible=filteredMaxAssignmentRooms(),list=$("max-assignment-list");
+  list.replaceChildren();
+  for(const room of visible){
+    const label=el("label","max-codes-room");
+    const checkbox=el("input");checkbox.type="checkbox";
+    checkbox.checked=maxAssignmentRooms.has(room.id);
+    checkbox.addEventListener("change",()=>{
+      if(checkbox.checked)maxAssignmentRooms.add(room.id);
+      else maxAssignmentRooms.delete(room.id);
+      renderMaxAssignment();
+    });
+    const details=el("span","max-codes-room-text");
+    details.append(el("strong","",room.building+" / "+room.name));
+    if(room.floor)details.append(el("small","","Этаж: "+room.floor));
+    label.append(checkbox,details);list.append(label);
+  }
+  if(!visible.length)list.append(el("p","max-codes-empty","Кабинеты не найдены."));
+  const selectAll=$("max-assignment-all");
+  const selectedVisible=visible.filter(room=>maxAssignmentRooms.has(room.id)).length;
+  selectAll.checked=visible.length>0&&selectedVisible===visible.length;
+  selectAll.indeterminate=selectedVisible>0&&selectedVisible<visible.length;
+  $("max-assignment-count").textContent="Назначено "+maxAssignmentRooms.size+" из "+rooms.length;
+}
+function openMaxAssignment(user){
+  selectedMaxStaff=user;
+  maxAssignmentRooms.clear();
+  for(const room of user.rooms||[])if(room.active)maxAssignmentRooms.add(room.id);
+  $("max-assignment-profile").textContent=maxUserName(user)+" · MAX ID "+user.user_id;
+  $("max-assignment-search").value="";
+  $("max-assignment-notify").checked=false;
+  renderMaxAssignment();
+  $("max-user-rooms-dialog").showModal();
+}
+function closeMaxAssignment(){
+  $("max-user-rooms-dialog").close();
+  selectedMaxStaff=null;
+}
+async function loadMaxStaff(){
+  maxStaff=await api("/api/max/users");
+  renderMaxStaff();
+}
 function renderRooms(){
   const tbody=$("rooms-table");tbody.replaceChildren();
   const search=$("rooms-search").value.trim().toLocaleLowerCase("ru");
@@ -590,9 +685,9 @@ async function refresh() {
   try {
     const selected=$("reading-filter").value;
     const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
-    const [dash,activeRooms,items,day,all]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily"),api("/api/rooms?include_inactive=true")]);
-    overview=dash.rooms;rooms=activeRooms;allRooms=all;readings=items;daily=day;
-    renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();
+    const [dash,activeRooms,items,day,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/rooms"),api("/api/readings"+params),api("/api/daily"),api("/api/rooms?include_inactive=true"),api("/api/max/users")]);
+    overview=dash.rooms;rooms=activeRooms;allRooms=all;readings=items;daily=day;maxStaff=staff;
+    renderFilters();renderOverview();renderDaily();renderRooms();renderReadings();renderMaxStaff();
     await refreshHistory();
     $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
   } catch(error) {toast(error.message,true);}
@@ -662,6 +757,34 @@ $("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("re
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
+$("max-users-search").addEventListener("input",renderMaxStaff);
+$("max-users-unassigned").addEventListener("change",renderMaxStaff);
+$("max-assignment-close").addEventListener("click",closeMaxAssignment);
+$("max-assignment-cancel").addEventListener("click",closeMaxAssignment);
+$("max-assignment-search").addEventListener("input",renderMaxAssignment);
+$("max-assignment-all").addEventListener("change",event=>{
+  for(const room of filteredMaxAssignmentRooms()){
+    if(event.target.checked)maxAssignmentRooms.add(room.id);
+    else maxAssignmentRooms.delete(room.id);
+  }
+  renderMaxAssignment();
+});
+$("max-user-rooms-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(!selectedMaxStaff)return;
+  const button=$("max-assignment-save");button.disabled=true;
+  const notify=$("max-assignment-notify").checked;
+  try{
+    const result=await api("/api/max/users/"+encodeURIComponent(selectedMaxStaff.user_id)+"/rooms",
+      "PUT",{room_ids:[...maxAssignmentRooms],notify});
+    closeMaxAssignment();
+    await refresh();
+    if(result.notification_queued)toast("Кабинеты назначены. Уведомление добавлено в очередь MAX.");
+    else if(notify)toast("Изменения сохранены. Новых назначений нет — уведомление не отправлено.");
+    else toast("Назначения кабинетов сохранены.");
+  }catch(error){toast(error.message,true);}
+  finally{button.disabled=false;}
+});
 $("show-inactive").addEventListener("change",renderRooms);
 $("export-rooms").addEventListener("click",()=>{window.location.href="/api/rooms/export.csv";});
 $("export-csv").addEventListener("click",()=>{window.location.href="/api/export.csv";});

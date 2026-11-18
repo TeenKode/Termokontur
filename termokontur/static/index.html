@@ -190,7 +190,19 @@
           <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
-        <div class="info-strip"><strong>Как подключить учителя?</strong> Откройте «Коды MAX», выберите кабинеты и создайте коды. Передайте каждому сотруднику его команду /bind.</div>
+        <div class="panel max-staff-panel">
+          <div class="panel-heading">
+            <div><h2>Сотрудники MAX</h2><p>Все пользователи, которые обращались к боту. Назначайте помещения без кодов подключения.</p></div>
+            <span class="muted" id="max-users-count">—</span>
+          </div>
+          <div class="max-staff-toolbar">
+            <input id="max-users-search" type="search" placeholder="Поиск по имени, фамилии, MAX ID или кабинету" aria-label="Поиск пользователей MAX">
+            <label class="archive-toggle"><input id="max-users-unassigned" type="checkbox"> Только без кабинетов</label>
+          </div>
+          <div id="max-users-list" class="max-staff-list" aria-live="polite"></div>
+          <p class="hint">Пользователь появляется после первого сообщения или нажатия «Начать» в боте. MAX не предоставляет список людей, которые ещё не обращались к боту.</p>
+        </div>
+        <div class="info-strip"><strong>Как подключить учителя?</strong> Сотруднику достаточно открыть бота MAX и нажать «Начать». Затем в списке выше назначьте ему нужные кабинеты. Коды MAX также остаются доступными.</div>
       </section>
       <section id="view-settings" class="view" hidden>
         <div class="heading settings-heading">
@@ -557,6 +569,27 @@
       <div id="reading-history-content" class="reading-history-list" aria-live="polite"></div>
       <div class="dialog-actions"><button type="button" class="btn secondary" id="reading-history-done">Закрыть</button></div>
     </div>
+  </dialog>
+
+  <dialog id="max-user-rooms-dialog" class="max-assignment-dialog">
+    <form id="max-user-rooms-form" class="dialog-form">
+      <div class="dialog-head">
+        <div><h2>Назначить кабинеты</h2><p id="max-assignment-profile"></p></div>
+        <button type="button" id="max-assignment-close" class="x-button" aria-label="Закрыть">×</button>
+      </div>
+      <label>Найти кабинет<input id="max-assignment-search" type="search" placeholder="Корпус или номер кабинета"></label>
+      <div class="max-codes-toolbar">
+        <label class="max-codes-select-label"><input id="max-assignment-all" type="checkbox"> Выбрать все показанные</label>
+        <span id="max-assignment-count" class="muted"></span>
+      </div>
+      <div id="max-assignment-list" class="max-codes-list max-assignment-list" aria-label="Кабинеты для назначения"></div>
+      <label class="settings-toggle max-assignment-notify"><input id="max-assignment-notify" type="checkbox"> Уведомить сотрудника в MAX о новых назначенных кабинетах</label>
+      <p class="hint">Без галочки изменения сохраняются без уведомления. Уведомление содержит только новые назначения и отправляется одним сообщением.</p>
+      <div class="dialog-actions">
+        <button type="button" id="max-assignment-cancel" class="btn secondary">Отмена</button>
+        <button type="submit" id="max-assignment-save" class="btn primary">Сохранить назначения</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="max-codes-dialog">
