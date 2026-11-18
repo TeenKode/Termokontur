@@ -32,7 +32,7 @@ function node({hidden=false,dataset={},top=0}={}){
 }
 let viewport;
 function harness(){
-  const names=["overview","readings","rooms","sensors","settings"];
+  const names=["overview","readings","rooms","staff","sensors","settings"];
   const categories=["summary","general","notifications","max","sensors","backups","security","updates"];
   const views=Object.fromEntries(names.map(name=>[name,node({hidden:name!=="overview"})]));
   const nav=Object.fromEntries(names.map(name=>[name,node()]));
@@ -83,6 +83,18 @@ test("main navigation scrolls to top before hiding a long section",()=>{
   viewport.scrollY=140;
   vm.runInContext('setTab("rooms")',h.ctx);
   assert.equal(viewport.scrollY,140,"repeat click must not move the page");
+});
+test("staff is a dedicated tab, accessible without scrolling through rooms",()=>{
+  const h=harness();
+  viewport.scrollY=1000;
+  vm.runInContext('setTab("staff")',h.ctx);
+  assert.equal(h.views.staff.hidden,false);
+  assert.equal(h.views.rooms.hidden,true);
+  assert.equal(h.nav.staff.attributes.get("aria-current"),"page");
+  assert.equal(viewport.scrollY,0);
+  vm.runInContext('setTab("rooms")',h.ctx);
+  assert.equal(h.views.staff.hidden,true);
+  assert.equal(h.views.rooms.hidden,false);
 });
 test("settings categories keep scroll steady and skip repeated data loads",()=>{
   const h=harness();

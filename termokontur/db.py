@@ -602,6 +602,11 @@ def remember_max_user(user: dict) -> None:
     def profile_field(name: str) -> str:
         value = user.get(name)
         return value.strip()[:120] if isinstance(value, str) else ""
+    first = profile_field("first_name")
+    # Old MAX payloads can contain only the deprecated display-name field.
+    # Use it as a display fallback without guessing/splitting a surname.
+    if not first and not profile_field("last_name"):
+        first = profile_field("name")
     with connect() as conn:
         conn.execute("""
             INSERT INTO max_users(user_id, first_name, last_name, username, seen_at)
@@ -611,8 +616,24 @@ def remember_max_user(user: dict) -> None:
               last_name=COALESCE(NULLIF(excluded.last_name, ''), max_users.last_name),
               username=COALESCE(NULLIF(excluded.username, ''), max_users.username),
               seen_at=excluded.seen_at
-        """, (user_id, profile_field("first_name"),
+        """, (user_id, first,
               profile_field("last_name"), profile_field("username"), utc_now()))
+
+
+def max_user_dialog_chat_id(user_id: str) -> str | None:
+    """Find a verified private-dialog ID previously received with a MAX event.
+
+    Never guess a chat ID from a MAX user ID. Old installations may not have
+    captured chat IDs yet; those users can send /start to refresh their profile.
+    """
+    with connect() as conn:
+        row = conn.execute("""
+            SELECT ui.chat_id
+            FROM max_outbox o JOIN max_outbox_ui ui ON ui.event_id=o.event_id
+            WHERE o.user_id=? AND ui.chat_id IS NOT NULL
+            ORDER BY o.rowid DESC LIMIT 1
+        """, (str(user_id),)).fetchone()
+    return str(row["chat_id"]) if row and row["chat_id"] else None
 
 
 def list_max_users() -> list[dict]:

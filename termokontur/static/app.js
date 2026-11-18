@@ -127,7 +127,7 @@ function setTab(name) {
   if(!target || (selectedTab===name && !target.hidden))return false;
   scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
-  for(const view of ["overview","rooms","readings","sensors","settings"]) {
+  for(const view of ["overview","rooms","staff","readings","sensors","settings"]) {
     const active=view===name;
     show("view-"+view,active);
     const button=document.querySelector('[data-tab="'+view+'"]');
@@ -498,12 +498,27 @@ function renderMaxStaff(){
     if(inactive.length)roomList.append(el("span","max-staff-room muted",
       "Отключённых: "+inactive.length));
     info.append(title,subtitle,roomList);
+    const buttons=el("div","max-staff-actions");
+    const update=el("button","btn secondary max-staff-refresh","Обновить ФИО");
+    update.type="button";
+    update.title="Повторно запросить имя и фамилию у MAX";
+    update.addEventListener("click",()=>refreshMaxStaffProfile(user,update));
     const assign=el("button","btn secondary max-staff-assign","Назначить кабинеты");
     assign.type="button";
     assign.addEventListener("click",()=>openMaxAssignment(user));
-    card.append(info,assign);
+    buttons.append(update,assign);
+    card.append(info,buttons);
     list.append(card);
   }
+}
+async function refreshMaxStaffProfile(user,button){
+  button.disabled=true;
+  try{
+    await api("/api/max/users/"+encodeURIComponent(user.user_id)+"/refresh","POST");
+    await refresh();
+    toast("Данные профиля MAX обновлены");
+  }catch(error){toast(error.message,true);}
+  finally{button.disabled=false;}
 }
 function filteredMaxAssignmentRooms(){
   const needle=$("max-assignment-search").value.trim().toLocaleLowerCase("ru");
@@ -742,6 +757,7 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
+  if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
   if(name==="sensors")refreshSensors();
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
@@ -757,6 +773,12 @@ $("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("re
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
+$("open-staff").addEventListener("click",()=>{
+  if(setTab("staff"))void loadMaxStaff().catch(error=>toast(error.message,true));
+});
+$("staff-refresh").addEventListener("click",()=>{
+  void loadMaxStaff().then(()=>toast("Список сотрудников обновлён")).catch(error=>toast(error.message,true));
+});
 $("max-users-search").addEventListener("input",renderMaxStaff);
 $("max-users-unassigned").addEventListener("change",renderMaxStaff);
 $("max-assignment-close").addEventListener("click",closeMaxAssignment);

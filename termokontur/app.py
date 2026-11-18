@@ -772,6 +772,49 @@ def max_users():
     return JSONResponse(db.list_max_users(), headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/max/users/{user_id}/refresh", dependencies=[Depends(require_admin)])
+def refresh_max_user_profile(user_id: str):
+    """Refresh an existing user's MAX profile using their verified dialog."""
+    if not user_id.isdecimal() or len(user_id) > 64:
+        raise HTTPException(404, "Пользователь MAX не найден")
+    users = db.list_max_users()
+    if not any(user["user_id"] == user_id for user in users):
+        raise HTTPException(404, "Пользователь MAX не найден")
+    chat_id = db.max_user_dialog_chat_id(user_id)
+    if chat_id is None:
+        raise HTTPException(
+            409, "Нет ID диалога. Попросите сотрудника отправить боту /start, затем обновите список."
+        )
+    token = settings.get("max_token", "") or ""
+    if not token:
+        raise HTTPException(409, "Сначала настройте токен MAX")
+    try:
+        response = httpx.get(
+            f"https://platform-api2.max.ru/chats/{chat_id}",
+            headers={"Authorization": token}, timeout=8,
+        )
+        response.raise_for_status()
+        chat = response.json()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise HTTPException(502, "Не удалось получить профиль из MAX. Повторите позже.") from exc
+    if not isinstance(chat, dict) or chat.get("type") != "dialog":
+        raise HTTPException(502, "MAX не вернул данные личного диалога")
+    profile = chat.get("dialog_with_user")
+    if (not isinstance(profile, dict) or profile.get("is_bot")
+            or str(profile.get("user_id")) != user_id):
+        raise HTTPException(502, "MAX не подтвердил профиль выбранного пользователя")
+    if not any(isinstance(profile.get(k), str) and profile[k].strip()
+               for k in ("first_name", "last_name", "name", "username")):
+        raise HTTPException(409, "MAX не передал имя пользователя. Попросите его проверить профиль.")
+    db.remember_max_user(profile)
+    return JSONResponse(
+        {"ok": True, "profile": next(
+            user for user in db.list_max_users() if user["user_id"] == user_id
+        )},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.put("/api/max/users/{user_id}/rooms", dependencies=[Depends(require_admin)])
 def assign_max_user_rooms(user_id: str, payload: MaxUserRoomsIn):
     if not user_id.isdecimal() or len(user_id) > 64:

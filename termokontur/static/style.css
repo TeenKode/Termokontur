@@ -605,3 +605,7 @@ html[data-theme="dark"] .max-assignment-notify{background:#203849;border-color:v
   .max-staff-entry .max-staff-assign{width:100%}
   .max-staff-toolbar input[type=search]{width:100%}
 }
+
+.max-staff-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.max-staff-actions .btn{white-space:nowrap}
+@media(max-width:600px){.max-staff-actions{display:grid;grid-template-columns:1fr 1fr}.max-staff-actions .btn{width:100%;white-space:normal}}
