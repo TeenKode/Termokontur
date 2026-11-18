@@ -498,12 +498,27 @@ function renderMaxStaff(){
     if(inactive.length)roomList.append(el("span","max-staff-room muted",
       "Отключённых: "+inactive.length));
     info.append(title,subtitle,roomList);
+    const buttons=el("div","max-staff-actions");
+    const update=el("button","btn secondary max-staff-refresh","Обновить ФИО");
+    update.type="button";
+    update.title="Повторно запросить имя и фамилию у MAX";
+    update.addEventListener("click",()=>refreshMaxStaffProfile(user,update));
     const assign=el("button","btn secondary max-staff-assign","Назначить кабинеты");
     assign.type="button";
     assign.addEventListener("click",()=>openMaxAssignment(user));
-    card.append(info,assign);
+    buttons.append(update,assign);
+    card.append(info,buttons);
     list.append(card);
   }
+}
+async function refreshMaxStaffProfile(user,button){
+  button.disabled=true;
+  try{
+    await api("/api/max/users/"+encodeURIComponent(user.user_id)+"/refresh","POST");
+    await refresh();
+    toast("Данные профиля MAX обновлены");
+  }catch(error){toast(error.message,true);}
+  finally{button.disabled=false;}
 }
 function filteredMaxAssignmentRooms(){
   const needle=$("max-assignment-search").value.trim().toLocaleLowerCase("ru");
