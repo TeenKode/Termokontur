@@ -37,6 +37,7 @@
         <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
         <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
         <button type="button" data-tab="rooms" class="nav-button"><span class="nav-icon">▤</span>Помещения</button>
+        <button type="button" data-tab="reports" class="nav-button"><span class="nav-icon">▥</span>Отчёты</button>
         <button type="button" data-tab="staff" class="nav-button"><span class="nav-icon">♙</span>Сотрудники</button>
         <button type="button" data-tab="sensors" class="nav-button"><span class="nav-icon">◉</span>Датчики</button>
         <button type="button" data-tab="settings" class="nav-button"><span class="nav-icon">⚙</span>Настройки</button>
@@ -210,6 +211,72 @@
           <p class="hint">Пользователь появляется после первого сообщения или нажатия «Начать» в боте. MAX не предоставляет список людей, которые ещё не обращались к боту.</p>
         </div>
         <div class="info-strip"><strong>Как подключить учителя?</strong> Сотруднику достаточно открыть бота MAX и нажать «Начать». Затем в списке выше назначьте ему нужные кабинеты. Коды MAX также остаются доступными.</div>
+      </section>
+      
+      <section id="view-reports" class="view" hidden>
+        <div class="heading">
+          <div><h1>Отчёты</h1><p>Сдача показаний, температурный режим, здания и сотрудники.</p></div>
+          <div class="heading-actions">
+            <button type="button" class="btn secondary" id="report-export-excel">↓ Excel</button>
+            <button type="button" class="btn secondary" id="report-export-pdf">↓ PDF</button>
+          </div>
+        </div>
+        <div class="panel">
+          <form id="report-filter-form" class="report-filters">
+            <label>С даты<input id="report-start" type="date" required></label>
+            <label>По дату<input id="report-end" type="date" required></label>
+            <label>Здание<select id="report-building"><option value="">Все здания</option></select></label>
+            <button type="submit" class="btn primary">Сформировать</button>
+          </form>
+          <p id="report-status" class="hint" role="status" aria-live="polite">Выберите период и нажмите «Сформировать».</p>
+          <div class="report-kpis" id="report-kpis" hidden></div>
+          <p class="hint">Охват считается по кабинетам за каждый календарный день. Средняя температура сначала рассчитывается по кабинету за день. Пропуски не считаются нарушениями сотрудников.</p>
+        </div>
+        <div class="panel">
+          <div class="report-switches" role="group" aria-label="Разделы отчёта">
+            <button type="button" class="btn secondary active" data-report-section="coverage">Сдача показаний</button>
+            <button type="button" class="btn secondary" data-report-section="temperature">Температура</button>
+            <button type="button" class="btn secondary" data-report-section="buildings">По зданиям</button>
+            <button type="button" class="btn secondary" data-report-section="staff">По сотрудникам</button>
+          </div>
+          <section id="report-pane-coverage">
+            <h2>Сдача показаний по дням</h2>
+            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
+            <details class="report-missing"><summary>Кабинеты без показаний (<span id="report-missing-count">0</span>)</summary>
+              <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th></tr></thead><tbody id="report-missing-body"></tbody></table></div>
+              <p class="hint">В таблице показаны первые 300 пропусков. Полный список доступен в Excel.</p>
+            </details>
+          </section>
+          <section id="report-pane-temperature" hidden>
+            <h2>Температура по кабинетам</h2>
+            <div class="table-scroll"><table><thead><tr><th>Здание / кабинет</th><th>Дней с данными</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-temperature-body"></tbody></table></div>
+          </section>
+          <section id="report-pane-buildings" hidden>
+            <h2>Сравнение зданий</h2>
+            <div id="report-building-bars" class="report-building-bars"></div>
+            <div class="table-scroll"><table><thead><tr><th>Здание</th><th>Кабинетов</th><th>Охват</th><th>Средняя температура</th><th>Пропусков</th><th>Отклонений</th></tr></thead><tbody id="report-buildings-body"></tbody></table></div>
+          </section>
+          <section id="report-pane-staff" hidden>
+            <h2>Сотрудники MAX</h2>
+            <p class="hint">Показаны текущие закрепления кабинетов. Если за кабинет передал показание другой сотрудник или датчик, кабинет считается измеренным для всех ответственных. Исторические изменения закреплений не учитываются.</p>
+            <div class="table-scroll"><table><thead><tr><th>Сотрудник</th><th>Закреплено кабинетов</th><th>Охват</th><th>Пропуски кабинетов</th><th>Личных показаний</th><th>Дней с личным вводом</th></tr></thead><tbody id="report-staff-body"></tbody></table></div>
+          </section>
+        </div>
+        <div class="panel">
+          <div class="panel-heading">
+            <div><h2>Автоматические отчёты через MAX</h2><p>Краткая ежедневная или еженедельная сводка ответственному по выбранному зданию.</p></div>
+          </div>
+          <form id="report-sub-form" class="report-schedule-form">
+            <label>Получатель MAX<select id="report-sub-user" required><option value="">Выберите сотрудника</option></select></label>
+            <label>Здание<select id="report-sub-building"><option value="">Все здания</option></select></label>
+            <label>Периодичность<select id="report-sub-frequency"><option value="daily">Ежедневно (за вчера)</option><option value="weekly">Еженедельно (за 7 дней)</option></select></label>
+            <label id="report-sub-weekday-wrapper" hidden>День отправки<select id="report-sub-weekday"><option value="0">Понедельник</option><option value="1">Вторник</option><option value="2">Среда</option><option value="3">Четверг</option><option value="4">Пятница</option><option value="5">Суббота</option><option value="6">Воскресенье</option></select></label>
+            <label>Время отправки<input id="report-sub-time" type="time" value="09:00" required></label>
+            <button type="submit" class="btn primary">Добавить расписание</button>
+          </form>
+          <p class="hint">Расписание использует часовой пояс организации. Проверяется службой обслуживания примерно раз в час, возможна задержка. Отчёты отправляются только известным боту пользователям и только после настройки.</p>
+          <div id="report-schedules" class="report-schedules" aria-live="polite"></div>
+        </div>
       </section>
       <section id="view-settings" class="view" hidden>
         <div class="heading settings-heading">
