@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from . import db, reports, settings
 
@@ -90,10 +91,7 @@ def queue_due(now: datetime | None = None) -> dict:
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    local = instant.astimezone(reports.period(
-        instant.date().isoformat(), instant.date().isoformat(),
-        now=instant,
-    )[5])
+    local = instant.astimezone(ZoneInfo(settings.get("timezone", "UTC") or "UTC"))
     queued = 0
     cached = {}
     for s in subscriptions():
