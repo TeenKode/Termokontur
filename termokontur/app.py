@@ -185,7 +185,7 @@ class ReportSubscriptionIn(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
     building: str = Field(default="", max_length=100)
     frequency: Literal["daily", "weekly"]
-    send_time: str = Field(pattern=r"^(?:[01]\\d|2[0-3]):[0-5]\\d$")
+    send_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     weekday: int = Field(default=0, ge=0, le=6)
     enabled: bool = True
 
