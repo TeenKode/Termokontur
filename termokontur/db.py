@@ -181,7 +181,7 @@ def initialize() -> None:
             subscription_id INTEGER NOT NULL
                 REFERENCES report_subscriptions(id) ON DELETE CASCADE,
             period_key TEXT NOT NULL,
-            event_id TEXT NOT NULL UNIQUE REFERENCES max_outbox(event_id),
+            event_id TEXT NOT NULL UNIQUE,
             PRIMARY KEY(subscription_id, period_key)
         );
         """)
