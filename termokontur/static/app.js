@@ -579,8 +579,8 @@ async function loadReport(){
 function reportExport(type){
   if(!reportsData){toast("Сначала сформируйте отчёт",true);return;}
   const query=new URLSearchParams({
-    start:$("report-start").value,end:$("report-end").value,
-    building:$("report-building").value
+    start:reportsData.from,end:reportsData.to,
+    building:reportsData.building
   });
   const link=el("a");
   link.href="/api/reports/export."+type+"?"+query;
