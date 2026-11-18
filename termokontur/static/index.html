@@ -242,6 +242,10 @@
           <section id="report-pane-coverage">
             <h2>Сдача показаний по дням</h2>
             <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
+            <details class="report-missing"><summary>Кто передал показания (<span id="report-submitted-count">0</span>)</summary>
+              <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th><th>Температура</th><th>Передал</th><th>Когда</th></tr></thead><tbody id="report-submitted-body"></tbody></table></div>
+              <p class="hint">Показаны последние 300 измеренных кабинето-дней. Полная история — в Excel.</p>
+            </details>
             <details class="report-missing"><summary>Кабинеты без показаний (<span id="report-missing-count">0</span>)</summary>
               <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th></tr></thead><tbody id="report-missing-body"></tbody></table></div>
               <p class="hint">В таблице показаны первые 300 пропусков. Полный список доступен в Excel.</p>
