@@ -457,6 +457,58 @@ function exportHistory(){
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
+function drawReportTrend(){
+  if(!reportsData||$("report-pane-temperature").hidden)return;
+  const canvas=$("report-temperature-chart"),days=reportsData.daily;
+  const width=Math.max(320,Math.round(canvas.parentElement.clientWidth-2));
+  const height=260,dpr=window.devicePixelRatio||1;
+  canvas.width=Math.round(width*dpr);
+  canvas.height=Math.round(height*dpr);
+  const ctx=canvas.getContext("2d");
+  ctx.scale(dpr,dpr);
+  const vals=days.map(row=>row.average).filter(value=>value!=null);
+  const dark=document.documentElement.dataset.theme==="dark";
+  const text=dark?"#b7cad6":"#627385";
+  const grid=dark?"#385364":"#dce6e9";
+  ctx.font="12px sans-serif";ctx.textBaseline="middle";
+  if(!vals.length){
+    ctx.fillStyle=text;ctx.fillText("Нет температурных данных за выбранный период",20,height/2);
+    return;
+  }
+  const margin={left:56,right:20,top:18,bottom:36};
+  const min=Math.floor(Math.min(...vals)-1),max=Math.ceil(Math.max(...vals)+1);
+  const delta=Math.max(1,max-min);
+  const x=i=>margin.left+(width-margin.left-margin.right)*i/Math.max(1,days.length-1);
+  const y=v=>margin.top+(max-v)/delta*(height-margin.top-margin.bottom);
+  for(let n=0;n<=4;n++){
+    const value=min+(max-min)*n/4,yy=y(value);
+    ctx.strokeStyle=grid;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(margin.left,yy);ctx.lineTo(width-margin.right,yy);ctx.stroke();
+    ctx.fillStyle=text;ctx.textAlign="right";
+    ctx.fillText(value.toFixed(1)+"°",margin.left-9,yy);
+  }
+  ctx.strokeStyle=dark?"#66d7b7":"#0d997d";ctx.lineWidth=2.5;
+  let connected=false;
+  for(let i=0;i<days.length;i++){
+    const v=days[i].average;
+    if(v==null){connected=false;continue;}
+    if(!connected){ctx.beginPath();ctx.moveTo(x(i),y(v));connected=true;}
+    else ctx.lineTo(x(i),y(v));
+    // Broken periods remain visually distinct.
+    if(i===days.length-1||days[i+1].average==null){ctx.stroke();connected=false;}
+  }
+  if(days.length<=45){
+    for(let i=0;i<days.length;i++){
+      const v=days[i].average;if(v==null)continue;
+      ctx.beginPath();ctx.arc(x(i),y(v),2.5,0,2*Math.PI);
+      ctx.fillStyle=dark?"#66d7b7":"#0d997d";ctx.fill();
+    }
+  }
+  ctx.textAlign="left";ctx.fillStyle=text;ctx.textBaseline="bottom";
+  ctx.fillText(fullDay(days[0].date),margin.left,height-8);
+  ctx.textAlign="right";
+  ctx.fillText(fullDay(days[days.length-1].date),width-margin.right,height-8);
+}
 function reportNumber(value,suffix=""){
   return value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:2})+suffix;
 }
@@ -480,6 +532,7 @@ function reportSection(name){
     button.classList.toggle("active",section===name);
     button.setAttribute("aria-pressed",String(section===name));
   }
+  if(name==="temperature")drawReportTrend();
 }
 function reportKpi(value,label){
   const box=el("div","report-kpi");
@@ -513,6 +566,11 @@ function renderReport(){
   $("report-missing-count").textContent=r.missing.length;
   reportTable("report-missing-body",r.missing.slice(0,300),(tr,d)=>{
     for(const item of [d.date,d.building,d.room])cell(tr,item);
+  });
+  reportTable("report-trend-body",r.daily,(tr,d)=>{
+    for(const item of [d.date,reportNumber(d.average," °C"),
+      reportNumber(d.minimum," °C"),reportNumber(d.maximum," °C"),
+      d.out_of_range])cell(tr,item);
   });
   reportTable("report-temperature-body",r.rooms,(tr,d)=>{
     for(const item of [d.building+" / "+d.room,d.days_measured,
@@ -1033,7 +1091,7 @@ $("reading-form").addEventListener("submit",async event=>{
     $("reading-dialog").close();await refresh();toast("Показание записано");}
   catch(error){toast(error.message,true);}
 });
-window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();});
+window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();if(selectedTab==="reports")drawReportTrend();});
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp();await refresh();}else enterLogin();}catch{enterLogin();}})();
 
 /* Accessible settings workspace: categories, overview and independent saves. */
