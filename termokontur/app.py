@@ -161,6 +161,11 @@ class BulkPairingCodesIn(BaseModel):
     validity_minutes: Literal[30, 120, 1440, 10080] = 1440
 
 
+class MaxUserRoomsIn(BaseModel):
+    room_ids: list[int] = Field(default_factory=list, max_length=250)
+    notify: bool = False
+
+
 class SettingsIn(BaseModel):
     organization_name: str = Field(min_length=1, max_length=100)
     timezone: str = Field(min_length=1, max_length=64)
@@ -761,6 +766,26 @@ def patch_room(room_id: int, payload: RoomPatch):
         return db.update_room(room_id, patch)
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Кабинет с таким названием уже существует")
+
+@app.get("/api/max/users", dependencies=[Depends(require_admin)])
+def max_users():
+    return JSONResponse(db.list_max_users(), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/max/users/{user_id}/rooms", dependencies=[Depends(require_admin)])
+def assign_max_user_rooms(user_id: str, payload: MaxUserRoomsIn):
+    if not user_id.isdecimal() or len(user_id) > 64:
+        raise HTTPException(404, "Пользователь MAX не найден")
+    if payload.notify and not settings.get("max_token", ""):
+        raise HTTPException(409, "Для уведомления сначала настройте токен MAX")
+    try:
+        response = db.set_max_user_rooms(user_id, payload.room_ids, notify=payload.notify)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse(response, headers={"Cache-Control": "no-store"})
+
 
 @app.get("/api/max/pairing-codes", dependencies=[Depends(require_admin)])
 def active_max_codes():
