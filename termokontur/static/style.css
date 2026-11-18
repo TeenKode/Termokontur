@@ -654,3 +654,6 @@ html[data-theme="dark"] .report-schedule-details small{color:var(--dk-muted)}
   .report-switches .btn{flex:1 1 135px}
 }
 @media(max-width:400px){.report-filters,.report-schedule-form{grid-template-columns:1fr}}
+
+.report-temp-chart-frame{position:relative;width:100%;max-width:100%;margin:12px 0 4px;overflow:hidden}
+#report-temperature-chart{display:block;width:100%;height:260px;max-width:100%}
