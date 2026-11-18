@@ -167,6 +167,23 @@ def initialize() -> None:
             user_id TEXT PRIMARY KEY,
             message_id TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS report_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            building TEXT NOT NULL DEFAULT '',
+            frequency TEXT NOT NULL CHECK(frequency IN ('daily','weekly')),
+            send_time TEXT NOT NULL,
+            weekday INTEGER NOT NULL DEFAULT 0 CHECK(weekday BETWEEN 0 AND 6),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS report_dispatches (
+            subscription_id INTEGER NOT NULL
+                REFERENCES report_subscriptions(id) ON DELETE CASCADE,
+            period_key TEXT NOT NULL,
+            event_id TEXT NOT NULL UNIQUE REFERENCES max_outbox(event_id),
+            PRIMARY KEY(subscription_id, period_key)
+        );
         """)
         # Add optional callback source ID without changing existing installations.
         ui_columns = {
