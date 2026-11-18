@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications
+from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications, reports, report_exports, report_schedule
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
@@ -179,6 +179,19 @@ class SettingsIn(BaseModel):
     retention_days: int = Field(default=0, ge=0, le=3650)
     alerts_enabled: bool = False
     alert_cooldown_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class ReportSubscriptionIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    building: str = Field(default="", max_length=100)
+    frequency: Literal["daily", "weekly"]
+    send_time: str = Field(pattern=r"^(?:[01]\\d|2[0-3]):[0-5]\\d$")
+    weekday: int = Field(default=0, ge=0, le=6)
+    enabled: bool = True
+
+
+class ReportSubscriptionEnabledIn(BaseModel):
+    enabled: bool
 
 
 class NotificationSendIn(BaseModel):
@@ -688,6 +701,74 @@ def dashboard_history(days: int = Query(14, ge=7, le=90),
 @app.get("/api/daily", dependencies=[Depends(require_admin)])
 def daily_report():
     return daily.summary()
+
+def _report_snapshot(start: str, end: str, building: str) -> dict:
+    try:
+        return reports.build(start, end, building)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/reports", dependencies=[Depends(require_admin)])
+def get_report(start: str, end: str, building: str = Query("", max_length=100)):
+    return JSONResponse(_report_snapshot(start, end, building),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/reports/export.xlsx", dependencies=[Depends(require_admin)])
+def export_report_excel(start: str, end: str, building: str = Query("", max_length=100)):
+    report = _report_snapshot(start, end, building)
+    return Response(
+        content=report_exports.workbook(report),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="termokontur-report-{start}-{end}.xlsx"',
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/reports/export.pdf", dependencies=[Depends(require_admin)])
+def export_report_pdf(start: str, end: str, building: str = Query("", max_length=100)):
+    report = _report_snapshot(start, end, building)
+    try:
+        content = report_exports.pdf(report)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(
+        content=content, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="termokontur-report-{start}-{end}.pdf"',
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/reports/subscriptions", dependencies=[Depends(require_admin)])
+def get_report_subscriptions():
+    return JSONResponse(report_schedule.subscriptions(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/reports/subscriptions", dependencies=[Depends(require_admin)], status_code=201)
+def create_report_subscription(payload: ReportSubscriptionIn):
+    if not settings.get("max_token", ""):
+        raise HTTPException(409, "Для автоматических отчётов сначала настройте токен MAX")
+    try:
+        return report_schedule.create(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.patch("/api/reports/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def change_report_subscription(subscription_id: int, payload: ReportSubscriptionEnabledIn):
+    if not report_schedule.set_enabled(subscription_id, payload.enabled):
+        raise HTTPException(404, "Расписание не найдено")
+    return {"ok": True, "enabled": payload.enabled}
+
+
+@app.delete("/api/reports/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def delete_report_subscription(subscription_id: int):
+    if not report_schedule.remove(subscription_id):
+        raise HTTPException(404, "Расписание не найдено")
+    return {"ok": True}
+
 
 @app.get("/api/rooms", dependencies=[Depends(require_admin)])
 def rooms(include_inactive: bool = False):
