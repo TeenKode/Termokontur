@@ -32,7 +32,7 @@ function node({hidden=false,dataset={},top=0}={}){
 }
 let viewport;
 function harness(){
-  const names=["overview","readings","rooms","staff","sensors","settings"];
+  const names=["overview","readings","rooms","staff","reports","sensors","settings"];
   const categories=["summary","general","notifications","max","sensors","backups","security","updates"];
   const views=Object.fromEntries(names.map(name=>[name,node({hidden:name!=="overview"})]));
   const nav=Object.fromEntries(names.map(name=>[name,node()]));
@@ -95,6 +95,15 @@ test("staff is a dedicated tab, accessible without scrolling through rooms",()=>
   vm.runInContext('setTab("rooms")',h.ctx);
   assert.equal(h.views.staff.hidden,true);
   assert.equal(h.views.rooms.hidden,false);
+});
+test("reports tab is accessible without shifting other navigation items",()=>{
+  const h=harness();
+  viewport.scrollY=500;
+  vm.runInContext('setTab("reports")',h.ctx);
+  assert.equal(h.views.reports.hidden,false);
+  assert.equal(h.views.staff.hidden,true);
+  assert.equal(h.nav.reports.attributes.get("aria-current"),"page");
+  assert.equal(viewport.scrollY,0);
 });
 test("settings categories keep scroll steady and skip repeated data loads",()=>{
   const h=harness();
