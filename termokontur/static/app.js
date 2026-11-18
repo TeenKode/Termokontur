@@ -5,6 +5,7 @@ let historyData = null, historyRequestId = 0;
 const selectedMaxRooms = new Set();
 let activeMaxCodes = [], issuedMaxCodes = [];
 let maxStaff = [], selectedMaxStaff = null;
+let reportsData = null, selectedReportSection = "coverage";
 const maxAssignmentRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
@@ -127,7 +128,7 @@ function setTab(name) {
   if(!target || (selectedTab===name && !target.hidden))return false;
   scrollToSectionStart(document.querySelector(".topbar"));
   selectedTab = name;
-  for(const view of ["overview","rooms","staff","readings","sensors","settings"]) {
+  for(const view of ["overview","rooms","staff","reports","readings","sensors","settings"]) {
     const active=view===name;
     show("view-"+view,active);
     const button=document.querySelector('[data-tab="'+view+'"]');
@@ -455,6 +456,174 @@ function exportHistory(){
   const link=document.createElement("a");link.href=url;link.download="termokontur-buildings-"+historyData.days+"d.csv";
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+
+function reportNumber(value,suffix=""){
+  return value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:2})+suffix;
+}
+function reportTable(bodyId,items,render){
+  const body=$(bodyId);body.replaceChildren();
+  for(const item of items){
+    const tr=el("tr");
+    render(tr,item);
+    body.append(tr);
+  }
+  if(!items.length){
+    const tr=el("tr"),td=el("td","","Нет данных за выбранный период");
+    td.colSpan=10;tr.append(td);body.append(tr);
+  }
+}
+function reportSection(name){
+  selectedReportSection=name;
+  for(const section of ["coverage","temperature","buildings","staff"]){
+    show("report-pane-"+section,section===name);
+    const button=document.querySelector('[data-report-section="'+section+'"]');
+    button.classList.toggle("active",section===name);
+    button.setAttribute("aria-pressed",String(section===name));
+  }
+}
+function reportKpi(value,label){
+  const box=el("div","report-kpi");
+  box.append(el("strong","",value),el("small","",label));
+  return box;
+}
+function renderReport(){
+  const r=reportsData;
+  if(!r){show("report-kpis",false);return;}
+  const s=r.summary;
+  const kpis=$("report-kpis");kpis.replaceChildren(
+    reportKpi(reportNumber(s.coverage,"%"),"Охват показаниями"),
+    reportKpi(reportNumber(s.rooms_measured),"Кабинето-дней с замерами"),
+    reportKpi(reportNumber(s.missing),"Пропущено"),
+    reportKpi(reportNumber(s.average," °C"),"Средняя температура"),
+    reportKpi(reportNumber(s.out_of_range),"Дней вне порогов")
+  );show("report-kpis",true);
+  $("report-status").textContent="Период "+r.from+" — "+r.to+
+    " · "+(r.building||"Все здания")+" · "+r.timezone+
+    " · "+r.rooms_count+" помещений";
+  reportTable("report-coverage-body",r.daily,(tr,d)=>{
+    for(const item of [d.date,d.rooms_total,d.rooms_measured,d.missing,
+      reportNumber(d.coverage,"%"),d.out_of_range])cell(tr,item);
+  });
+  $("report-missing-count").textContent=r.missing.length;
+  reportTable("report-missing-body",r.missing.slice(0,300),(tr,d)=>{
+    for(const item of [d.date,d.building,d.room])cell(tr,item);
+  });
+  reportTable("report-temperature-body",r.rooms,(tr,d)=>{
+    for(const item of [d.building+" / "+d.room,d.days_measured,
+      reportNumber(d.average," °C"),reportNumber(d.minimum," °C"),
+      reportNumber(d.maximum," °C"),d.out_of_range_days])cell(tr,item);
+  });
+  reportTable("report-buildings-body",r.building_summary,(tr,d)=>{
+    for(const item of [d.building,d.rooms,reportNumber(d.coverage,"%"),
+      reportNumber(d.average," °C"),d.missing,d.out_of_range])cell(tr,item);
+  });
+  const bars=$("report-building-bars");bars.replaceChildren();
+  for(const d of r.building_summary){
+    const row=el("div","report-building-bar"),heading=el("div","report-building-heading");
+    heading.append(el("strong","",d.building),el("span","",reportNumber(d.coverage,"%")+" · "+reportNumber(d.average," °C")));
+    const track=el("div","report-bar-track"),fill=el("div","report-bar-fill");
+    fill.style.width=Math.max(0,Math.min(100,Number(d.coverage)||0))+"%";
+    track.append(fill);row.append(heading,track);bars.append(row);
+  }
+  reportTable("report-staff-body",r.staff,(tr,d)=>{
+    for(const item of [d.name,d.rooms_count,reportNumber(d.coverage,"%"),
+      d.missing_room_days,d.authored_readings,d.days_with_submission])cell(tr,item);
+  });
+  reportSection(selectedReportSection);
+}
+function reportDateDefaults(){
+  if($("report-start").value&&$("report-end").value)return;
+  const today=daily?.local_date||new Date().toISOString().slice(0,10);
+  const date=new Date(today+"T12:00:00Z");
+  date.setUTCDate(date.getUTCDate()-6);
+  $("report-start").value=date.toISOString().slice(0,10);
+  $("report-end").value=today;
+}
+function reportBuildingOptions(){
+  const buildings=[...new Set(rooms.map(r=>r.building))].sort();
+  for(const id of ["report-building","report-sub-building"]){
+    const select=$(id),chosen=select.value;
+    select.replaceChildren();option(select,"","Все здания");
+    for(const value of buildings)option(select,value,value);
+    select.value=buildings.includes(chosen)?chosen:"";
+  }
+}
+function reportPersonOptions(){
+  const select=$("report-sub-user"),old=select.value;
+  select.replaceChildren();option(select,"","Выберите сотрудника MAX");
+  for(const user of maxStaff)option(select,user.user_id,
+    maxUserName(user)+" · MAX ID "+user.user_id);
+  select.value=maxStaff.some(p=>p.user_id===old)?old:"";
+}
+async function loadReport(){
+  const start=$("report-start").value,end=$("report-end").value;
+  if(!start||!end)return;
+  const query=new URLSearchParams({start,end,building:$("report-building").value});
+  $("report-status").textContent="Формируем отчёт…";
+  try{
+    const result=await api("/api/reports?"+query);
+    reportsData=result;
+    renderReport();
+  }catch(error){
+    reportsData=null;renderReport();
+    $("report-status").textContent="Не удалось сформировать отчёт";
+    toast(error.message,true);
+  }
+}
+function reportExport(type){
+  if(!reportsData){toast("Сначала сформируйте отчёт",true);return;}
+  const query=new URLSearchParams({
+    start:$("report-start").value,end:$("report-end").value,
+    building:$("report-building").value
+  });
+  const link=el("a");
+  link.href="/api/reports/export."+type+"?"+query;
+  link.download="termokontur-report."+type;
+  document.body.append(link);link.click();link.remove();
+}
+function renderReportSubscriptions(schedules){
+  const list=$("report-schedules");list.replaceChildren();
+  if(!schedules.length){
+    list.append(el("p","hint","Рассылки не настроены. Добавьте первое расписание."));
+    return;
+  }
+  const days=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+  for(const item of schedules){
+    const row=el("div","report-schedule-entry"),info=el("div","report-schedule-details");
+    const title=item.recipient+" · "+(item.building||"Все здания");
+    info.append(el("strong","",title));
+    info.append(el("small","",(item.frequency==="daily"?"Ежедневно":"Еженедельно, "+days[item.weekday])+
+      " · "+item.send_time+" · "+(item.enabled?"Включено":"Выключено")+
+      " · Отправок: "+item.periods_queued));
+    if(item.last_delivered_at)info.append(el("small","","Последнее принято MAX: "+when(item.last_delivered_at)));
+    const actions=el("div","report-schedule-actions");
+    const toggle=el("button","btn secondary",item.enabled?"Выключить":"Включить");
+    toggle.type="button";toggle.addEventListener("click",async()=>{
+      try{
+        await api("/api/reports/subscriptions/"+item.id,"PATCH",{enabled:!item.enabled});
+        await loadReportSubscriptions();toast("Расписание обновлено");
+      }catch(error){toast(error.message,true);}
+    });
+    const remove=el("button","btn secondary","Удалить");
+    remove.type="button";remove.addEventListener("click",async()=>{
+      if(!confirm("Удалить расписание отчётов для «"+title+"»?"))return;
+      try{
+        await api("/api/reports/subscriptions/"+item.id,"DELETE");
+        await loadReportSubscriptions();toast("Расписание удалено");
+      }catch(error){toast(error.message,true);}
+    });
+    actions.append(toggle,remove);row.append(info,actions);list.append(row);
+  }
+}
+async function loadReportSubscriptions(){
+  const list=await api("/api/reports/subscriptions");
+  renderReportSubscriptions(list);
+}
+async function loadReports(){
+  reportDateDefaults();reportBuildingOptions();reportPersonOptions();
+  await Promise.all([loadReport(),loadReportSubscriptions()]);
+}
+
 function maxUserName(user){
   return [user.first_name,user.last_name].filter(Boolean).join(" ") ||
     (user.username ? "@"+user.username : "MAX ID "+user.user_id);
@@ -758,6 +927,7 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
   if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
+  if(name==="reports")void loadReports().catch(error=>toast(error.message,true));
   if(name==="sensors")refreshSensors();
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
@@ -773,6 +943,29 @@ $("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("re
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
+$("report-filter-form").addEventListener("submit",event=>{event.preventDefault();void loadReport();});
+$("report-export-excel").addEventListener("click",()=>reportExport("xlsx"));
+$("report-export-pdf").addEventListener("click",()=>reportExport("pdf"));
+for(const button of document.querySelectorAll("[data-report-section]")){
+  button.addEventListener("click",()=>reportSection(button.dataset.reportSection));
+}
+$("report-sub-frequency").addEventListener("change",()=>{
+  show("report-sub-weekday-wrapper",$("report-sub-frequency").value==="weekly");
+});
+$("report-sub-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const user_id=$("report-sub-user").value;
+  if(!user_id){toast("Выберите получателя MAX",true);return;}
+  try{
+    await api("/api/reports/subscriptions","POST",{
+      user_id,building:$("report-sub-building").value,
+      frequency:$("report-sub-frequency").value,
+      weekday:Number($("report-sub-weekday").value),
+      send_time:$("report-sub-time").value,enabled:true
+    });
+    await loadReportSubscriptions();toast("Расписание отчётов добавлено");
+  }catch(error){toast(error.message,true);}
+});
 $("open-staff").addEventListener("click",()=>{
   if(setTab("staff"))void loadMaxStaff().catch(error=>toast(error.message,true));
 });
