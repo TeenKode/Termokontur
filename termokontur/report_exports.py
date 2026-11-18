@@ -107,6 +107,7 @@ def workbook(report: dict) -> bytes:
         ("Измерений","readings",16), ("Отклонений","deviations",17),
         ("Вне нормы по среднему","out_of_range",25),
         ("Последнее измерение","measured_at",26),
+        ("Кто передал","reporter_name",34),
     ], report["room_daily"])
     sheet("Здания", [
         ("Дата","date",15), ("Здание","building",25),
