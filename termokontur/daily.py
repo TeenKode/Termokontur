@@ -141,7 +141,7 @@ def mark_reminder(day: str, user_id: str, sent: bool) -> None:
 
 def reminder_text(missing: list[dict]) -> str:
     names = [f"• {room['building']} / {room['name']} (ID {room['id']})" for room in missing]
-    return ("Нет показаний за сегодня:\n"
+    return ("⏰ Нет показаний за сегодня:\n"
             + "\n".join(names[:25])
             + ("\n…и других помещениях." if len(names) > 25 else "")
             + "\n\nНажмите «Отправить за сегодня» и укажите температуру. "
