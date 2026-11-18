@@ -695,11 +695,11 @@ def set_max_user_rooms(user_id: str, room_ids: list[int],
         if notify and added:
             names = [f"• {available[room_id]['building']} / {available[room_id]['name']}"
                      for room_id in added[:40]]
-            overflow = (f"\\n…и ещё {len(added) - 40} помещений."
+            overflow = (f"\n…и ещё {len(added) - 40} помещений."
                         if len(added) > 40 else "")
-            notice = ("🏫 Вам назначены кабинеты в системе «Термоконтур»:\\n"
-                      + "\\n".join(names) + overflow
-                      + "\\n\\nОткройте меню бота, чтобы передать показания температуры.")
+            notice = ("🏫 Вам назначены кабинеты в системе «Термоконтур»:\n"
+                      + "\n".join(names) + overflow
+                      + "\n\nОткройте меню бота, чтобы передать показания температуры.")
             now = utc_now()
             key = "max-admin-assign:" + secrets.token_hex(16)
             conn.execute("""
