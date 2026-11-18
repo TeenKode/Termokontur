@@ -83,12 +83,17 @@ def enqueue(update: dict) -> bool:
                 # The button belongs to this bot's message; keep its ID so
                 # later text commands can edit the menu rather than post anew.
                 source_mid = ((update.get("message") or {}).get("body") or {}).get("mid") if is_callback else None
+                recipient = ((update.get("message") or {}).get("recipient") or {})
+                chat_id = recipient.get("chat_id") if recipient.get("chat_type") == "dialog" else None
+                if not isinstance(chat_id, (str, int)) or not str(chat_id).lstrip("-").isdigit():
+                    chat_id = None
                 conn.execute("""
                     INSERT OR IGNORE INTO max_outbox_ui(
-                        event_id, buttons_json, callback_id, origin_mid
-                    ) VALUES (?, ?, ?, ?)
+                        event_id, buttons_json, callback_id, origin_mid, chat_id
+                    ) VALUES (?, ?, ?, ?, ?)
                 """, (key, json.dumps(keyboard(uid), ensure_ascii=False),
-                      callback_id, str(source_mid) if source_mid else None))
+                      callback_id, str(source_mid) if source_mid else None,
+                      str(chat_id) if chat_id is not None else None))
             conn.execute("""
                 UPDATE max_inbox SET state='complete', updated_at=?
                 WHERE event_id=?
@@ -126,7 +131,7 @@ def pending(limit: int = 20) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("""
             SELECT o.event_id, o.user_id, o.text, o.attempts,
-                   u.buttons_json, u.callback_id, u.origin_mid,
+                   u.buttons_json, u.callback_id, u.origin_mid, u.chat_id,
                    COALESCE(u.delivery_mode, 'menu') AS delivery_mode,
                    COALESCE(u.notify, 1) AS notify
             FROM max_outbox o
@@ -188,6 +193,29 @@ def _response_mid(response: httpx.Response) -> str | None:
     return str(mid) if mid else None
 
 
+
+async def _send_typing(client: httpx.AsyncClient, chat_id: str) -> None:
+    """Best-effort native MAX typing indicator, not an extra chat message.
+
+    MAX documents this action for group chats; some clients may not display
+    it in private dialogs. A rejected/unsupported action must never block
+    the real answer or affect outbox retries.
+    """
+    try:
+        response = await client.post(
+            f"/chats/{chat_id}/actions", json={"action": "typing_on"}, timeout=2.0,
+        )
+        response.raise_for_status()
+        try:
+            accepted = response.json().get("success")
+        except (ValueError, TypeError, AttributeError):
+            accepted = None
+        if accepted is False:
+            logger.debug("MAX typing action was declined")
+    except httpx.HTTPError as exc:
+        logger.debug("MAX typing indicator unavailable (%s)", type(exc).__name__)
+
+
 async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> None:
     """Prefer one editable menu per user; create only when editing is impossible.
 
@@ -226,6 +254,10 @@ async def drain(client: httpx.AsyncClient) -> None:
                            else keyboard(item["user_id"]))
             message = {"text": item["text"], "attachments": attachments}
         try:
+            # Keep native typing action separate from the reusable menu:
+            # never send a fake "typing..." message or delay the reply.
+            if item["delivery_mode"] == "menu" and item["chat_id"] and item["attempts"] == 0:
+                await _send_typing(client, item["chat_id"])
             if item["delivery_mode"] == "notice":
                 # Administrative notices and deviation alerts are new messages;
                 # editing the silent menu would hide critical alerts from staff.

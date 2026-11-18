@@ -145,7 +145,8 @@ def initialize() -> None:
         CREATE TABLE IF NOT EXISTS max_outbox_ui (
             event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
             buttons_json TEXT,
-            callback_id TEXT
+            callback_id TEXT,
+            chat_id TEXT
         );
         CREATE TABLE IF NOT EXISTS notification_batches (
             id TEXT PRIMARY KEY,
@@ -177,6 +178,8 @@ def initialize() -> None:
             conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'menu'")
         if "notify" not in ui_columns:
             conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN notify INTEGER NOT NULL DEFAULT 1")
+        if "chat_id" not in ui_columns:
+            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN chat_id TEXT")
         alert_columns = {
             col["name"] for col in conn.execute("PRAGMA table_info(temperature_alert_state)")
         }
