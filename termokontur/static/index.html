@@ -37,6 +37,7 @@
         <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
         <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
         <button type="button" data-tab="rooms" class="nav-button"><span class="nav-icon">▤</span>Помещения</button>
+        <button type="button" data-tab="staff" class="nav-button"><span class="nav-icon">♙</span>Сотрудники</button>
         <button type="button" data-tab="sensors" class="nav-button"><span class="nav-icon">◉</span>Датчики</button>
         <button type="button" data-tab="settings" class="nav-button"><span class="nav-icon">⚙</span>Настройки</button>
       </nav>
@@ -184,11 +185,17 @@
       </section>
 
       <section id="view-rooms" class="view" hidden>
-        <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и сотрудники MAX.</p></div><div class="heading-actions"><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
+        <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и привязки MAX.</p></div><div class="heading-actions"><button type="button" id="open-staff" class="btn secondary">Сотрудники MAX</button><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
         <div class="panel">
           <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус или сотрудник MAX" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Скачать CSV</button></div>
           <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
+        </div>
+      </section>
+      <section id="view-staff" class="view" hidden>
+        <div class="heading">
+          <div><h1>Сотрудники MAX</h1><p>Управление пользователями бота и назначение кабинетов без кодов.</p></div>
+          <button type="button" id="staff-refresh" class="btn secondary">↻ Обновить список</button>
         </div>
         <div class="panel max-staff-panel">
           <div class="panel-heading">
