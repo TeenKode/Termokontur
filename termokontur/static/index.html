@@ -252,6 +252,12 @@
             </details>
           </section>
           <section id="report-pane-temperature" hidden>
+            <h2>Динамика температуры по дням</h2>
+            <div class="report-temp-chart-frame">
+              <canvas id="report-temperature-chart" width="920" height="260" role="img" aria-label="График средней температуры по дням"></canvas>
+            </div>
+            <p class="hint">Линия показывает среднюю температуру по кабинетам с данными. Пропуски не приравниваются к 0 °C.</p>
+            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-trend-body"></tbody></table></div>
             <h2>Температура по кабинетам</h2>
             <div class="table-scroll"><table><thead><tr><th>Здание / кабинет</th><th>Дней с данными</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-temperature-body"></tbody></table></div>
           </section>
