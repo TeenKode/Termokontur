@@ -404,9 +404,14 @@ def test_sensor_type_migration_preserves_existing_data(admin):
     with db.connect() as conn:
         before = list(conn.execute("SELECT * FROM sensor_records"))
         conn.execute("ALTER TABLE sensor_devices DROP COLUMN sensor_type")
-        sensors.initialize(conn)
-        sensors.initialize(conn)
-        assert conn.execute("SELECT sensor_type FROM sensor_devices").fetchone()[0] == "sht4x"
+        conn.execute("ALTER TABLE sensor_devices DROP COLUMN last_complete_sync")
+        conn.execute("PRAGMA user_version=0")
+    db.initialize()
+    db.initialize()
+    with db.connect() as conn:
+        row = conn.execute("SELECT sensor_type,last_complete_sync,last_seen FROM sensor_devices").fetchone()
+        assert row["sensor_type"] == "sht4x"
+        assert row["last_complete_sync"] == row["last_seen"]
         assert list(conn.execute("SELECT * FROM sensor_records")) == before
 
 

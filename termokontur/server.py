@@ -9,18 +9,25 @@ from urllib.request import urlopen
 
 import uvicorn
 
-from . import db, settings, tls
+from . import db, tls
 
 HTTP_PORT = 8092
 HTTPS_PORT = 443
 LOG = logging.getLogger("termokontur.server")
 
 
-def health_targets(https_enabled: bool) -> tuple[tuple[str, int], ...]:
-    """Check new ports and legacy 8092 HTTPS for upgrade/rollback."""
-    if https_enabled:
-        return (("https", HTTPS_PORT), ("http", HTTP_PORT), ("https", HTTP_PORT))
-    return (("http", HTTP_PORT), ("https", HTTPS_PORT), ("https", HTTP_PORT))
+def healthcheck() -> int:
+    """Probe the running server, including legacy HTTPS on port 8092."""
+    for scheme, port in (("http", HTTP_PORT), ("https", HTTPS_PORT), ("https", HTTP_PORT)):
+        # Only loopback is probed, so a private CA does not need to be trusted here.
+        context = ssl._create_unverified_context() if scheme == "https" else None
+        try:
+            with urlopen(f"{scheme}://127.0.0.1:{port}/health", timeout=1, context=context) as response:
+                if response.status == 200:
+                    return 0
+        except OSError:
+            continue
+    return 1
 
 
 def run_https(options: dict) -> None:
@@ -50,22 +57,11 @@ def run_https(options: dict) -> None:
 
 
 def main() -> None:
-    db.initialize()
-    settings.bootstrap()
-    options = tls.server_kwargs()
     if len(sys.argv) > 1 and sys.argv[1] == "--healthcheck":
-        # Only loopback is probed, so a private CA does not need to be trusted here.
-        # An unapplied certificate may be saved while the current process
-        # still speaks HTTP. Accept either local protocol during that window.
-        for scheme, port in health_targets(bool(options)):
-            try:
-                context = ssl._create_unverified_context() if scheme == "https" else None
-                with urlopen(f"{scheme}://127.0.0.1:{port}/health", timeout=3, context=context) as response:
-                    if response.status == 200:
-                        sys.exit(0)
-            except (OSError, ssl.SSLError):
-                pass
-        sys.exit(1)
+        sys.exit(healthcheck())
+    # The managed launcher needs the settings table before binding TLS sockets.
+    db.initialize()
+    options = tls.server_kwargs()
     if options:
         run_https(options)
     else:

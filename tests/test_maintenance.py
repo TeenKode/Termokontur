@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from termokontur import db, maintenance, settings, max_delivery
+from termokontur import db, maintenance, max_delivery, migrations, settings
 
 
 def room(admin, name):
@@ -77,6 +77,19 @@ def test_local_copy_not_capped_by_upload_limit(admin, monkeypatch):
     copy = maintenance.create_backup()
     assert copy["size"] > maintenance.MAX_IMPORT_BYTES
     assert maintenance.restore(copy["name"])["restored"] == copy["name"]
+
+
+def test_backup_upload_rejects_newer_schema(admin, tmp_path):
+    name = maintenance.create_backup()["name"]
+    staged = tmp_path / "future.sqlite3"
+    staged.write_bytes(maintenance.backup_path(name).read_bytes())
+    with db.connect(staged) as conn:
+        conn.execute(f"PRAGMA user_version={migrations.SCHEMA_VERSION + 1}")
+    response = admin.post("/api/backups/import", content=staged.read_bytes(),
+                          headers={"Content-Type": "application/octet-stream"})
+    assert response.status_code == 422
+    assert "версия схемы" in response.json()["detail"]
+    assert [backup["name"] for backup in maintenance.list_backups()] == [name]
 
 
 def test_backup_failure_does_not_skip_reports(admin, monkeypatch):

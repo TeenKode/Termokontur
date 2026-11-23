@@ -70,24 +70,6 @@ def message(identity, nonce):
                       identity.hardware_id, identity.sensor_type, identity.firmware))
 
 
-def initialize(conn):
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS sensor_identities(
-      fingerprint TEXT PRIMARY KEY, public_key TEXT NOT NULL UNIQUE,
-      hardware_id TEXT NOT NULL, sensor_type TEXT NOT NULL, firmware TEXT NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('pending','approved','rejected')),
-      device_id TEXT UNIQUE REFERENCES sensor_devices(id),
-      created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS sensor_auth_challenges(
-      nonce TEXT PRIMARY KEY, message TEXT NOT NULL, fingerprint TEXT NOT NULL, expires INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS sensor_auth_limits(
-      bucket TEXT PRIMARY KEY, count INTEGER NOT NULL, since INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS sensor_installers(
-      id INTEGER PRIMARY KEY, version TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL,
-      source_commit TEXT NOT NULL, image BLOB NOT NULL, created_at TEXT NOT NULL);
-    """)
-
-
 def throttle(conn, request, fp, proof=False):
     now = int(time.time())
     conn.execute("DELETE FROM sensor_auth_limits WHERE since<?", (now-60,))
