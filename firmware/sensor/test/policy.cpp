@@ -25,6 +25,13 @@ int main() {
     assert(!sensor::valid_ack(0, 1, end));
     assert(!sensor::valid_ack(1.5, 1, end));
   }
+  // After RESET / power loss, obtain time before the first sample.
+  assert(sensor::needs_clock_preflight(false, true, true));
+  // An already checked RTC, a scheduled sleep cycle and a weak battery do
+  // not force a network wakeup.
+  assert(!sensor::needs_clock_preflight(true, true, true));
+  assert(!sensor::needs_clock_preflight(false, false, true));
+  assert(!sensor::needs_clock_preflight(false, true, false));
   assert(sensor::retry_delay(86400, 0) == 3600);
   assert(sensor::retry_delay(86400, 100) == 57600);
   assert(sensor::retry_delay(1800, 10) == 1800);

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import db
+from . import db, sensor_monitor
 
 MODEL = "c3-sht40-v1"
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
@@ -105,9 +105,17 @@ class Sync(Strict):
     ota_failures: int = Field(default=0, ge=0)
     ota_generation: int = Field(default=0, ge=0)
     error: str = Field(default="", max_length=128)
+    device_ack: int | None = Field(default=None, ge=1, le=9007199254740991)
+    device_lost_base: int | None = Field(default=None, ge=0, le=9007199254740991)
+    replay: bool = False
 
     @model_validator(mode="after")
     def sequence(self):
+        if self.device_ack is None:
+            if self.replay or self.device_lost_base is not None:
+                raise ValueError("Не указан подтверждённый номер журнала")
+        elif self.device_ack > self.next_seq or self.device_lost_base is None or self.device_lost_base > self.lost:
+            raise ValueError("Некорректные счётчики журнала для восстановления")
         seqs = [r.seq for r in self.records]
         if seqs != sorted(set(seqs)) or any(s >= self.next_seq for s in seqs):
             raise ValueError("Неверная последовательность записей")
@@ -145,9 +153,15 @@ def initialize(conn):
       error TEXT NOT NULL, fingerprint TEXT NOT NULL,
       PRIMARY KEY(device_id,seq));
     CREATE INDEX IF NOT EXISTS sensor_records_time ON sensor_records(device_id,measured_at);
+    CREATE INDEX IF NOT EXISTS sensor_humidity_time ON sensor_records(measured_at,room_id)
+      WHERE humidity IS NOT NULL AND error='';
     CREATE TABLE IF NOT EXISTS sensor_events(
       id INTEGER PRIMARY KEY, device_id TEXT NOT NULL REFERENCES sensor_devices(id),
       at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sensor_alert_state(
+      device_id TEXT NOT NULL REFERENCES sensor_devices(id), user_id TEXT NOT NULL,
+      issue TEXT NOT NULL, event_id TEXT NOT NULL,
+      PRIMARY KEY(device_id,user_id,issue));
     CREATE TABLE IF NOT EXISTS sensor_mqtt_outbox(
       device_id TEXT PRIMARY KEY REFERENCES sensor_devices(id), generation INTEGER NOT NULL DEFAULT 1,
       attempts INTEGER NOT NULL DEFAULT 0, next_retry INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
@@ -156,8 +170,14 @@ def initialize(conn):
     """)
     # Web and MAX services can start together; serialize the additive migration.
     conn.execute("BEGIN IMMEDIATE")
-    if "sensor_type" not in {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}
+    if "sensor_type" not in columns:
         conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
+    if "restore_pending" not in columns:
+        conn.execute("ALTER TABLE sensor_devices ADD COLUMN restore_pending INTEGER NOT NULL DEFAULT 0")
+    if "last_complete_sync" not in columns:
+        conn.execute("ALTER TABLE sensor_devices ADD COLUMN last_complete_sync INTEGER")
+        conn.execute("UPDATE sensor_devices SET last_complete_sync=last_seen")
     conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
     from . import sensor_onboarding
     sensor_onboarding.initialize(conn)
@@ -206,14 +226,15 @@ def version_tuple(v):
 
 def public_device(d):
     d = dict(d)
-    for key in ("token_hash", "enrollment_hash"):
+    for key in ("token_hash", "enrollment_hash", "restore_pending"):
         d.pop(key, None)
     d["config"] = json.loads(d["config"])
-    # Daily reporting cannot establish that a sleeping device is currently online.
-    stale = max(3600, d["config"]["send_s"] * 2 + d["config"]["cool_s"])
-    d["status"] = ("disabled" if not d["enabled"] else "not_enrolled" if not d["hardware_id"]
-                   else "waiting" if not d["last_seen"] else "stale" if time.time() - d["last_seen"] > stale
-                   else "low_battery" if d["battery_mv"] < d["config"]["wifi_min_mv"] else "recent")
+    scheduled, deadline = sensor_monitor.upload_times(d)
+    d["next_sync_at"] = scheduled if d["enabled"] and d["config"]["enabled"] and d["hardware_id"] else None
+    d["status"] = ("disabled" if not d["enabled"] or not d["config"]["enabled"]
+                   else "not_enrolled" if not d["hardware_id"]
+                   else "stale" if time.time() > deadline else "waiting" if not d["last_seen"]
+                   else "low_battery" if sensor_monitor.battery_warning(d) else "recent")
     return d
 
 
@@ -315,6 +336,12 @@ def router(require_admin):
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]
+            if payload.device_ack is not None and ack < payload.device_ack and not payload.replay:
+                return {"ack_seq": ack, "replay_from": ack, "time": now}
+            replay_until = payload.device_ack if payload.replay else None
+            lost_confirmed = d["acknowledged_lost"]
+            legacy_restore = bool(d["restore_pending"] and payload.device_ack is None)
+            initial_ack = ack
             for rec in payload.records:
                 if rec.measured_at and rec.measured_at > now + 300:
                     raise HTTPException(422, "Измерение датировано будущим")
@@ -327,12 +354,23 @@ def router(require_admin):
                     continue
                 if rec.seq < ack:
                     raise HTTPException(409, "Неизвестная запись ниже подтверждённого seq")
-                if rec.seq > ack:
-                    gap = rec.seq - ack
-                    if gap > payload.lost - d["acknowledged_lost"]:
+                gap_from = ack
+                if replay_until is not None:
+                    if ack < replay_until and rec.seq > ack:
+                        gap_from = min(rec.seq, replay_until)
+                        event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{gap_from})")
+                    if rec.seq >= replay_until:
+                        lost_confirmed = max(lost_confirmed, payload.device_lost_base)
+                if rec.seq > gap_from:
+                    gap = rec.seq - gap_from
+                    if legacy_restore and ack == initial_ack and gap > payload.lost - lost_confirmed:
+                        event(conn, device, "restore_gap", f"Старая прошивка продолжила с {rec.seq}; отсутствуют [{ack},{rec.seq})")
+                        lost_confirmed = payload.lost
+                    elif gap > payload.lost - lost_confirmed:
                         raise HTTPException(409, "Разрыв seq не подтверждён счётчиком потерь")
-                    event(conn, device, "gap", f"Нет записей [{ack},{rec.seq})")
-                    d["acknowledged_lost"] += gap
+                    else:
+                        event(conn, device, "gap", f"Нет записей [{gap_from},{rec.seq})")
+                        lost_confirmed += gap
                 conn.execute("""INSERT INTO sensor_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                              (device, rec.seq, d["room_id"], rec.measured_at, now, rec.boot_id, rec.uptime_s,
                               rec.time_quality, rec.temperature, rec.humidity, rec.battery_mv, rec.interval_s,
@@ -343,11 +381,19 @@ def router(require_admin):
                                  "VALUES(?,?,'ha',?,?,?)", (d["room_id"], rec.temperature, "Датчик "+device,
                                                         observed, f"sensor:{device}:{rec.seq}"))
                 ack = rec.seq + 1
-            # No records is not permission to acknowledge data that was never received.
+            if replay_until is not None and not payload.records and ack < replay_until:
+                event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{replay_until})")
+                ack = replay_until
+            if replay_until is not None and ack >= replay_until:
+                lost_confirmed = max(lost_confirmed, payload.device_lost_base)
+            restore_pending = int(bool(d["restore_pending"] and ack == initial_ack))
             conn.execute("""UPDATE sensor_devices SET last_seen=?,firmware=?,battery_mv=?,rssi=?,boots=?,lost=?,
-                         ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,enrollment_hash=NULL WHERE id=?""",
+                         ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,
+                         restore_pending=?,last_complete_sync=CASE WHEN ? THEN ? ELSE last_complete_sync END,
+                         enrollment_hash=NULL WHERE id=?""",
                          (now, payload.firmware, payload.battery_mv, payload.rssi, payload.boots, payload.lost,
-                          ack, payload.config_version, d["acknowledged_lost"], payload.ota_failures, payload.error, device))
+                          ack, payload.config_version, lost_confirmed, payload.ota_failures, payload.error,
+                          restore_pending, ack == payload.next_seq, now, device))
             if payload.error:
                 event(conn, device, "device_error", payload.error)
             conn.execute("""INSERT INTO sensor_mqtt_outbox(device_id) VALUES(?) ON CONFLICT(device_id)

@@ -10,7 +10,10 @@ NOW = datetime(2026, 11, 18, 15, tzinfo=timezone.utc)
 
 
 def create_room(name, building="Старшая школа"):
-    return db.create_room(building, "2", name, "Кабинет", 18, 24)
+    room = db.create_room(building, "2", name, "Кабинет", 18, 24)
+    with db.connect() as conn:
+        conn.execute("UPDATE rooms SET created_at='2026-11-01T00:00:00+00:00' WHERE id=?", (room["id"],))
+    return room
 
 
 def reading(room_id, value, observed, source="max", reporter="MAX:71"):
@@ -31,6 +34,10 @@ def users_and_rooms():
         with db.connect() as conn:
             conn.execute("INSERT INTO max_bindings(user_id,room_id) VALUES(?,?)",
                          (uid, one["id"]))
+            conn.execute(
+                "INSERT INTO max_binding_periods(user_id,room_id,starts_at) VALUES(?,?,'2026-11-01T00:00:00+00:00')",
+                (uid, one["id"]),
+            )
     reading(one["id"], 18, "2026-11-17T09:00:00+00:00")
     reading(one["id"], 22, "2026-11-17T11:00:00+00:00")
     reading(two["id"], 27, "2026-11-18T09:00:00+00:00", "ha", "sensor")
@@ -172,3 +179,22 @@ def test_daily_timezone_crosses_utc_midnight(client):
     r=reports.build("2026-11-18","2026-11-18",now=now)
     assert r["summary"]["rooms_measured"]==1
     assert r["daily"][0]["average"]==21
+
+
+def test_reassignment_keeps_past_agreement(client, monkeypatch):
+    room = create_room("409")
+    db.remember_max_user({"user_id": "71", "first_name": "Ирина"})
+    db.remember_max_user({"user_id": "72", "first_name": "Ольга"})
+    monkeypatch.setattr(db, "utc_now", lambda: "2026-11-17T08:00:00+00:00")
+    db.set_max_user_rooms("71", [room["id"]])
+    db.set_max_user_rooms("71", [room["id"]])
+    reading(room["id"], 21, "2026-11-17T09:00:00+00:00")
+    monkeypatch.setattr(db, "utc_now", lambda: "2026-11-18T00:00:00+00:00")
+    assert db.unbind("71", room["id"])
+    db.set_max_user_rooms("72", [room["id"]])
+    report = reports.build("2026-11-17", "2026-11-18", now=NOW)
+    staff = {row["user_id"]: row for row in report["staff"]}
+    assert staff["71"]["assigned_room_days"] == staff["71"]["measured_room_days"] == 1
+    assert staff["71"]["authored_readings"] == 1
+    assert staff["72"]["assigned_room_days"] == staff["72"]["missing_room_days"] == 1
+    assert staff["72"]["authored_readings"] == 0

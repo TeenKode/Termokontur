@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications, reports, report_exports, report_schedule
+from . import school_calendar
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
@@ -33,7 +34,10 @@ from . import __version__
 # A content fingerprint changes whenever JavaScript OR CSS changes, even between
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
-    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
+    b"".join((ROOT / "static" / name).read_bytes() for name in (
+        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs",
+        "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
+    ))
 ).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
@@ -117,9 +121,28 @@ def authenticated(request: Request) -> bool:
     except (ValueError, KeyError):
         return False
 
-def require_admin(request: Request):
-    if not authenticated(request):
-        raise HTTPException(401, "Войдите в панель")
+
+def _building_session(request: Request) -> dict | None:
+    cookie = request.cookies.get("tk_session", "")
+    if not cookie.startswith("v:") or len(cookie) > 256:
+        return None
+    try:
+        _, username, expires, nonce, mac = cookie.split(":")
+        if int(expires) <= time.time() or len(nonce) < 12:
+            return None
+    except ValueError:
+        return None
+    account = auth.building_account(username)
+    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)):
+        return account
+    return None
+
+
+def _building_signature(payload: str, account: dict) -> str:
+    return signature(f"{payload}:{auth.session_epoch()}:{account['session_key']}")
+
+
+def _verify_origin(request: Request) -> None:
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin:
@@ -127,8 +150,40 @@ def require_admin(request: Request):
             if origin not in (f"http://{host}", f"https://{host}"):
                 raise HTTPException(403, "Недопустимый источник запроса")
 
+
+def require_admin(request: Request):
+    if not authenticated(request):
+        raise HTTPException(401, "Войдите как администратор")
+    _verify_origin(request)
+
+
+def scoped_access(request: Request) -> str:
+    if authenticated(request):
+        scope = ""
+    else:
+        account = _building_session(request)
+        if not account:
+            raise HTTPException(401, "Войдите в панель")
+        scope = account["building"]
+    _verify_origin(request)
+    return scope
+
+
+def _scope_building(requested: str, allowed: str) -> str:
+    if allowed and requested and requested != allowed:
+        raise HTTPException(403, "Отчёт доступен только по вашему корпусу")
+    return allowed or requested
+
+
 class Login(BaseModel):
     password: str
+    username: str = Field(default="", max_length=32)
+
+
+class BuildingAccountIn(BaseModel):
+    building: str = Field(min_length=1, max_length=100)
+    password: str | None = Field(default=None, max_length=256)
+    max_user_id: str | None = Field(default=None, pattern=r"^[0-9]{1,20}$")
 
 class RoomIn(BaseModel):
     building: str = Field(min_length=1, max_length=100)
@@ -232,6 +287,7 @@ def index():
     # Never cache the HTML shell: each request must fetch the correct assets.
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     html = html.replace("__ASSET_FINGERPRINT__", _ASSET_FINGERPRINT)
+    html = html.replace("__APP_VERSION__", __version__)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 @app.get("/health")
@@ -240,7 +296,12 @@ def health():
 
 @app.get("/api/session")
 def session(request: Request):
-    return {"authenticated": authenticated(request)}
+    if authenticated(request):
+        return {"authenticated": True}
+    account = _building_session(request)
+    if account:
+        return {"authenticated": True, "building": account["building"]}
+    return {"authenticated": False}
 
 @app.post("/api/login")
 def login(payload: Login, request: Request, response: Response):
@@ -249,17 +310,24 @@ def login(payload: Login, request: Request, response: Response):
     failures = [t for t in FAILED_LOGINS.get(ip, []) if now - t < 300]
     if len(failures) >= 5:
         raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
-    if not auth.check_password(payload.password):
+    username = payload.username.strip().lower()
+    viewer = auth.check_building_password(username, payload.password) if username else None
+    if (username and not viewer) or (not username and not auth.check_password(payload.password)):
         failures.append(now)
         FAILED_LOGINS[ip] = failures
         raise HTTPException(401, "Неверный пароль")
     FAILED_LOGINS.pop(ip, None)
-    response.set_cookie("tk_session", session_cookie(), httponly=True, samesite="strict",
+    if viewer:
+        session_data = f"v:{username}:{int(time.time()) + 8 * 3600}:{secrets.token_urlsafe(18)}"
+        cookie = f"{session_data}:{_building_signature(session_data, viewer)}"
+    else:
+        cookie = session_cookie()
+    response.set_cookie("tk_session", cookie, httponly=True, samesite="strict",
                         secure=(os.getenv("TERMOKONTUR_SECURE_COOKIE") == "1" or request.url.scheme == "https"),
                         max_age=8 * 3600, path="/")
-    return {"ok": True}
+    return {"ok": True, "building": viewer["building"]} if viewer else {"ok": True}
 
-@app.post("/api/logout", dependencies=[Depends(require_admin)])
+@app.post("/api/logout", dependencies=[Depends(scoped_access)])
 def logout(response: Response):
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True}
@@ -644,8 +712,10 @@ def restore_backup(payload: RestoreBackupIn, response: Response):
 @app.post("/api/backups/import", dependencies=[Depends(require_admin)])
 async def import_backup(request: Request):
     length = request.headers.get("content-length")
-    if length is not None and (not length.isdigit() or int(length) > maintenance.MAX_IMPORT_BYTES):
-        raise HTTPException(413, "Максимальный размер файла — 100 МБ")
+    limit = maintenance.MAX_IMPORT_BYTES
+    too_large = f"Максимальный размер загружаемой копии — {limit:,} байт".replace(",", " ")
+    if length is not None and (not length.isdigit() or len(length) > 20 or int(length) > limit):
+        raise HTTPException(413, too_large)
     destination = maintenance.backup_dir()
     temp_path = None
     try:
@@ -655,11 +725,11 @@ async def import_backup(request: Request):
             size = 0
             async for chunk in request.stream():
                 size += len(chunk)
-                if size > maintenance.MAX_IMPORT_BYTES:
-                    raise HTTPException(413, "Максимальный размер файла — 100 МБ")
+                if size > limit:
+                    raise HTTPException(413, too_large)
                 tmp.write(chunk)
         temp_path.chmod(0o600)
-        maintenance.inspect(temp_path)
+        await asyncio.to_thread(maintenance.inspect, temp_path)
         name = maintenance._filename("import")
         temp_path.rename(destination / name)
         return {"name": name, "size": size}
@@ -683,24 +753,59 @@ def prune_readings(payload: RestoreBackupIn):
     return {"deleted": result["readings"], "backup": snapshot["name"]}
 
 
-@app.get("/api/dashboard", dependencies=[Depends(require_admin)])
-def dashboard():
-    return db.dashboard(int(settings.get("stale_hours", "26")))
+@app.get("/api/dashboard")
+def dashboard(scope: str = Depends(scoped_access)):
+    return db.dashboard(int(settings.get("stale_hours", "26")), scope)
 
-@app.get("/api/dashboard/history", dependencies=[Depends(require_admin)])
+@app.get("/api/dashboard/history")
 def dashboard_history(days: int = Query(14, ge=7, le=90),
-                      building: str = Query("", max_length=100)):
+                      building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
     """Calendar-day aggregates; each cabinet counts once per day."""
     if days not in (7, 14, 30, 90):
         raise HTTPException(422, "Выберите период: 7, 14, 30 или 90 дней")
     return db.dashboard_history(
-        days=days, building=building, timezone_name=settings.get("timezone", "UTC")
+        days=days, building=_scope_building(building, scope), timezone_name=settings.get("timezone", "UTC")
     )
 
 
-@app.get("/api/daily", dependencies=[Depends(require_admin)])
-def daily_report():
-    return daily.summary()
+@app.get("/api/daily")
+def daily_report(scope: str = Depends(scoped_access)):
+    return daily.summary(building=scope)
+
+
+@app.get("/api/school-calendar", dependencies=[Depends(require_admin)])
+def calendar_settings():
+    calendar, weekdays = school_calendar.load()
+    return {**calendar.model_dump(), "default_weekdays": sorted(weekdays), "buildings": school_calendar.buildings()}
+
+
+@app.put("/api/school-calendar", dependencies=[Depends(require_admin)])
+def save_calendar(payload: school_calendar.Calendar):
+    try:
+        school_calendar.save(payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return calendar_settings()
+
+
+@app.get("/api/building-accounts", dependencies=[Depends(require_admin)])
+def building_accounts():
+    return {"accounts": auth.list_building_accounts(), "buildings": school_calendar.buildings()}
+
+
+@app.put("/api/building-accounts/{username}", dependencies=[Depends(require_admin)])
+def save_building_account(username: str, payload: BuildingAccountIn):
+    try:
+        return auth.save_building_account(username.lower(), **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/api/building-accounts/{username}", dependencies=[Depends(require_admin)])
+def delete_building_account(username: str):
+    if not auth.remove_building_account(username):
+        raise HTTPException(404, "Учётная запись не найдена")
+    return {"ok": True}
 
 def _report_snapshot(start: str, end: str, building: str) -> dict:
     try:
@@ -709,15 +814,15 @@ def _report_snapshot(start: str, end: str, building: str) -> dict:
         raise HTTPException(422, str(exc)) from exc
 
 
-@app.get("/api/reports", dependencies=[Depends(require_admin)])
-def get_report(start: str, end: str, building: str = Query("", max_length=100)):
-    return JSONResponse(_report_snapshot(start, end, building),
+@app.get("/api/reports")
+def get_report(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    return JSONResponse(_report_snapshot(start, end, _scope_building(building, scope)),
                         headers={"Cache-Control": "no-store"})
 
 
-@app.get("/api/reports/export.xlsx", dependencies=[Depends(require_admin)])
-def export_report_excel(start: str, end: str, building: str = Query("", max_length=100)):
-    report = _report_snapshot(start, end, building)
+@app.get("/api/reports/export.xlsx")
+def export_report_excel(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    report = _report_snapshot(start, end, _scope_building(building, scope))
     return Response(
         content=report_exports.workbook(report),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -726,9 +831,9 @@ def export_report_excel(start: str, end: str, building: str = Query("", max_leng
     )
 
 
-@app.get("/api/reports/export.pdf", dependencies=[Depends(require_admin)])
-def export_report_pdf(start: str, end: str, building: str = Query("", max_length=100)):
-    report = _report_snapshot(start, end, building)
+@app.get("/api/reports/export.pdf")
+def export_report_pdf(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    report = _report_snapshot(start, end, _scope_building(building, scope))
     try:
         content = report_exports.pdf(report)
     except ValueError as exc:

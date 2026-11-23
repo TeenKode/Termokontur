@@ -18,8 +18,8 @@ def db_path() -> Path:
     return Path(os.environ.get("TERMOKONTUR_DB", "./data/termokontur.sqlite3"))
 
 @contextmanager
-def connect():
-    path = db_path()
+def connect(path: Path | None = None):
+    path = path if path is not None else db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=15)
     conn.row_factory = sqlite3.Row
@@ -34,8 +34,8 @@ def connect():
     finally:
         conn.close()
 
-def initialize() -> None:
-    with connect() as conn:
+def initialize(path: Path | None = None) -> None:
+    with connect(path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS rooms (
@@ -61,6 +61,13 @@ def initialize() -> None:
             external_id TEXT UNIQUE
         );
         CREATE INDEX IF NOT EXISTS readings_room_time ON readings(room_id, observed_at DESC);
+        CREATE TABLE IF NOT EXISTS room_activity (
+            id INTEGER PRIMARY KEY,
+            room_id INTEGER NOT NULL REFERENCES rooms(id),
+            changed_at TEXT NOT NULL,
+            active INTEGER NOT NULL CHECK(active IN (0,1))
+        );
+        CREATE INDEX IF NOT EXISTS room_activity_at ON room_activity(room_id,changed_at,id);
         CREATE TABLE IF NOT EXISTS pairing_codes (
             digest TEXT PRIMARY KEY,
             room_id INTEGER NOT NULL REFERENCES rooms(id),
@@ -71,6 +78,16 @@ def initialize() -> None:
             room_id INTEGER NOT NULL REFERENCES rooms(id),
             PRIMARY KEY(user_id, room_id)
         );
+        CREATE TABLE IF NOT EXISTS max_binding_periods (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            room_id INTEGER NOT NULL REFERENCES rooms(id),
+            starts_at TEXT NOT NULL,
+            ends_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS binding_open_period
+            ON max_binding_periods(user_id,room_id) WHERE ends_at IS NULL;
+        CREATE INDEX IF NOT EXISTS binding_room_period ON max_binding_periods(room_id,starts_at,ends_at);
         CREATE TABLE IF NOT EXISTS max_users (
             user_id TEXT PRIMARY KEY,
             first_name TEXT NOT NULL DEFAULT '',
@@ -91,6 +108,14 @@ def initialize() -> None:
             salt TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             session_epoch INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS building_accounts (
+            username TEXT PRIMARY KEY,
+            building TEXT NOT NULL CHECK(building<>''),
+            salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            max_user_id TEXT REFERENCES max_users(user_id) ON DELETE SET NULL
         );
         CREATE TABLE IF NOT EXISTS max_inbox (
             event_id TEXT PRIMARY KEY,
@@ -184,6 +209,13 @@ def initialize() -> None:
             event_id TEXT NOT NULL UNIQUE,
             PRIMARY KEY(subscription_id, period_key)
         );
+        CREATE TABLE IF NOT EXISTS report_waiting (
+            subscription_id INTEGER NOT NULL REFERENCES report_subscriptions(id) ON DELETE CASCADE,
+            period_key TEXT NOT NULL,
+            first_day TEXT NOT NULL,
+            last_day TEXT NOT NULL,
+            PRIMARY KEY(subscription_id,period_key)
+        );
         """)
         # Add optional callback source ID without changing existing installations.
         ui_columns = {
@@ -206,6 +238,20 @@ def initialize() -> None:
             col["name"] for col in conn.execute("PRAGMA table_info(notification_recipients)")
         }:
             conn.execute("ALTER TABLE notification_recipients ADD COLUMN delivered_at TEXT")
+
+        conn.execute("""
+            INSERT INTO room_activity(room_id,changed_at,active)
+            SELECT id,?,0 FROM rooms r WHERE active=0 AND NOT EXISTS (
+              SELECT 1 FROM room_activity a WHERE a.room_id=r.id
+            )
+        """, (utc_now(),))
+        history_start = utc_now()
+        if conn.execute("INSERT OR IGNORE INTO app_state(key,value) VALUES('binding_history_since',?)",
+                        (history_start,)).rowcount:
+            conn.execute("""
+                INSERT INTO max_binding_periods(user_id,room_id,starts_at)
+                SELECT user_id,room_id,? FROM max_bindings
+            """, (history_start,))
 
         from . import sensors
         sensors.initialize(conn)
@@ -281,6 +327,12 @@ def update_room(room_id: int, patch: dict) -> dict | None:
     if not patch:
         return room_get(room_id)
     with connect() as conn:
+        if "active" in patch:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""
+                INSERT INTO room_activity(room_id, changed_at, active)
+                SELECT id,?,? FROM rooms WHERE id=? AND active<>?
+            """, (utc_now(), int(patch["active"]), room_id, int(patch["active"])))
         sql = "UPDATE rooms SET " + ", ".join(f"{key}=?" for key in patch) + " WHERE id=?"
         conn.execute(sql, [*patch.values(), room_id])
     return room_get(room_id)
@@ -368,7 +420,7 @@ def reading_corrections(reading_id: int) -> list[dict] | None:
         return [dict(row) for row in rows]
 
 
-def dashboard(stale_hours: int = 26) -> dict:
+def dashboard(stale_hours: int = 26, building: str = "") -> dict:
     now = datetime.now(timezone.utc)
     result = []
     counts = {"normal": 0, "below": 0, "above": 0, "missing": 0}
@@ -381,8 +433,8 @@ def dashboard(stale_hours: int = 26) -> dict:
               SELECT id FROM readings WHERE room_id=p.id
               ORDER BY observed_at DESC, id DESC LIMIT 1
           )
-          WHERE p.active=1 ORDER BY p.building, p.name
-        """)
+          WHERE p.active=1 AND (?='' OR p.building=?) ORDER BY p.building, p.name
+        """, (building, building))
         for row in rows:
             item = dict(row)
             latest = item["last_at"]
@@ -571,6 +623,24 @@ def issue_code(room_id: int, validity_minutes: int = 30) -> str:
     """Issue a single code, revoking old unused ones for this room."""
     return issue_codes_bulk([room_id], validity_minutes)[0]["code"]
 
+
+def _bind_room(conn, user_id: str, room_id: int, stamp: str) -> None:
+    if conn.execute("INSERT OR IGNORE INTO max_bindings(user_id,room_id) VALUES (?,?)",
+                    (user_id, room_id)).rowcount:
+        conn.execute("INSERT INTO max_binding_periods(user_id,room_id,starts_at) VALUES (?,?,?)",
+                     (user_id, room_id, stamp))
+
+
+def _unbind_room(conn, user_id: str, room_id: int, stamp: str) -> bool:
+    deleted = conn.execute("DELETE FROM max_bindings WHERE user_id=? AND room_id=?", (user_id, room_id))
+    if deleted.rowcount:
+        conn.execute("""
+            UPDATE max_binding_periods SET ends_at=?
+            WHERE user_id=? AND room_id=? AND ends_at IS NULL
+        """, (stamp, user_id, room_id))
+    return bool(deleted.rowcount)
+
+
 def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | None:
     digest = hashlib.sha256(code.strip().upper().encode()).hexdigest()
     with connect() as conn:
@@ -597,8 +667,7 @@ def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | No
         deleted = conn.execute("DELETE FROM pairing_codes WHERE digest=?", (digest,))
         if deleted.rowcount != 1:
             return None
-        conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)",
-                     (str(user_id), found["room_id"]))
+        _bind_room(conn, str(user_id), found["room_id"], utc_now())
         if event_id:
             conn.execute(
                 "INSERT OR IGNORE INTO max_bind_events(event_id,user_id,room_id,recorded_at) VALUES(?,?,?,?)",
@@ -720,15 +789,11 @@ def set_max_user_rooms(user_id: str, room_ids: list[int],
         """, (user_id,))}
         added = [room_id for room_id in chosen if room_id not in old]
         removed = [room_id for room_id in old if room_id not in chosen]
-        if added or removed:
-            conn.execute("""
-                DELETE FROM max_bindings WHERE user_id=?
-                AND room_id IN (SELECT id FROM rooms WHERE active=1)
-            """, (user_id,))
-            conn.executemany(
-                "INSERT INTO max_bindings(user_id,room_id) VALUES (?,?)",
-                ((user_id, room_id) for room_id in chosen),
-            )
+        stamp = utc_now()
+        for room_id in removed:
+            _unbind_room(conn, user_id, room_id, stamp)
+        for room_id in added:
+            _bind_room(conn, user_id, room_id, stamp)
         queued = False
         if notify and added:
             names = [f"• {available[room_id]['building']} / {available[room_id]['name']}"
@@ -767,9 +832,7 @@ def bound_rooms(user_id: str) -> list[dict]:
 
 def unbind(user_id: str, room_id: int) -> bool:
     with connect() as conn:
-        cur = conn.execute("DELETE FROM max_bindings WHERE user_id=? AND room_id=?",
-                           (str(user_id), room_id))
-        return bool(cur.rowcount)
+        return _unbind_room(conn, str(user_id), room_id, utc_now())
 
 def get_state(key: str) -> str | None:
     with connect() as conn:

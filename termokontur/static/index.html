@@ -10,6 +10,8 @@
   <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/school-calendar.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/building-accounts.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/sensors.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/sensor-onboarding.js?v=__ASSET_FINGERPRINT__" defer></script>
 </head>
@@ -21,7 +23,9 @@
       <h1>Контроль температуры</h1>
       <p>Температура помещений и история измерений.</p>
       <form id="login-form">
-        <label for="password">Пароль администратора</label>
+        <label for="login-name">Логин ответственного (для администратора оставьте пустым)</label>
+        <input id="login-name" type="text" maxlength="32" autocomplete="username" autocapitalize="none">
+        <label for="password">Пароль</label>
         <div class="password-field"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
         <button type="submit" class="btn primary full">Войти</button>
         <div id="login-error" class="form-error" role="alert"></div>
@@ -35,12 +39,12 @@
       <div class="nav-caption">РАЗДЕЛЫ</div>
       <nav class="navigation" aria-label="Разделы">
         <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
-        <button type="button" data-tab="readings" class="nav-button"><span class="nav-icon">≋</span>Измерения</button>
-        <button type="button" data-tab="rooms" class="nav-button"><span class="nav-icon">▤</span>Помещения</button>
+        <button type="button" data-tab="readings" class="nav-button" data-admin-only><span class="nav-icon">≋</span>Измерения</button>
+        <button type="button" data-tab="rooms" class="nav-button" data-admin-only><span class="nav-icon">▤</span>Помещения</button>
         <button type="button" data-tab="reports" class="nav-button"><span class="nav-icon">▥</span>Отчёты</button>
-        <button type="button" data-tab="staff" class="nav-button"><span class="nav-icon">♙</span>Сотрудники</button>
-        <button type="button" data-tab="sensors" class="nav-button"><span class="nav-icon">◉</span>Датчики</button>
-        <button type="button" data-tab="settings" class="nav-button"><span class="nav-icon">⚙</span>Настройки</button>
+        <button type="button" data-tab="staff" class="nav-button" data-admin-only><span class="nav-icon">♙</span>Сотрудники</button>
+        <button type="button" data-tab="sensors" class="nav-button" data-admin-only><span class="nav-icon">◉</span>Датчики</button>
+        <button type="button" data-tab="settings" class="nav-button" data-admin-only><span class="nav-icon">⚙</span>Настройки</button>
       </nav>
       <div class="sidebar-foot">
         <span class="connection-dot"></span> Локальный сервер
@@ -49,11 +53,12 @@
     </aside>
     <main class="main">
       <header class="topbar">
-        <div class="eyebrow">МОНИТОРИНГ МИКРОКЛИМАТА</div>
+        <div><div class="eyebrow" id="panel-scope">МОНИТОРИНГ МИКРОКЛИМАТА</div><small class="muted" id="panel-version">v__APP_VERSION__</small></div>
         <div class="topbar-actions">
           <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
           <span id="updated-at" class="muted">—</span>
           <button type="button" id="refresh" class="btn secondary">↻ Обновить</button>
+          <button type="button" id="logout-mobile" class="btn secondary logout-mobile">Выйти</button>
         </div>
       </header>
 
@@ -230,18 +235,19 @@
           </form>
           <p id="report-status" class="hint" role="status" aria-live="polite">Выберите период и нажмите «Сформировать».</p>
           <div class="report-kpis" id="report-kpis" hidden></div>
-          <p class="hint">Охват считается по кабинетам за каждый календарный день. Средняя температура сначала рассчитывается по кабинету за день. Пропуски не считаются нарушениями сотрудников.</p>
+          <p class="hint">Охват считается по дням замеров в школьном календаре. Температурная статистика включает все полученные показания.</p>
         </div>
         <div class="panel">
           <div class="report-switches" role="group" aria-label="Разделы отчёта">
             <button type="button" class="btn secondary active" data-report-section="coverage">Сдача показаний</button>
             <button type="button" class="btn secondary" data-report-section="temperature">Температура</button>
+            <button type="button" class="btn secondary" data-report-section="humidity">Влажность</button>
             <button type="button" class="btn secondary" data-report-section="buildings">По зданиям</button>
             <button type="button" class="btn secondary" data-report-section="staff">По сотрудникам</button>
           </div>
           <section id="report-pane-coverage">
             <h2>Сдача показаний по дням</h2>
-            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
+            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Ждут выгрузку</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
             <details class="report-missing"><summary>Кто передал показания (<span id="report-submitted-count">0</span>)</summary>
               <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th><th>Температура</th><th>Передал</th><th>Когда</th></tr></thead><tbody id="report-submitted-body"></tbody></table></div>
               <p class="hint">Показаны последние 300 измеренных кабинето-дней. Полная история — в Excel.</p>
@@ -261,6 +267,15 @@
             <h2>Температура по кабинетам</h2>
             <div class="table-scroll"><table><thead><tr><th>Здание / кабинет</th><th>Дней с данными</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-temperature-body"></tbody></table></div>
           </section>
+          <section id="report-pane-humidity" hidden>
+            <h2>Относительная влажность по дням</h2>
+            <div class="report-temp-chart-frame">
+              <canvas id="report-humidity-chart" width="920" height="260" role="img" aria-label="График средней влажности по дням"></canvas>
+            </div>
+            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинетов с данными</th></tr></thead><tbody id="report-humidity-body"></tbody></table></div>
+            <h2>Влажность по зданиям</h2>
+            <div class="table-scroll"><table><thead><tr><th>Здание</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Замеров</th></tr></thead><tbody id="report-humidity-buildings"></tbody></table></div>
+          </section>
           <section id="report-pane-buildings" hidden>
             <h2>Сравнение зданий</h2>
             <div id="report-building-bars" class="report-building-bars"></div>
@@ -268,11 +283,11 @@
           </section>
           <section id="report-pane-staff" hidden>
             <h2>Сотрудники MAX</h2>
-            <p class="hint">Показаны текущие закрепления кабинетов. Если за кабинет передал показание другой сотрудник или датчик, кабинет считается измеренным для всех ответственных. Исторические изменения закреплений не учитываются.</p>
+            <p id="report-staff-note" class="hint"></p>
             <div class="table-scroll"><table><thead><tr><th>Сотрудник</th><th>Закреплено кабинетов</th><th>Охват</th><th>Пропуски кабинетов</th><th>Личных показаний</th><th>Дней с личным вводом</th></tr></thead><tbody id="report-staff-body"></tbody></table></div>
           </section>
         </div>
-        <div class="panel">
+        <div class="panel" id="report-schedule-panel" data-admin-only>
           <div class="panel-heading">
             <div><h2>Автоматические отчёты через MAX</h2><p>Краткая ежедневная или еженедельная сводка ответственному по выбранному зданию.</p></div>
           </div>
@@ -298,6 +313,7 @@
             <span class="settings-nav-caption">УПРАВЛЕНИЕ</span>
             <button type="button" class="settings-nav-button active" data-settings-target="summary" aria-current="page">Обзор системы</button>
             <button type="button" class="settings-nav-button" data-settings-target="general">Организация</button>
+            <button type="button" class="settings-nav-button" data-settings-target="calendar">Календарь замеров</button>
             <button type="button" class="settings-nav-button" data-settings-target="notifications">Уведомления</button>
             <button type="button" class="settings-nav-button" data-settings-target="appearance">Внешний вид</button>
             <span class="settings-nav-caption">ПОДКЛЮЧЕНИЯ</span>
@@ -306,6 +322,7 @@
             <span class="settings-nav-caption">ОБСЛУЖИВАНИЕ</span>
             <button type="button" class="settings-nav-button" data-settings-target="backups">Данные и резервные копии</button>
             <button type="button" class="settings-nav-button" data-settings-target="security">Безопасность</button>
+            <button type="button" class="settings-nav-button" data-settings-target="access">Доступ по корпусам</button>
             <button type="button" class="settings-nav-button" data-settings-target="tls">HTTPS-сертификат</button>
             <button type="button" class="settings-nav-button" data-settings-target="updates">Обновление системы</button>
           </nav>
@@ -390,9 +407,9 @@
                   <label class="settings-toggle"><input id="setting-enabled" type="checkbox">Включить напоминания</label>
                   <div id="reminder-options" class="settings-dependent">
                     <div class="field-grid"><label for="setting-time">Время отправки<input id="setting-time" type="time" required></label><label for="setting-window">Окно отправки, минут<input id="setting-window" type="number" min="1" max="240" required></label></div>
-                    <fieldset class="weekdays"><legend>Дни недели</legend><label><input type="checkbox" name="remind-day" value="0">Пн</label><label><input type="checkbox" name="remind-day" value="1">Вт</label><label><input type="checkbox" name="remind-day" value="2">Ср</label><label><input type="checkbox" name="remind-day" value="3">Чт</label><label><input type="checkbox" name="remind-day" value="4">Пт</label><label><input type="checkbox" name="remind-day" value="5">Сб</label><label><input type="checkbox" name="remind-day" value="6">Вс</label></fieldset>
                   </div>
-                  <p class="hint">Время организации. Каникулы и праздники не учитываются.</p>
+                  <fieldset class="weekdays"><legend>Дни замеров по умолчанию</legend><label><input type="checkbox" name="remind-day" value="0">Пн</label><label><input type="checkbox" name="remind-day" value="1">Вт</label><label><input type="checkbox" name="remind-day" value="2">Ср</label><label><input type="checkbox" name="remind-day" value="3">Чт</label><label><input type="checkbox" name="remind-day" value="4">Пт</label><label><input type="checkbox" name="remind-day" value="5">Сб</label><label><input type="checkbox" name="remind-day" value="6">Вс</label></fieldset>
+                  <p class="hint">Время организации. Расписание отдельных корпусов и исключения задаются в календаре замеров.</p>
                   <div class="settings-save"><span class="settings-save-feedback" id="reminders-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить напоминания</button></div>
                 </form>
               </article>
@@ -510,6 +527,19 @@
                 <div id="backup-list" class="backup-list">Загрузка…</div>
               </article>
             </div>
+            <div class="settings-pane" data-settings-view="calendar" hidden>
+              <div class="settings-section-heading"><h2>Календарь замеров</h2><p>Определяет рабочие дни для отчётов и напоминаний MAX.</p></div>
+              <form id="calendar-form" class="settings-form panel settings-panel">
+                <h3>Дни недели по корпусам</h3>
+                <p id="calendar-default" class="hint"></p>
+                <div id="calendar-weekly" class="settings-form"></div>
+                <h3>Исключения по датам</h3>
+                <p class="hint">Добавьте каникулы, праздники или дополнительные рабочие дни. Период корпуса имеет приоритет над общим.</p>
+                <div id="calendar-exceptions" class="settings-form"></div>
+                <div class="heading-actions"><button id="calendar-add" type="button" class="btn secondary">Добавить период</button></div>
+                <div class="settings-save"><span class="settings-save-feedback" role="status" aria-live="polite"></span><button type="submit" class="btn primary">Сохранить календарь</button></div>
+              </form>
+            </div>
             <div class="settings-pane" data-settings-view="security" hidden>
               <div class="settings-section-heading"><h2>Безопасность</h2><p>Смена пароля администратора и защита доступа к панели.</p></div>
               <article class="panel settings-panel">
@@ -521,6 +551,26 @@
                   <p class="password-hint" id="password-feedback" role="status" aria-live="polite">От 8 до 256 символов.</p>
                   <button type="submit" class="btn primary">Изменить пароль</button>
                   <p class="hint">После смены пароля всем пользователям потребуется войти заново.</p>
+                </form>
+              </article>
+            </div>
+            <div class="settings-pane" data-settings-view="access" hidden>
+              <div class="settings-section-heading"><h2>Доступ по корпусам</h2><p>Ответственный видит обзор и выгрузки своего корпуса.</p></div>
+              <article class="panel settings-panel">
+                <h3>Учётные записи</h3>
+                <div id="building-account-list" class="backup-list" aria-live="polite"></div>
+                <form id="building-account-form" class="settings-form">
+                  <div class="field-grid">
+                    <label>Логин<input id="building-account-name" minlength="3" maxlength="32" pattern="[A-Za-z][A-Za-z0-9_.\-]{2,31}" autocapitalize="none" autocomplete="off" required></label>
+                    <label>Корпус<select id="building-account-building" required></select></label>
+                    <label>Пароль<input id="building-account-password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required></label>
+                    <label>Оповещения о датчиках в MAX<select id="building-account-max"></select></label>
+                  </div>
+                  <p class="hint" id="building-account-hint">Задайте пароль и передайте его ответственному.</p>
+                  <div class="heading-actions">
+                    <button type="submit" class="btn primary">Сохранить учётную запись</button>
+                    <button id="building-account-reset" type="button" class="btn secondary" hidden>Новая запись</button>
+                  </div>
                 </form>
               </article>
             </div>
