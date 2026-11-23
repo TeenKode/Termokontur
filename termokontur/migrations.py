@@ -59,7 +59,11 @@ def _initialize_legacy_schema(conn: sqlite3.Connection, stamp: str) -> None:
         """, (stamp,))
 
 
-_MIGRATIONS = (_initialize_legacy_schema,)
+def _add_sensor_model(conn: sqlite3.Connection, _: str) -> None:
+    _add_columns(conn, "sensor_devices", {"model": "TEXT NOT NULL DEFAULT 'c3-sht40-v1'"})
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

@@ -1,0 +1,58 @@
+name: ESP-01S 1MB firmware and API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/esp01s/**"
+      - "termokontur/migrations.py"
+      - "termokontur/sensors.py"
+      - "termokontur/__init__.py"
+      - "tests/test_esp01.py"
+      - ".github/workflows/esp01s.yml"
+  pull_request:
+    paths:
+      - "firmware/esp01s/**"
+      - "termokontur/migrations.py"
+      - "termokontur/sensors.py"
+      - "termokontur/__init__.py"
+      - "tests/test_esp01.py"
+      - ".github/workflows/esp01s.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q tests/test_esp01.py tests/test_sensors.py
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install platformio==6.1.18
+      - run: pio run -d firmware/esp01s -e esp01s-1mb
+      - name: Inspect built image
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from runpy import run_path
+          version = run_path("termokontur/__init__.py")["__version__"]
+          image = Path("firmware/esp01s/.pio/build/esp01s-1mb/firmware.bin").read_bytes()
+          assert (version.encode() + bytes(1)) in image
+          print(f"ESP-01S {version}, {len(image)} bytes")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termokontur-esp01s-1mb
+          path: firmware/esp01s/.pio/build/esp01s-1mb/firmware.bin
+          if-no-files-found: error

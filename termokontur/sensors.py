@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db, sensor_monitor
 
 MODEL = "c3-sht40-v1"
+ESP01_MODEL = "esp01-sht40-v1"
+SensorModel = Literal["c3-sht40-v1", "esp01-sht40-v1"]
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
 MAX_FIRMWARE = 0x1C0000
 
@@ -52,6 +54,7 @@ class Config(Strict):
 class DeviceIn(Strict):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
+    model: SensorModel = MODEL
 
 
 class DevicePatch(Strict):
@@ -64,8 +67,13 @@ class Enrollment(Strict):
     device_id: str = Field(pattern=r"^tk-[a-f0-9]{16}$")
     code: str = Field(min_length=32, max_length=100)
     hardware_id: str = Field(pattern=r"^[a-f0-9]{12}$")
-    model: Literal["c3-sht40-v1"]
+    model: SensorModel
     sensor_type: SensorType = "sht4x"
+
+
+def valid_battery_mv(mv: int) -> bool:
+    """0 is an explicit 'not measurable' value for ESP-01 without an ADC."""
+    return mv == 0 or 2000 <= mv <= 5000
 
 
 class Record(Strict):
@@ -76,12 +84,14 @@ class Record(Strict):
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
     temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: int = Field(ge=0, le=5000)
     interval_s: int = Field(ge=60, le=86400)
     error: Literal["", "sensor_crc", "sensor_io"] = ""
 
     @model_validator(mode="after")
     def coherent(self):
+        if not valid_battery_mv(self.battery_mv):
+            raise ValueError("Недопустимое напряжение аккумулятора")
         if (self.time_quality == "unknown") != (self.measured_at is None):
             raise ValueError("Качество времени не соответствует временной метке")
         if not self.error and self.temperature is None:
@@ -92,14 +102,14 @@ class Record(Strict):
 
 
 class Sync(Strict):
-    model: Literal["c3-sht40-v1"]
+    model: SensorModel
     sensor_type: SensorType = "sht4x"
     firmware: str = Field(pattern=r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
     records: list[Record] = Field(max_length=100)
     next_seq: int = Field(ge=1, le=9007199254740991)
     lost: int = Field(ge=0, le=9007199254740991)
     rssi: int = Field(ge=-127, le=0)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: int = Field(ge=0, le=5000)
     config_version: int = Field(ge=0)
     boots: int = Field(ge=0)
     ota_failures: int = Field(default=0, ge=0)
@@ -111,6 +121,11 @@ class Sync(Strict):
 
     @model_validator(mode="after")
     def sequence(self):
+        voltages = [self.battery_mv, *(record.battery_mv for record in self.records)]
+        if self.model == ESP01_MODEL and (self.sensor_type != "sht4x" or any(voltages)):
+            raise ValueError("ESP-01S поддерживает SHT4x и передаёт неизвестное напряжение")
+        if self.model == MODEL and not all(2000 <= mv <= 5000 for mv in voltages):
+            raise ValueError("Недопустимое напряжение аккумулятора")
         if self.device_ack is None:
             if self.replay or self.device_lost_base is not None:
                 raise ValueError("Не указан подтверждённый номер журнала")
@@ -200,9 +215,9 @@ def router(require_admin):
         device = "tk-" + secrets.token_hex(8)
         with db.connect() as conn:
             check_room(conn, payload.room_id)
-            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at)
-                            VALUES(?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
-                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now()))
+            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model)
+                            VALUES(?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
+                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now(), payload.model))
             event(conn, device, "created", "Регистрация разрешена администратором")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
@@ -238,6 +253,8 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = get_device(conn, device)
+            if d["model"] == ESP01_MODEL and payload.measure_s > 3600:
+                raise HTTPException(422, "Интервал измерений ESP-01S не должен превышать одного часа")
             payload.version = json.loads(d["config"])["version"] + 1
             conn.execute("UPDATE sensor_devices SET config=? WHERE id=?", (payload.model_dump_json(), device))
             event(conn, device, "config", f"Ожидает доставки: версия {payload.version}")
@@ -251,6 +268,8 @@ def router(require_admin):
             if (not d["enabled"] or not d["enrollment_hash"] or d["enrollment_until"] < time.time()
                     or not hmac.compare_digest(d["enrollment_hash"], digest(payload.code))):
                 raise HTTPException(403, "Код недействителен; обратитесь к администратору")
+            if d["model"] != payload.model or (payload.model == ESP01_MODEL and payload.sensor_type != "sht4x"):
+                raise HTTPException(409, "Выберите код для этой модели датчика")
             if not conn.execute("SELECT 1 FROM rooms WHERE id=? AND active=1", (d["room_id"],)).fetchone():
                 raise HTTPException(403, "Помещение отключено")
             if d["hardware_id"] and d["hardware_id"] != payload.hardware_id:
@@ -277,8 +296,8 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
-            if payload.sensor_type != d["sensor_type"]:
-                raise HTTPException(409, "Тип датчика изменился. Настройте его заново.")
+            if payload.sensor_type != d["sensor_type"] or payload.model != d["model"]:
+                raise HTTPException(409, "Модель или тип датчика изменился. Зарегистрируйте его заново.")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
             ack = d["ack_seq"]
@@ -344,8 +363,8 @@ def router(require_admin):
                 event(conn, device, "device_error", payload.error)
             conn.execute("""INSERT INTO sensor_mqtt_outbox(device_id) VALUES(?) ON CONFLICT(device_id)
                          DO UPDATE SET generation=generation+1,next_retry=0""", (device,))
-            firmware = conn.execute("SELECT id,version,sha256,length(image) size FROM sensor_firmware WHERE id=?",
-                                    (d["target_firmware"],)).fetchone()
+            firmware = conn.execute("SELECT id,version,sha256,length(image) size FROM sensor_firmware WHERE id=? AND model=?",
+                                    (d["target_firmware"], d["model"])).fetchone()
             ota = (dict(firmware) if firmware and (payload.ota_generation != d["ota_generation"] or payload.ota_failures < 3)
                    and version_tuple(firmware["version"]) > version_tuple(payload.firmware) else None)
             if ota:
@@ -396,8 +415,10 @@ def router(require_admin):
         with db.connect() as conn:
             d = get_device(conn, device)
             if firmware_id is not None:
-                fw = conn.execute("SELECT version FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
-                if not fw or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
+                if d["model"] == ESP01_MODEL:
+                    raise HTTPException(422, "OTA ESP-01S 1 МБ пока не поддерживается. Используйте USB–UART.")
+                fw = conn.execute("SELECT version,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
+                if not fw or fw["model"] != d["model"] or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
                     raise HTTPException(422, "Выберите более новую версию")
             conn.execute("UPDATE sensor_devices SET target_firmware=?,ota_failures=0,ota_generation=ota_generation+1 WHERE id=?", (firmware_id, device))
             event(conn, device, "ota", f"Назначен образ {firmware_id}")
@@ -409,8 +430,8 @@ def router(require_admin):
             d = authenticate(conn, device, authorization)
             if d["target_firmware"] != firmware_id:
                 raise HTTPException(403, "Образ не назначен устройству")
-            fw = conn.execute("SELECT image FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
-            if not fw:
+            fw = conn.execute("SELECT image,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
+            if not fw or fw["model"] != d["model"]:
                 raise HTTPException(404, "Образ не найден")
             return Response(bytes(fw["image"]), media_type="application/octet-stream")
 
