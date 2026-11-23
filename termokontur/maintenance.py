@@ -1,18 +1,23 @@
 """SQLite online backups, validation, restore and retention maintenance."""
 from __future__ import annotations
 
-import os
+import logging
 import re
 import secrets
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+from threading import Lock
 
-from . import db, settings
+from . import db, migrations, settings
 
 NAME_PATTERN = re.compile(r"^termokontur-(?:manual|auto|import|pre-restore)-[0-9TZ]{16}-[0-9a-f]{12}\.sqlite3$")
 REQUIRED_TABLES = {"rooms", "readings", "settings", "admin_account", "max_bindings"}
-MAX_IMPORT_BYTES = 100 * 1024 * 1024
+MAX_IMPORT_BYTES = 1024**3
+_restore_lock = Lock()
+logger = logging.getLogger(__name__)
 
 def backup_dir() -> Path:
     folder = db.db_path().parent / "backups"
@@ -36,12 +41,13 @@ def backup_path(name: str) -> Path:
     return target
 
 def inspect(path: Path) -> None:
-    if path.stat().st_size > MAX_IMPORT_BYTES or path.stat().st_size < 4096:
-        raise ValueError("Размер копии не соответствует ограничениям")
+    if path.stat().st_size < 4096:
+        raise ValueError("Файл слишком мал для резервной копии SQLite")
     uri = f"{path.resolve().as_uri()}?mode=ro"
     try:
-        with sqlite3.connect(uri, uri=True, timeout=5) as conn:
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
+            migrations.read_version(conn)
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("Резервная копия повреждена")
             schema = conn.execute("SELECT name, type FROM sqlite_master").fetchall()
@@ -55,24 +61,24 @@ def inspect(path: Path) -> None:
     except sqlite3.DatabaseError as exc:
         raise ValueError("Невозможно прочитать SQLite-файл") from exc
 
+def _copy_database(source: Path, dest: Path) -> None:
+    uri = source.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=30)) as reader:
+        with closing(sqlite3.connect(dest, timeout=30)) as writer:
+            reader.backup(writer, pages=128, sleep=0.1)
+
+
 def create_backup(kind: str = "manual") -> dict:
-    filename = _filename(kind)
-    dest = backup_dir() / filename
-    source = sqlite3.connect(str(db.db_path()), timeout=30)
-    target = sqlite3.connect(str(dest), timeout=30)
+    dest = backup_dir() / _filename(kind)
+    with NamedTemporaryFile(dir=dest.parent, prefix=".backup-", delete=False) as temp:
+        staged = Path(temp.name)
     try:
-        with target:
-            source.backup(target, pages=128, sleep=0.1)
-    except Exception:
-        target.close()
-        dest.unlink(missing_ok=True)
-        raise
+        _copy_database(db.db_path(), staged)
+        inspect(staged)
+        staged.replace(dest)
     finally:
-        source.close()
-        target.close()
-    dest.chmod(0o600)
-    inspect(dest)
-    return {"name": filename, "size": dest.stat().st_size,
+        staged.unlink(missing_ok=True)
+    return {"name": dest.name, "size": dest.stat().st_size,
             "created_at": datetime.fromtimestamp(dest.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")}
 
 def list_backups() -> list[dict]:
@@ -88,26 +94,18 @@ def list_backups() -> list[dict]:
 def restore(name: str) -> dict:
     source_path = backup_path(name)
     inspect(source_path)
-    previous_epoch = 0
-    with db.connect() as conn:
-        row=conn.execute("SELECT session_epoch FROM admin_account WHERE id=1").fetchone()
-        previous_epoch=int(row["session_epoch"] if row else 0)
-    safeguard=create_backup("pre-restore")
-    try:
-        with sqlite3.connect(str(source_path), timeout=30) as source:
-            with sqlite3.connect(str(db.db_path()), timeout=30) as destination:
-                source.backup(destination, pages=128, sleep=0.1)
-        db.initialize()
-        with db.connect() as conn:
-            current=conn.execute("SELECT session_epoch FROM admin_account WHERE id=1").fetchone()
-            new_epoch=max(previous_epoch,int(current[0]))+1
-            conn.execute("UPDATE admin_account SET session_epoch=? WHERE id=1", (new_epoch,))
-        return {"restored": name, "safety_backup": safeguard["name"], "relogin_required": True}
-    except Exception:
-        with sqlite3.connect(str(backup_path(safeguard["name"])), timeout=30) as source:
-            with sqlite3.connect(str(db.db_path()), timeout=30) as destination:
-                source.backup(destination)
-        raise
+    with _restore_lock, TemporaryDirectory(dir=source_path.parent, prefix=".restore-") as workspace:
+        staged = Path(workspace) / "restore.sqlite3"
+        _copy_database(source_path, staged)
+        db.initialize(staged)
+        with db.connect() as live, db.connect(staged) as target:
+            previous = live.execute("SELECT session_epoch FROM admin_account WHERE id=1").fetchone()[0]
+            target.execute("UPDATE admin_account SET session_epoch=MAX(session_epoch,?)+1 WHERE id=1", (previous,))
+            target.execute("UPDATE sensor_devices SET restore_pending=1 WHERE token_hash IS NOT NULL")
+        safeguard = create_backup("pre-restore")
+        # SQLite applies the validated, migrated image in a single write.
+        _copy_database(staged, db.db_path())
+    return {"restored": name, "safety_backup": safeguard["name"], "relogin_required": True}
 
 def delete_backup(name: str) -> bool:
     backup_path(name).unlink()
@@ -134,16 +132,20 @@ def schedule() -> dict:
     if not (0<=days<=30 and 1<=keep<=100 and (retention==0 or 30<=retention<=3650)):
         raise ValueError("Неверные настройки обслуживания")
     made=None
-    backups=list_backups()
-    auto=[b for b in backups if "-auto-" in b["name"]]
+    auto = []
+    backup_error = False
     now=datetime.now(timezone.utc)
-    if days and (not auto or
-                 now - datetime.fromisoformat(auto[0]["created_at"]) >= timedelta(days=days)):
-        made=create_backup("auto")
-    backups=list_backups()
-    # Keep user-created copies; only rotate automatic backups.
-    for old in [b for b in backups if "-auto-" in b["name"]][keep:]:
-        delete_backup(old["name"])
+    try:
+        auto = [item for item in list_backups() if "-auto-" in item["name"]]
+        if days and (not auto or now - datetime.fromisoformat(auto[0]["created_at"]) >= timedelta(days=days)):
+            made = create_backup("auto")
+            auto.insert(0, made)
+        for old in auto[keep:]:
+            delete_backup(old["name"])
+        auto = auto[:keep]
+    except (OSError, ValueError, sqlite3.Error):
+        backup_error = True
+        logger.exception("Scheduled backup failed")
     if retention:
         prune_data(retention)
     else:
@@ -154,4 +156,20 @@ def schedule() -> dict:
         cutoff=(now-timedelta(days=45)).isoformat(timespec="seconds")
         conn.execute("DELETE FROM max_bind_events WHERE recorded_at<?", (cutoff,))
         conn.execute("DELETE FROM reminder_deliveries WHERE updated_at<?", (cutoff,))
-    return {"created":made["name"] if made else None, "automatic_backups":len(auto)}
+    # Scheduled digests use the durable MAX outbox and do not send HTTP here.
+    # A failure must not interrupt backups, retention or maintenance.
+    from . import report_schedule
+    try:
+        dispatched = report_schedule.queue_due()
+    except (ValueError, sqlite3.Error) as exc:
+        logger.warning("Report scheduling failed: %s", type(exc).__name__)
+        dispatched = {"queued": 0}
+    from . import sensor_monitor
+    try:
+        alerts = sensor_monitor.queue_alerts()
+    except (ValueError, sqlite3.Error):
+        logger.exception("Sensor health scheduling failed")
+        alerts = 0
+    return {"created": made["name"] if made else None,
+            "automatic_backups": len(auto), "backup_error": backup_error,
+            "report_digests_queued": dispatched["queued"], "sensor_alerts_queued": alerts}

@@ -71,8 +71,8 @@ def test_webhook_registration_and_secret(admin, monkeypatch):
             pass
         def json(self):
             return {"success": True}
-    from termokontur import app as app_module
-    monkeypatch.setattr(app_module.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    from termokontur.web import max_api
+    monkeypatch.setattr(max_api.httpx, "post", lambda *args, **kwargs: FakeResponse())
     url="https://school.example/api/max/webhook"
     assert admin.post("/api/settings/max-webhook",json={"url":url}).status_code == 409
     token="test-token-for-webhook-test-123"
@@ -106,7 +106,7 @@ def test_webhook_registration_and_secret(admin, monkeypatch):
     def fake_delete(*args, **kwargs):
         assert kwargs["params"]["url"]==url
         return FakeResponse()
-    monkeypatch.setattr(app_module.httpx,"delete",fake_delete)
+    monkeypatch.setattr(max_api.httpx,"delete",fake_delete)
     assert admin.post("/api/settings/max-polling",json={}).json()["max_mode"]=="polling"
     assert not settings.get("max_webhook_secret")
     assert admin.post("/api/max/webhook",json=message("not-active"),
@@ -148,11 +148,11 @@ def test_incomplete_event_is_not_acknowledged(client):
 
 
 def test_webhook_incomplete_event_returns_retryable_status(admin,monkeypatch):
-    from termokontur import app as app_module
+    from termokontur.web import max_api
     class Response:
         def raise_for_status(self): pass
         def json(self): return {"success":True}
-    monkeypatch.setattr(app_module.httpx,"post",lambda *args,**kwargs:Response())
+    monkeypatch.setattr(max_api.httpx,"post",lambda *args,**kwargs:Response())
     admin.put("/api/settings/max-token",json={"value":"this-is-a-valid-token-123456789"})
     admin.post("/api/settings/max-webhook",json={"url":"https://school.example/api/max/webhook"})
     import hashlib
@@ -194,7 +194,7 @@ def test_max_diagnostics_requires_login(client):
 
 
 def test_max_diagnostics_checks_remote_webhook_without_exposing_token(admin, monkeypatch):
-    from termokontur import app as app_module
+    from termokontur.web import max_api
     token = "test-max-token-diagnostics-123456789"
     url = "https://school.example/api/max/webhook"
     settings.set_secret("max_token", token)
@@ -217,7 +217,7 @@ def test_max_diagnostics_checks_remote_webhook_without_exposing_token(admin, mon
             return FakeResponse({"subscriptions": [{"url": u} for u in urls]})
         return fake_get
 
-    monkeypatch.setattr(app_module.httpx, "get", mock_api([url]))
+    monkeypatch.setattr(max_api.httpx, "get", mock_api([url]))
     response = admin.get("/api/max/diagnostics")
     assert response.status_code == 200
     assert response.json()["webhook_registered"] is True
@@ -226,14 +226,14 @@ def test_max_diagnostics_checks_remote_webhook_without_exposing_token(admin, mon
     assert "test-max-token" not in response.text
     assert "long-webhook-secret" not in response.text
 
-    monkeypatch.setattr(app_module.httpx, "get", mock_api([]))
+    monkeypatch.setattr(max_api.httpx, "get", mock_api([]))
     result = admin.get("/api/max/diagnostics").json()
     assert result["webhook_registered"] is False
     assert result["webhook_check_error"] is False
 
     def unavailable(*args, **kwargs):
         raise httpx.ConnectError("MAX unavailable")
-    monkeypatch.setattr(app_module.httpx, "get", unavailable)
+    monkeypatch.setattr(max_api.httpx, "get", unavailable)
     result = admin.get("/api/max/diagnostics").json()
     assert result["webhook_registered"] is None
     assert result["api_check_error"] is True
@@ -241,7 +241,7 @@ def test_max_diagnostics_checks_remote_webhook_without_exposing_token(admin, mon
 
 
 def test_max_diagnostics_detects_polling_conflict_and_worker_heartbeat(admin, monkeypatch):
-    from termokontur import app as app_module
+    from termokontur.web import max_api
     token = "test-max-token-diagnostics-123456789"
     settings.set_secret("max_token", token)
     db.set_state("max_worker_heartbeat", db.utc_now() + "|polling")
@@ -256,7 +256,7 @@ def test_max_diagnostics_detects_polling_conflict_and_worker_heartbeat(admin, mo
         if url.endswith("/me"):
             return Response({"is_bot": True, "username": "test_bot"})
         return Response({"subscriptions": active})
-    monkeypatch.setattr(app_module.httpx, "get", fake_get)
+    monkeypatch.setattr(max_api.httpx, "get", fake_get)
 
     result = admin.get("/api/max/diagnostics").json()
     assert result["worker_running"] is True
@@ -270,11 +270,11 @@ def test_max_diagnostics_detects_polling_conflict_and_worker_heartbeat(admin, mo
 
 
 def test_max_diagnostics_distinguishes_invalid_token(admin, monkeypatch):
-    from termokontur import app as app_module
+    from termokontur.web import max_api
     settings.set_secret("max_token", "test-invalid-token-1234567890")
     def unauthorized(url, **kwargs):
         return httpx.Response(401, request=httpx.Request("GET", url))
-    monkeypatch.setattr(app_module.httpx, "get", unauthorized)
+    monkeypatch.setattr(max_api.httpx, "get", unauthorized)
     result = admin.get("/api/max/diagnostics").json()
     assert result["token_valid"] is False
     assert result["webhook_registered"] is None

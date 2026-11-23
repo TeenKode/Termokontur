@@ -1,18 +1,38 @@
 """The managed server switches to standard port 443 when TLS is enabled."""
-from termokontur import server
+from contextlib import nullcontext
 from types import SimpleNamespace
 
+import pytest
 
-def test_health_targets_include_new_and_legacy_endpoints():
-    assert server.health_targets(False)[0] == ("http", 8092)
-    assert server.health_targets(True)[0] == ("https", 443)
-    assert ("https", 8092) in server.health_targets(True)
+from termokontur import server
+
+
+def test_healthcheck_probes_legacy_https_without_opening_database(monkeypatch):
+    called = []
+
+    def probe(url, *, timeout, context):
+        called.append(url)
+        if url != "https://127.0.0.1:8092/health":
+            raise OSError("no listener")
+        return nullcontext(SimpleNamespace(status=200))
+
+    def unexpected():
+        pytest.fail("Healthcheck must only probe the running application")
+
+    monkeypatch.setattr(server.db, "initialize", unexpected)
+    monkeypatch.setattr(server.tls, "server_kwargs", unexpected)
+    monkeypatch.setattr(server, "urlopen", probe)
+    monkeypatch.setattr(server.sys, "argv", ["termokontur.server", "--healthcheck"])
+    with pytest.raises(SystemExit) as exit_status:
+        server.main()
+    assert exit_status.value.code == 0
+    assert called == ["http://127.0.0.1:8092/health", "https://127.0.0.1:443/health",
+                      "https://127.0.0.1:8092/health"]
 
 
 def _server_options(monkeypatch, ssl_options):
     called = {}
     monkeypatch.setattr(server.db, "initialize", lambda: None)
-    monkeypatch.setattr(server.settings, "bootstrap", lambda: None)
     monkeypatch.setattr(server.tls, "server_kwargs", lambda: ssl_options)
     monkeypatch.setattr(server.uvicorn, "run", lambda *args, **kwargs: called.update(kwargs))
     monkeypatch.setattr(server.sys, "argv", ["termokontur.server"])

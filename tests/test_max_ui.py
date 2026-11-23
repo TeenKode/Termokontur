@@ -150,7 +150,7 @@ def test_max_delivery_callbacks_edit_message_and_regular_replies_have_menu(clien
     assert queued[0]["callback_id"] == "cb-ack"
     assert queued[0]["origin_mid"] == "botmsg1"
     buttons = json.loads(queued[0]["buttons_json"])[0]["payload"]["buttons"]
-    assert buttons[0][0]["text"] == "Отправить за сегодня"
+    assert buttons[0][0]["text"] == "🌡️ Отправить за сегодня"
 
     class Client:
         def __init__(self):
@@ -472,3 +472,27 @@ def test_manual_max_deviation_pushes_once_to_other_assigned_colleagues(client):
     assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]
     max_ui._write("7", room["id"], "c", "15", "max:callback:abnormal-3")
     assert sorted(x["user_id"] for x in max_delivery.pending()) == ["7", "8"]
+
+
+def test_bot_emoji_cues_preserve_callback_payloads_and_warnings(client):
+    room = _room()
+    _bind(7, room)
+    buttons = max_ui.menu_buttons("7")
+    assert [buttons[i][0]["payload"] for i in range(2)] == ["tk:send", "tk:change"]
+    assert buttons[0][0]["text"] == "🌡️ Отправить за сегодня"
+    assert buttons[1][0]["text"] == "✏️ Изменить за сегодня"
+    assert buttons[2][0]["text"].startswith("📊 ")
+    assert buttons[2][1]["text"].startswith("🏫 ")
+
+    selection = process_update(_callback(7, "tk:send", "emoji-select"))[1]
+    assert selection.startswith("🌡️ ")
+    day = daily.daily_bounds()[0].strftime("%Y%m%d")
+    saved = process_update(_callback(7, f"tk:value:s:{room['id']}:{day}:17", "emoji-save"))[1]
+    assert saved.startswith("✅ Сохранено:")
+    assert "⚠️ Температура вне нормы" in saved
+    assert len(db.recent_readings()) == 1
+
+    status = process_update(_callback(7, "tk:today", "emoji-today"))[1]
+    assert status.startswith("📅 Показания за ")
+    assert "✅ 17 °C" in status
+    assert "⏰ " in daily.reminder_text([room])

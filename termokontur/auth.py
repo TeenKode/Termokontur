@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
 
 from . import db
@@ -26,7 +27,8 @@ def bootstrap() -> None:
         salt = secrets.token_bytes(24)
         conn.execute(
             """INSERT INTO admin_account(id, salt, password_hash, session_epoch)
-               VALUES (1, ?, ?, 1)""",
+               VALUES (1, ?, ?, 1)
+               ON CONFLICT(id) DO NOTHING""",
             (salt.hex(), _digest(initial, salt)),
         )
 
@@ -62,3 +64,58 @@ def change_password(old: str, new: str) -> bool:
             (salt.hex(), _digest(new, salt)),
         )
     return True
+
+
+def building_account(username: str) -> dict | None:
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM building_accounts WHERE username=?", (username,)).fetchone()
+        return dict(row) if row else None
+
+
+def check_building_password(username: str, password: str) -> dict | None:
+    account = building_account(username)
+    salt = bytes.fromhex(account["salt"]) if account else bytes(24)
+    actual = _digest(password, salt)
+    if account and hmac.compare_digest(actual, account["password_hash"]):
+        return account
+    return None
+
+
+def list_building_accounts() -> list[dict]:
+    with db.connect() as conn:
+        return [dict(row) for row in conn.execute("""
+            SELECT username,building,max_user_id FROM building_accounts ORDER BY building,username
+        """)]
+
+
+def save_building_account(username: str, building: str, password: str | None, max_user_id: str | None) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]{2,31}", username):
+        raise ValueError("Логин должен содержать от 3 до 32 латинских букв, цифр, точек, дефисов или подчёркиваний")
+    if password is not None and not 8 <= len(password) <= 256:
+        raise ValueError("Пароль должен содержать от 8 до 256 символов")
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM rooms WHERE building=?", (building,)).fetchone():
+            raise ValueError("Выберите существующий корпус")
+        if max_user_id and not conn.execute("SELECT 1 FROM max_users WHERE user_id=?", (max_user_id,)).fetchone():
+            raise ValueError("Пользователь должен сначала открыть бота MAX")
+        current = conn.execute("SELECT salt,password_hash FROM building_accounts WHERE username=?", (username,)).fetchone()
+        if password is None:
+            if not current:
+                raise ValueError("Укажите пароль новой учётной записи")
+            salt, digest = current["salt"], current["password_hash"]
+        else:
+            new_salt = secrets.token_bytes(24)
+            salt, digest = new_salt.hex(), _digest(password, new_salt)
+        conn.execute("""
+            INSERT INTO building_accounts(username,building,salt,password_hash,session_key,max_user_id)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(username) DO UPDATE SET building=excluded.building,salt=excluded.salt,
+                password_hash=excluded.password_hash,session_key=excluded.session_key,max_user_id=excluded.max_user_id
+        """, (username, building, salt, digest, secrets.token_hex(16), max_user_id))
+    return {"username": username, "building": building, "max_user_id": max_user_id}
+
+
+def remove_building_account(username: str) -> bool:
+    with db.connect() as conn:
+        return bool(conn.execute("DELETE FROM building_accounts WHERE username=?", (username,)).rowcount)

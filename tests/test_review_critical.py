@@ -2,7 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
-from termokontur import db
+from termokontur import db, settings
 
 
 def test_code_is_consumed_by_at_most_one_user(client):
@@ -89,9 +89,9 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
     assert len(page.ids) == len(set(page.ids))
     assert set(page.targets) == set(page.views) == {
         "summary", "general", "notifications", "appearance", "max",
-        "sensors", "backups", "security", "tls", "updates"
+        "sensors", "backups", "security", "tls", "updates", "calendar", "access"
     }
-    assert len(page.views) == 10
+    assert len(page.views) == len(set(page.views))
     assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', js)) - set(page.ids))
     for form in (
         "general-settings-form", "reminders-settings-form",
@@ -107,7 +107,7 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
     assert "X-Api-Key" in html
 
 
-def test_max_polling_services_use_debian_ca_bundle():
+def test_max_polling_services_use_debian_ca_bundle(admin):
     """The Python httpx default bundle must not mask locally trusted MAX CAs."""
     root = Path(__file__).resolve().parents[1]
     for name in ("termokontur.service", "termokontur-max.service"):
@@ -119,5 +119,7 @@ def test_max_polling_services_use_debian_ca_bundle():
     assert 'id="switch-polling"' in html
     assert 'id="max-webhook-form"' not in html
     assert 'id="activate-webhook"' not in html
-    assert 'max_poll_last_error' in (root / "termokontur" / "app.py").read_text(encoding="utf-8")
+    settings.set_secret("max_token", None)
+    db.set_state("max_poll_last_error", "test connection error")
+    assert admin.get("/api/max/diagnostics").json()["poll_last_error"] == "test connection error"
     assert "tls_certificate" in js

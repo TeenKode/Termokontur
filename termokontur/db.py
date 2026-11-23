@@ -8,8 +8,14 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
 from pathlib import Path
+from time import monotonic, sleep
+from zoneinfo import ZoneInfo
+
+from . import migrations
+
+BUSY_TIMEOUT = 15
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -18,14 +24,13 @@ def db_path() -> Path:
     return Path(os.environ.get("TERMOKONTUR_DB", "./data/termokontur.sqlite3"))
 
 @contextmanager
-def connect():
-    path = db_path()
+def connect(path: Path | None = None):
+    path = path if path is not None else db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=15000")
+    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT)
     try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         yield conn
         conn.commit()
     except Exception:
@@ -34,161 +39,28 @@ def connect():
     finally:
         conn.close()
 
-def initialize() -> None:
-    with connect() as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            building TEXT NOT NULL,
-            floor TEXT NOT NULL DEFAULT '',
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'Кабинет',
-            min_temp REAL NOT NULL DEFAULT 18,
-            max_temp REAL NOT NULL DEFAULT 24,
-            active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            UNIQUE(building, name),
-            CHECK(min_temp < max_temp)
-        );
-        CREATE TABLE IF NOT EXISTS readings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            value REAL NOT NULL,
-            source TEXT NOT NULL CHECK(source IN ('manual', 'max', 'ha')),
-            reporter TEXT NOT NULL DEFAULT '',
-            observed_at TEXT NOT NULL,
-            external_id TEXT UNIQUE
-        );
-        CREATE INDEX IF NOT EXISTS readings_room_time ON readings(room_id, observed_at DESC);
-        CREATE TABLE IF NOT EXISTS pairing_codes (
-            digest TEXT PRIMARY KEY,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            expires_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_bindings (
-            user_id TEXT NOT NULL,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            PRIMARY KEY(user_id, room_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_users (
-            user_id TEXT PRIMARY KEY,
-            first_name TEXT NOT NULL DEFAULT '',
-            last_name TEXT NOT NULL DEFAULT '',
-            username TEXT NOT NULL DEFAULT '',
-            seen_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS app_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS admin_account (
-            id INTEGER PRIMARY KEY CHECK(id=1),
-            salt TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            session_epoch INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS max_inbox (
-            event_id TEXT PRIMARY KEY,
-            state TEXT NOT NULL CHECK(state IN ('processing', 'complete')),
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_outbox (
-            event_id TEXT PRIMARY KEY REFERENCES max_inbox(event_id),
-            user_id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            next_retry_at TEXT NOT NULL,
-            delivered_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS temperature_alert_state (
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            user_id TEXT NOT NULL,
-            last_status TEXT NOT NULL DEFAULT 'normal',
-            last_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(room_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_bind_events (
-            event_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            recorded_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS reminder_deliveries (
-            local_day TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('pending', 'sent', 'failed')),
-            attempts INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(local_day, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_user_sessions (
-            user_id TEXT PRIMARY KEY,
-            mode TEXT NOT NULL DEFAULT '',
-            room_id INTEGER,
-            page INTEGER NOT NULL DEFAULT 0,
-            local_day TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS max_reading_corrections (
-            event_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            reading_id INTEGER NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
-            old_value REAL NOT NULL,
-            new_value REAL NOT NULL,
-            old_observed_at TEXT NOT NULL,
-            corrected_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_outbox_ui (
-            event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
-            buttons_json TEXT,
-            callback_id TEXT
-        );
-        CREATE TABLE IF NOT EXISTS notification_batches (
-            id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            text TEXT NOT NULL,
-            recipients INTEGER NOT NULL,
-            silent INTEGER NOT NULL DEFAULT 0,
-            payload_hash TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS notification_recipients (
-            batch_id TEXT NOT NULL REFERENCES notification_batches(id) ON DELETE CASCADE,
-            user_id TEXT NOT NULL,
-            event_id TEXT NOT NULL UNIQUE,
-            delivered_at TEXT,
-            PRIMARY KEY(batch_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_menu_messages (
-            user_id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL
-        );
-        """)
-        # Add optional callback source ID without changing existing installations.
-        ui_columns = {
-            col["name"] for col in conn.execute("PRAGMA table_info(max_outbox_ui)")
-        }
-        if "origin_mid" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN origin_mid TEXT")
-        if "delivery_mode" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'menu'")
-        if "notify" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN notify INTEGER NOT NULL DEFAULT 1")
-        alert_columns = {
-            col["name"] for col in conn.execute("PRAGMA table_info(temperature_alert_state)")
-        }
-        if "last_reading_id" not in alert_columns:
-            conn.execute("ALTER TABLE temperature_alert_state ADD COLUMN last_reading_id INTEGER NOT NULL DEFAULT 0")
-        if "delivered_at" not in {
-            col["name"] for col in conn.execute("PRAGMA table_info(notification_recipients)")
-        }:
-            conn.execute("ALTER TABLE notification_recipients ADD COLUMN delivered_at TEXT")
 
-        from . import sensors
-        sensors.initialize(conn)
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    # Changing journal mode can report SQLITE_BUSY immediately when two
+    # processes open the same new database. Retry within the normal timeout.
+    deadline = monotonic() + BUSY_TIMEOUT
+    while True:
+        try:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            break
+        except sqlite3.OperationalError as exc:
+            if (exc.sqlite_errorcode & 0xFF) != sqlite3.SQLITE_BUSY or monotonic() >= deadline:
+                raise
+            sleep(0.05)
+    if mode != "wal":
+        raise sqlite3.OperationalError("Could not enable WAL for the Termokontur database")
+
+
+def initialize(path: Path | None = None) -> None:
+    with connect(path) as conn:
+        _enable_wal(conn)
+        migrations.apply(conn, utc_now())
+
 
 def room_list(active_only: bool = True) -> list[dict]:
     """Admin room catalog with MAX assignments, fetched without N+1 queries."""
@@ -261,6 +133,12 @@ def update_room(room_id: int, patch: dict) -> dict | None:
     if not patch:
         return room_get(room_id)
     with connect() as conn:
+        if "active" in patch:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""
+                INSERT INTO room_activity(room_id, changed_at, active)
+                SELECT id,?,? FROM rooms WHERE id=? AND active<>?
+            """, (utc_now(), int(patch["active"]), room_id, int(patch["active"])))
         sql = "UPDATE rooms SET " + ", ".join(f"{key}=?" for key in patch) + " WHERE id=?"
         conn.execute(sql, [*patch.values(), room_id])
     return room_get(room_id)
@@ -348,7 +226,7 @@ def reading_corrections(reading_id: int) -> list[dict] | None:
         return [dict(row) for row in rows]
 
 
-def dashboard(stale_hours: int = 26) -> dict:
+def dashboard(stale_hours: int = 26, building: str = "") -> dict:
     now = datetime.now(timezone.utc)
     result = []
     counts = {"normal": 0, "below": 0, "above": 0, "missing": 0}
@@ -361,8 +239,8 @@ def dashboard(stale_hours: int = 26) -> dict:
               SELECT id FROM readings WHERE room_id=p.id
               ORDER BY observed_at DESC, id DESC LIMIT 1
           )
-          WHERE p.active=1 ORDER BY p.building, p.name
-        """)
+          WHERE p.active=1 AND (?='' OR p.building=?) ORDER BY p.building, p.name
+        """, (building, building))
         for row in rows:
             item = dict(row)
             latest = item["last_at"]
@@ -551,6 +429,24 @@ def issue_code(room_id: int, validity_minutes: int = 30) -> str:
     """Issue a single code, revoking old unused ones for this room."""
     return issue_codes_bulk([room_id], validity_minutes)[0]["code"]
 
+
+def _bind_room(conn, user_id: str, room_id: int, stamp: str) -> None:
+    if conn.execute("INSERT OR IGNORE INTO max_bindings(user_id,room_id) VALUES (?,?)",
+                    (user_id, room_id)).rowcount:
+        conn.execute("INSERT INTO max_binding_periods(user_id,room_id,starts_at) VALUES (?,?,?)",
+                     (user_id, room_id, stamp))
+
+
+def _unbind_room(conn, user_id: str, room_id: int, stamp: str) -> bool:
+    deleted = conn.execute("DELETE FROM max_bindings WHERE user_id=? AND room_id=?", (user_id, room_id))
+    if deleted.rowcount:
+        conn.execute("""
+            UPDATE max_binding_periods SET ends_at=?
+            WHERE user_id=? AND room_id=? AND ends_at IS NULL
+        """, (stamp, user_id, room_id))
+    return bool(deleted.rowcount)
+
+
 def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | None:
     digest = hashlib.sha256(code.strip().upper().encode()).hexdigest()
     with connect() as conn:
@@ -577,8 +473,7 @@ def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | No
         deleted = conn.execute("DELETE FROM pairing_codes WHERE digest=?", (digest,))
         if deleted.rowcount != 1:
             return None
-        conn.execute("INSERT OR IGNORE INTO max_bindings(user_id, room_id) VALUES (?,?)",
-                     (str(user_id), found["room_id"]))
+        _bind_room(conn, str(user_id), found["room_id"], utc_now())
         if event_id:
             conn.execute(
                 "INSERT OR IGNORE INTO max_bind_events(event_id,user_id,room_id,recorded_at) VALUES(?,?,?,?)",
@@ -599,6 +494,11 @@ def remember_max_user(user: dict) -> None:
     def profile_field(name: str) -> str:
         value = user.get(name)
         return value.strip()[:120] if isinstance(value, str) else ""
+    first = profile_field("first_name")
+    # Old MAX payloads can contain only the deprecated display-name field.
+    # Use it as a display fallback without guessing/splitting a surname.
+    if not first and not profile_field("last_name"):
+        first = profile_field("name")
     with connect() as conn:
         conn.execute("""
             INSERT INTO max_users(user_id, first_name, last_name, username, seen_at)
@@ -608,8 +508,123 @@ def remember_max_user(user: dict) -> None:
               last_name=COALESCE(NULLIF(excluded.last_name, ''), max_users.last_name),
               username=COALESCE(NULLIF(excluded.username, ''), max_users.username),
               seen_at=excluded.seen_at
-        """, (user_id, profile_field("first_name"),
+        """, (user_id, first,
               profile_field("last_name"), profile_field("username"), utc_now()))
+
+
+def max_user_dialog_chat_id(user_id: str) -> str | None:
+    """Find a verified private-dialog ID previously received with a MAX event.
+
+    Never guess a chat ID from a MAX user ID. Old installations may not have
+    captured chat IDs yet; those users can send /start to refresh their profile.
+    """
+    with connect() as conn:
+        row = conn.execute("""
+            SELECT ui.chat_id
+            FROM max_outbox o JOIN max_outbox_ui ui ON ui.event_id=o.event_id
+            WHERE o.user_id=? AND ui.chat_id IS NOT NULL
+            ORDER BY o.rowid DESC LIMIT 1
+        """, (str(user_id),)).fetchone()
+    return str(row["chat_id"]) if row and row["chat_id"] else None
+
+
+def list_max_users() -> list[dict]:
+    """All MAX profiles observed by this bot, including users without rooms.
+
+    MAX does not provide a complete subscriber directory: a person appears
+    after their first verified private message/start/callback update.
+    """
+    with connect() as conn:
+        people = {
+            row["user_id"]: {**dict(row), "rooms": []}
+            for row in conn.execute("""
+                SELECT user_id, first_name, last_name, username, seen_at
+                FROM max_users
+            """)
+        }
+        for row in conn.execute("""
+            SELECT b.user_id, r.id, r.building, r.name, r.active
+            FROM max_bindings b JOIN rooms r ON r.id=b.room_id
+            ORDER BY r.building COLLATE NOCASE, r.name COLLATE NOCASE, r.id
+        """):
+            uid = row["user_id"]
+            profile = people.setdefault(uid, {
+                "user_id": uid, "first_name": "", "last_name": "",
+                "username": "", "seen_at": None, "rooms": [],
+            })
+            profile["rooms"].append({
+                "id": row["id"], "building": row["building"],
+                "name": row["name"], "active": bool(row["active"]),
+            })
+    return sorted(people.values(), key=lambda p: (
+        not bool(p["last_name"] or p["first_name"]),
+        p["last_name"].casefold(),
+        p["first_name"].casefold(),
+        p["username"].casefold(), p["user_id"],
+    ))
+
+
+def set_max_user_rooms(user_id: str, room_ids: list[int],
+                       notify: bool = False) -> dict:
+    """Atomically replace active-room bindings; preserve inactive assignments.
+
+    Optionally queue *one* MAX notification listing only newly assigned rooms.
+    Repeating the same operation never queues another notification.
+    """
+    chosen = list(dict.fromkeys(room_ids))
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        known = conn.execute("""
+            SELECT 1 FROM max_users WHERE user_id=?
+            UNION SELECT 1 FROM max_bindings WHERE user_id=?
+        """, (user_id, user_id)).fetchone()
+        if not known:
+            raise LookupError("Пользователь MAX не найден. Сначала он должен написать боту.")
+        available = {
+            row["id"]: dict(row) for row in conn.execute("""
+                SELECT id, building, name FROM rooms WHERE active=1
+                ORDER BY building COLLATE NOCASE, name COLLATE NOCASE
+            """)
+        }
+        if any(room_id not in available for room_id in chosen):
+            raise ValueError("Нельзя назначить несуществующее или отключённое помещение")
+        old = {row["room_id"] for row in conn.execute("""
+            SELECT b.room_id FROM max_bindings b
+            JOIN rooms r ON r.id=b.room_id
+            WHERE b.user_id=? AND r.active=1
+        """, (user_id,))}
+        added = [room_id for room_id in chosen if room_id not in old]
+        removed = [room_id for room_id in old if room_id not in chosen]
+        stamp = utc_now()
+        for room_id in removed:
+            _unbind_room(conn, user_id, room_id, stamp)
+        for room_id in added:
+            _bind_room(conn, user_id, room_id, stamp)
+        queued = False
+        if notify and added:
+            names = [f"• {available[room_id]['building']} / {available[room_id]['name']}"
+                     for room_id in added[:40]]
+            overflow = (f"\n…и ещё {len(added) - 40} помещений."
+                        if len(added) > 40 else "")
+            notice = ("🏫 Вам назначены кабинеты в системе «Термоконтур»:\n"
+                      + "\n".join(names) + overflow
+                      + "\n\nОткройте меню бота, чтобы передать показания температуры.")
+            now = utc_now()
+            key = "max-admin-assign:" + secrets.token_hex(16)
+            conn.execute("""
+                INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)
+            """, (key, now))
+            conn.execute("""
+                INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
+                VALUES(?,?,?,?)
+            """, (key, user_id, notice[:4000], now))
+            conn.execute("""
+                INSERT INTO max_outbox_ui(event_id,delivery_mode,notify)
+                VALUES(?,'notice',1)
+            """, (key,))
+            queued = True
+    return {"user_id": user_id, "room_ids": chosen, "added": added,
+            "removed": removed, "notification_queued": queued}
 
 
 def bound_rooms(user_id: str) -> list[dict]:
@@ -623,9 +638,7 @@ def bound_rooms(user_id: str) -> list[dict]:
 
 def unbind(user_id: str, room_id: int) -> bool:
     with connect() as conn:
-        cur = conn.execute("DELETE FROM max_bindings WHERE user_id=? AND room_id=?",
-                           (str(user_id), room_id))
-        return bool(cur.rowcount)
+        return _unbind_room(conn, str(user_id), room_id, utc_now())
 
 def get_state(key: str) -> str | None:
     with connect() as conn:

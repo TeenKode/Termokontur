@@ -75,7 +75,7 @@ def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -
             INSERT INTO notification_batches(id,created_at,text,recipients,silent,payload_hash)
             VALUES(?,?,?,?,?,?)
         """, (request_id, stamp, text, len(user_ids), int(silent), payload_hash))
-        rendered = "Термоконтур · Сообщение администрации\n\n" + text
+        rendered = "📣 Термоконтур · Сообщение администрации\n\n" + text
         for uid in user_ids:
             key = hashlib.sha256(f"admin:{request_id}:{uid}".encode()).hexdigest()
             conn.execute(
