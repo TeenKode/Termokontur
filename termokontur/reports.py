@@ -50,6 +50,7 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None)
     day_set = set(days)
     day_index = {name: index for index, name in enumerate(days)}
     with db.connect() as conn:
+        conn.execute("BEGIN")
         rooms = [dict(row) for row in conn.execute(
             """SELECT id, building, floor, name, min_temp, max_temp,
                       MIN(created_at, COALESCE(

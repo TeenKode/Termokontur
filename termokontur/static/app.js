@@ -7,6 +7,7 @@ let activeMaxCodes = [], issuedMaxCodes = [];
 let maxStaff = [], selectedMaxStaff = null;
 let reportsData = null, selectedReportSection = "coverage";
 let buildingScope = "";
+let panelOpened = false;
 const maxAssignmentRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
@@ -117,6 +118,7 @@ function enterLogin() {
   show("login-screen",true); show("app-root",false); $("password").value="";
 }
 function enterApp(session) {
+  panelOpened=true;
   buildingScope=session.building||"";
   for(const element of document.querySelectorAll("[data-admin-only]"))element.hidden=Boolean(buildingScope);
   if(buildingScope)$("panel-scope").textContent=buildingScope;
@@ -1023,8 +1025,9 @@ async function disableRoom(room) {
 $("login-form").addEventListener("submit",async event=>{
   event.preventDefault();$("login-error").textContent="";
   try{
-    await api("/api/login","POST",{username:$("login-name").value,password:$("password").value});
-    window.location.reload();
+    const session=await api("/api/login","POST",{username:$("login-name").value,password:$("password").value});
+    if(panelOpened)window.location.reload();
+    else{enterApp(session);await refresh();}
   }
   catch(error){$("login-error").textContent=error.message;}
 });

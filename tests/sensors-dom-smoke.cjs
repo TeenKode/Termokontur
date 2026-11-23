@@ -25,7 +25,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   const w=dom.window,d=w.document;w.fetch=fetchWithCookies;w.confirm=()=>true;w.scrollTo=()=>{};w.matchMedia=()=>({matches:false,addEventListener(){}});
   const ctx=new Proxy({measureText:()=>({width:50})},{get:(o,k)=>k in o?o[k]:()=>{}});w.HTMLCanvasElement.prototype.getContext=()=>ctx;
   w.addEventListener("error",e=>errors.push(String(e.error)));
-  const code=["theme.js","app.js","sensors.js"].map(f=>fs.readFileSync(path.join(root,"termokontur/static",f),"utf8")).join("\n");w.eval(code);
+  const code=["theme.js","app.js","school-calendar.js","building-accounts.js","sensors.js"].map(f=>fs.readFileSync(path.join(root,"termokontur/static",f),"utf8")).join("\n");w.eval(code);
   await until(()=>!d.getElementById("login-screen").hidden);
   d.getElementById("password").value="dom-test-password";
   d.getElementById("login-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
@@ -59,6 +59,21 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   assert.equal(d.querySelectorAll("#sensor-records tr").length,2);
   assert.equal(d.querySelector("#sensor-records tr").children[3].textContent,"—");
   w.termokonturTheme.setPreference("dark");assert.equal(d.documentElement.dataset.theme,"dark");
+  d.querySelector('[data-tab="settings"]').click();
+  d.querySelector('.settings-nav-button[data-settings-target="calendar"]').click();
+  await until(()=>d.querySelectorAll("#calendar-weekly fieldset").length===1);
+  d.getElementById("calendar-add").click();
+  const [first,last]=d.querySelectorAll("#calendar-exceptions input");
+  first.value="2030-01-01";last.value="2030-01-09";
+  d.getElementById("calendar-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
+  await until(()=>d.querySelector("#calendar-form [role=status]").textContent==="Календарь сохранён");
+  d.querySelector('.settings-nav-button[data-settings-target="access"]').click();
+  await until(()=>d.getElementById("building-account-building").options.length===2);
+  d.getElementById("building-account-name").value="responsible";
+  d.getElementById("building-account-building").value="Школа";
+  d.getElementById("building-account-password").value="dom-viewer-password";
+  d.getElementById("building-account-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
+  await until(()=>d.getElementById("building-account-list").textContent.includes("responsible"));
   assert.deepEqual(errors,[]);
   process.stdout.write("DOM/API smoke passed: login, creation, code, enrollment, ingest, detail, safe text, config queue and theme event. Layout not tested.\n");
  }finally{if(dom)dom.window.close();server.kill("SIGTERM");fs.rmSync(tmp,{recursive:true,force:true});}

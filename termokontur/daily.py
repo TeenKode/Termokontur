@@ -34,6 +34,7 @@ def summary(now: datetime | None = None, building: str = "") -> dict:
     day, start, end = daily_bounds(instant)
     calendar, weekdays = school_calendar.load()
     with db.connect() as conn:
+        conn.execute("BEGIN")
         rows = conn.execute("""
             SELECT p.id, p.building, p.floor, p.name, p.kind,
                    p.min_temp, p.max_temp,
