@@ -8,8 +8,14 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
 from pathlib import Path
+from time import monotonic, sleep
+from zoneinfo import ZoneInfo
+
+from . import migrations
+
+BUSY_TIMEOUT = 15
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -21,11 +27,10 @@ def db_path() -> Path:
 def connect(path: Path | None = None):
     path = path if path is not None else db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=15000")
+    conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT)
     try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         yield conn
         conn.commit()
     except Exception:
@@ -34,227 +39,28 @@ def connect(path: Path | None = None):
     finally:
         conn.close()
 
+
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    # Changing journal mode can report SQLITE_BUSY immediately when two
+    # processes open the same new database. Retry within the normal timeout.
+    deadline = monotonic() + BUSY_TIMEOUT
+    while True:
+        try:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            break
+        except sqlite3.OperationalError as exc:
+            if (exc.sqlite_errorcode & 0xFF) != sqlite3.SQLITE_BUSY or monotonic() >= deadline:
+                raise
+            sleep(0.05)
+    if mode != "wal":
+        raise sqlite3.OperationalError("Could not enable WAL for the Termokontur database")
+
+
 def initialize(path: Path | None = None) -> None:
     with connect(path) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            building TEXT NOT NULL,
-            floor TEXT NOT NULL DEFAULT '',
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'Кабинет',
-            min_temp REAL NOT NULL DEFAULT 18,
-            max_temp REAL NOT NULL DEFAULT 24,
-            active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            UNIQUE(building, name),
-            CHECK(min_temp < max_temp)
-        );
-        CREATE TABLE IF NOT EXISTS readings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            value REAL NOT NULL,
-            source TEXT NOT NULL CHECK(source IN ('manual', 'max', 'ha')),
-            reporter TEXT NOT NULL DEFAULT '',
-            observed_at TEXT NOT NULL,
-            external_id TEXT UNIQUE
-        );
-        CREATE INDEX IF NOT EXISTS readings_room_time ON readings(room_id, observed_at DESC);
-        CREATE TABLE IF NOT EXISTS room_activity (
-            id INTEGER PRIMARY KEY,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            changed_at TEXT NOT NULL,
-            active INTEGER NOT NULL CHECK(active IN (0,1))
-        );
-        CREATE INDEX IF NOT EXISTS room_activity_at ON room_activity(room_id,changed_at,id);
-        CREATE TABLE IF NOT EXISTS pairing_codes (
-            digest TEXT PRIMARY KEY,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            expires_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_bindings (
-            user_id TEXT NOT NULL,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            PRIMARY KEY(user_id, room_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_binding_periods (
-            id INTEGER PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            starts_at TEXT NOT NULL,
-            ends_at TEXT
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS binding_open_period
-            ON max_binding_periods(user_id,room_id) WHERE ends_at IS NULL;
-        CREATE INDEX IF NOT EXISTS binding_room_period ON max_binding_periods(room_id,starts_at,ends_at);
-        CREATE TABLE IF NOT EXISTS max_users (
-            user_id TEXT PRIMARY KEY,
-            first_name TEXT NOT NULL DEFAULT '',
-            last_name TEXT NOT NULL DEFAULT '',
-            username TEXT NOT NULL DEFAULT '',
-            seen_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS app_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS admin_account (
-            id INTEGER PRIMARY KEY CHECK(id=1),
-            salt TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            session_epoch INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS building_accounts (
-            username TEXT PRIMARY KEY,
-            building TEXT NOT NULL CHECK(building<>''),
-            salt TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            session_key TEXT NOT NULL,
-            max_user_id TEXT REFERENCES max_users(user_id) ON DELETE SET NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_inbox (
-            event_id TEXT PRIMARY KEY,
-            state TEXT NOT NULL CHECK(state IN ('processing', 'complete')),
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_outbox (
-            event_id TEXT PRIMARY KEY REFERENCES max_inbox(event_id),
-            user_id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            next_retry_at TEXT NOT NULL,
-            delivered_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS temperature_alert_state (
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            user_id TEXT NOT NULL,
-            last_status TEXT NOT NULL DEFAULT 'normal',
-            last_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(room_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_bind_events (
-            event_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            room_id INTEGER NOT NULL REFERENCES rooms(id),
-            recorded_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS reminder_deliveries (
-            local_day TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('pending', 'sent', 'failed')),
-            attempts INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(local_day, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_user_sessions (
-            user_id TEXT PRIMARY KEY,
-            mode TEXT NOT NULL DEFAULT '',
-            room_id INTEGER,
-            page INTEGER NOT NULL DEFAULT 0,
-            local_day TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS max_reading_corrections (
-            event_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            reading_id INTEGER NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
-            old_value REAL NOT NULL,
-            new_value REAL NOT NULL,
-            old_observed_at TEXT NOT NULL,
-            corrected_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS max_outbox_ui (
-            event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
-            buttons_json TEXT,
-            callback_id TEXT,
-            chat_id TEXT
-        );
-        CREATE TABLE IF NOT EXISTS notification_batches (
-            id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            text TEXT NOT NULL,
-            recipients INTEGER NOT NULL,
-            silent INTEGER NOT NULL DEFAULT 0,
-            payload_hash TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS notification_recipients (
-            batch_id TEXT NOT NULL REFERENCES notification_batches(id) ON DELETE CASCADE,
-            user_id TEXT NOT NULL,
-            event_id TEXT NOT NULL UNIQUE,
-            delivered_at TEXT,
-            PRIMARY KEY(batch_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS max_menu_messages (
-            user_id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS report_subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            building TEXT NOT NULL DEFAULT '',
-            frequency TEXT NOT NULL CHECK(frequency IN ('daily','weekly')),
-            send_time TEXT NOT NULL,
-            weekday INTEGER NOT NULL DEFAULT 0 CHECK(weekday BETWEEN 0 AND 6),
-            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS report_dispatches (
-            subscription_id INTEGER NOT NULL
-                REFERENCES report_subscriptions(id) ON DELETE CASCADE,
-            period_key TEXT NOT NULL,
-            event_id TEXT NOT NULL UNIQUE,
-            PRIMARY KEY(subscription_id, period_key)
-        );
-        CREATE TABLE IF NOT EXISTS report_waiting (
-            subscription_id INTEGER NOT NULL REFERENCES report_subscriptions(id) ON DELETE CASCADE,
-            period_key TEXT NOT NULL,
-            first_day TEXT NOT NULL,
-            last_day TEXT NOT NULL,
-            PRIMARY KEY(subscription_id,period_key)
-        );
-        """)
-        # Add optional callback source ID without changing existing installations.
-        ui_columns = {
-            col["name"] for col in conn.execute("PRAGMA table_info(max_outbox_ui)")
-        }
-        if "origin_mid" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN origin_mid TEXT")
-        if "delivery_mode" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'menu'")
-        if "notify" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN notify INTEGER NOT NULL DEFAULT 1")
-        if "chat_id" not in ui_columns:
-            conn.execute("ALTER TABLE max_outbox_ui ADD COLUMN chat_id TEXT")
-        alert_columns = {
-            col["name"] for col in conn.execute("PRAGMA table_info(temperature_alert_state)")
-        }
-        if "last_reading_id" not in alert_columns:
-            conn.execute("ALTER TABLE temperature_alert_state ADD COLUMN last_reading_id INTEGER NOT NULL DEFAULT 0")
-        if "delivered_at" not in {
-            col["name"] for col in conn.execute("PRAGMA table_info(notification_recipients)")
-        }:
-            conn.execute("ALTER TABLE notification_recipients ADD COLUMN delivered_at TEXT")
+        _enable_wal(conn)
+        migrations.apply(conn, utc_now())
 
-        conn.execute("""
-            INSERT INTO room_activity(room_id,changed_at,active)
-            SELECT id,?,0 FROM rooms r WHERE active=0 AND NOT EXISTS (
-              SELECT 1 FROM room_activity a WHERE a.room_id=r.id
-            )
-        """, (utc_now(),))
-        history_start = utc_now()
-        if conn.execute("INSERT OR IGNORE INTO app_state(key,value) VALUES('binding_history_since',?)",
-                        (history_start,)).rowcount:
-            conn.execute("""
-                INSERT INTO max_binding_periods(user_id,room_id,starts_at)
-                SELECT user_id,room_id,? FROM max_bindings
-            """, (history_start,))
-
-        from . import sensors
-        sensors.initialize(conn)
 
 def room_list(active_only: bool = True) -> list[dict]:
     """Admin room catalog with MAX assignments, fetched without N+1 queries."""

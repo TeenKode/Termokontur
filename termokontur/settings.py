@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import re
 import secrets
-import sqlite3
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import db
@@ -36,6 +35,14 @@ def bootstrap() -> None:
     with db.connect() as conn:
         if conn.execute("SELECT 1 FROM settings WHERE key='__bootstrapped'").fetchone():
             return
+        # Claim the bootstrap in the same transaction as the defaults. The
+        # web and MAX processes may both see an empty settings table.
+        claimed = conn.execute("""
+            INSERT INTO settings(key, value) VALUES ('__bootstrapped', '1')
+            ON CONFLICT(key) DO NOTHING
+        """)
+        if not claimed.rowcount:
+            return
         for key, (env, default) in ENV_DEFAULTS.items():
             value = os.environ.get(env, default)
             conn.execute(
@@ -46,7 +53,6 @@ def bootstrap() -> None:
             value = os.environ.get(env, "")
             if _valid_secret(value):
                 conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
-        conn.execute("INSERT INTO settings(key, value) VALUES ('__bootstrapped', '1')")
         # A generated token is not automatically provisioned when env was empty:
         # the administrator creates it from the panel only when required.
 

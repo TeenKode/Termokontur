@@ -1,7 +1,7 @@
 """MAX profile recovery for users who were bound before names were stored."""
 import httpx
 from termokontur import db, settings
-from termokontur import app as app_module
+from termokontur.web import max_api
 
 
 def remember(uid, first="", last="", username="", name=""):
@@ -46,7 +46,7 @@ def test_bound_user_refreshes_name_without_changing_rooms(admin, monkeypatch):
             },
         }, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr(app_module.httpx, "get", fake_get)
+    monkeypatch.setattr(max_api.httpx, "get", fake_get)
     response = admin.post("/api/max/users/4567/refresh")
     assert response.status_code == 200, response.text
     profile = response.json()["profile"]
@@ -77,7 +77,7 @@ def test_refresh_rejects_mismatched_identity(admin, monkeypatch):
                 "user_id": 12345, "first_name": "Чужой",
             },
         }, request=httpx.Request("GET", url))
-    monkeypatch.setattr(app_module.httpx, "get", fake_get)
+    monkeypatch.setattr(max_api.httpx, "get", fake_get)
     response = admin.post("/api/max/users/4567/refresh")
     assert response.status_code == 502
     assert db.list_max_users()[0]["first_name"] == ""
@@ -89,7 +89,7 @@ def test_refresh_max_api_failure_is_safe(admin, monkeypatch):
     settings.set_secret("max_token", "test-max-token-987654321")
     def fake_get(*args, **kwargs):
         raise httpx.ConnectError("PRIVATE NETWORK DETAILS")
-    monkeypatch.setattr(app_module.httpx, "get", fake_get)
+    monkeypatch.setattr(max_api.httpx, "get", fake_get)
     response = admin.post("/api/max/users/4567/refresh")
     assert response.status_code == 502
     assert "PRIVATE NETWORK DETAILS" not in response.text

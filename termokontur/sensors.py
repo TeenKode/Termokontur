@@ -129,60 +129,6 @@ class Sync(Strict):
         return self
 
 
-def initialize(conn):
-    # Additive migration: no rebuild of readings or changes to MAX/manual data.
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS sensor_migrations(version INTEGER PRIMARY KEY);
-    CREATE TABLE IF NOT EXISTS sensor_firmware(
-      id INTEGER PRIMARY KEY, version TEXT NOT NULL UNIQUE, model TEXT NOT NULL,
-      sha256 TEXT NOT NULL, image BLOB NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sensor_devices(
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms(id),
-      enabled INTEGER NOT NULL DEFAULT 1, enrollment_hash TEXT, enrollment_until INTEGER NOT NULL,
-      hardware_id TEXT UNIQUE, token_hash TEXT, config TEXT NOT NULL,
-      created_at TEXT NOT NULL, last_seen INTEGER, firmware TEXT NOT NULL DEFAULT '',
-      battery_mv INTEGER, rssi INTEGER, boots INTEGER NOT NULL DEFAULT 0,
-      lost INTEGER NOT NULL DEFAULT 0, ack_seq INTEGER NOT NULL DEFAULT 1,
-      config_version INTEGER NOT NULL DEFAULT 0, acknowledged_lost INTEGER NOT NULL DEFAULT 0, ota_failures INTEGER NOT NULL DEFAULT 0,
-      target_firmware INTEGER REFERENCES sensor_firmware(id), ota_generation INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
-    CREATE TABLE IF NOT EXISTS sensor_records(
-      device_id TEXT NOT NULL REFERENCES sensor_devices(id), seq INTEGER NOT NULL,
-      room_id INTEGER NOT NULL REFERENCES rooms(id), measured_at INTEGER, received_at INTEGER NOT NULL,
-      boot_id TEXT NOT NULL, uptime_s INTEGER NOT NULL, time_quality TEXT NOT NULL,
-      temperature REAL, humidity REAL, battery_mv INTEGER NOT NULL, interval_s INTEGER NOT NULL,
-      error TEXT NOT NULL, fingerprint TEXT NOT NULL,
-      PRIMARY KEY(device_id,seq));
-    CREATE INDEX IF NOT EXISTS sensor_records_time ON sensor_records(device_id,measured_at);
-    CREATE INDEX IF NOT EXISTS sensor_humidity_time ON sensor_records(measured_at,room_id)
-      WHERE humidity IS NOT NULL AND error='';
-    CREATE TABLE IF NOT EXISTS sensor_events(
-      id INTEGER PRIMARY KEY, device_id TEXT NOT NULL REFERENCES sensor_devices(id),
-      at INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sensor_alert_state(
-      device_id TEXT NOT NULL REFERENCES sensor_devices(id), user_id TEXT NOT NULL,
-      issue TEXT NOT NULL, event_id TEXT NOT NULL,
-      PRIMARY KEY(device_id,user_id,issue));
-    CREATE TABLE IF NOT EXISTS sensor_mqtt_outbox(
-      device_id TEXT PRIMARY KEY REFERENCES sensor_devices(id), generation INTEGER NOT NULL DEFAULT 1,
-      attempts INTEGER NOT NULL DEFAULT 0, next_retry INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
-    CREATE TABLE IF NOT EXISTS sensor_mqtt_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
-    INSERT OR IGNORE INTO sensor_migrations VALUES(1);
-    """)
-    # Web and MAX services can start together; serialize the additive migration.
-    conn.execute("BEGIN IMMEDIATE")
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(sensor_devices)")}
-    if "sensor_type" not in columns:
-        conn.execute("ALTER TABLE sensor_devices ADD COLUMN sensor_type TEXT NOT NULL DEFAULT 'sht4x'")
-    if "restore_pending" not in columns:
-        conn.execute("ALTER TABLE sensor_devices ADD COLUMN restore_pending INTEGER NOT NULL DEFAULT 0")
-    if "last_complete_sync" not in columns:
-        conn.execute("ALTER TABLE sensor_devices ADD COLUMN last_complete_sync INTEGER")
-        conn.execute("UPDATE sensor_devices SET last_complete_sync=last_seen")
-    conn.execute("INSERT OR IGNORE INTO sensor_migrations VALUES(2)")
-    from . import sensor_onboarding
-    sensor_onboarding.initialize(conn)
-
-
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 

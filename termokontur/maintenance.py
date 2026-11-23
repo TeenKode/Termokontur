@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from threading import Lock
 
-from . import db, settings
+from . import db, migrations, settings
 
 NAME_PATTERN = re.compile(r"^termokontur-(?:manual|auto|import|pre-restore)-[0-9TZ]{16}-[0-9a-f]{12}\.sqlite3$")
 REQUIRED_TABLES = {"rooms", "readings", "settings", "admin_account", "max_bindings"}
@@ -47,6 +47,7 @@ def inspect(path: Path) -> None:
     try:
         with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
+            migrations.read_version(conn)
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("Резервная копия повреждена")
             schema = conn.execute("SELECT name, type FROM sqlite_master").fetchall()
