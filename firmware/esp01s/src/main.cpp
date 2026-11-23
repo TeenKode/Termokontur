@@ -14,7 +14,7 @@ extern "C" {
 // SHT40: GPIO0 SDA / GPIO2 SCL; both pulled HIGH at reset.
 // This first hardware revision has no battery ADC or charging detection.
 static const char *MODEL = "esp01-sht40-v1";
-static const char *FW = "0.1.0";
+static constexpr char FW[] = TERMOKONTUR_FIRMWARE_VERSION;
 static const uint32_t MAGIC = 0x544B3031;
 static const size_t MAX_LOG_BYTES = 44 * 1024;
 static const uint8_t PAGE = 4;
@@ -32,11 +32,12 @@ struct __attribute__((packed)) Persist {
   uint32_t magic, generation, nextSeq, ackSeq, lost;
   uint32_t accountedThrough, lastServerTime, boots, crc;
 };
-struct __attribute__((packed)) Rtc {
+struct __attribute__((packed, aligned(4))) Rtc {
   uint32_t magic, wakeCount, epoch;
   uint64_t bootId;
   uint32_t crc;
 };
+static_assert(sizeof(Rtc) == 24, "unexpected RTC layout");
 struct __attribute__((packed)) Entry {
   uint32_t magic, seq, measuredAt, uptimeS;
   uint64_t bootId;

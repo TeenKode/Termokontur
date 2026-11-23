@@ -8,7 +8,7 @@ from termokontur import db, sensors
 def esp01(admin):
     room = db.create_room("Школа", "1", "ESP01", "Кабинет", 18, 24)
     response = admin.post("/api/sensors/devices",
-                          json={"name": "ESP-01S", "room_id": room["id"]})
+                          json={"name": "ESP-01S", "room_id": room["id"], "model": "esp01-sht40-v1"})
     assert response.status_code == 200, response.text
     created = response.json()
     enrollment = admin.post("/api/sensors/enroll", json={
@@ -55,9 +55,9 @@ def test_esp01_enroll_sync_and_unknown_battery(admin):
 def test_esp01_reject_model_spoof_and_bogus_voltage(admin):
     device, token = esp01(admin)
     bad = admin.post(f"/api/sensors/devices/{device}/sync",
-                     headers=token, json=packet(model="c3-sht40-v1"))
+                     headers=token, json=packet(model="c3-sht40-v1", battery_mv=3900))
     assert bad.status_code == 409
-    for wrong in (1, 1999, 5001):
+    for wrong in (1, 1999, 3900, 5001):
         bad = admin.post(f"/api/sensors/devices/{device}/sync",
                          headers=token, json=packet(battery_mv=wrong))
         assert bad.status_code == 422, bad.text

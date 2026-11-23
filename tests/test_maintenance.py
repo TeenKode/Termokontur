@@ -72,6 +72,24 @@ def test_retention_safety_and_scheduling(admin):
     assert not second["created"]
 
 
+def test_local_copy_not_capped_by_upload_limit(admin, monkeypatch):
+    monkeypatch.setattr(maintenance, "MAX_IMPORT_BYTES", 1024)
+    copy = maintenance.create_backup()
+    assert copy["size"] > maintenance.MAX_IMPORT_BYTES
+    assert maintenance.restore(copy["name"])["restored"] == copy["name"]
+
+
+def test_backup_failure_does_not_skip_reports(admin, monkeypatch):
+    from termokontur import report_schedule
+    def unavailable_backup(kind):
+        raise OSError("test storage absent")
+    monkeypatch.setattr(maintenance, "create_backup", unavailable_backup)
+    monkeypatch.setattr(report_schedule, "queue_due", lambda: {"queued": 1})
+    result = maintenance.schedule()
+    assert result["backup_error"]
+    assert result["report_digests_queued"] == 1
+
+
 def test_temperature_alerts_do_not_spam(client):
     r=db.create_room("Корпус","1","105","Кабинет",18,24)
     assert db.bind_code("42",db.issue_code(r["id"]))

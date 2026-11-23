@@ -25,7 +25,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications
+from . import auth, db, daily, settings, updates, max_delivery, maintenance, tls, notifications, reports, report_exports, report_schedule
+from . import school_calendar
 
 ROOT = Path(__file__).resolve().parent
 from . import __version__
@@ -33,7 +34,10 @@ from . import __version__
 # A content fingerprint changes whenever JavaScript OR CSS changes, even between
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
-    b"".join((ROOT / "static" / name).read_bytes() for name in ("app.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"))
+    b"".join((ROOT / "static" / name).read_bytes() for name in (
+        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs",
+        "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
+    ))
 ).hexdigest()[:16]
 
 app = FastAPI(title="Termokontur", version=__version__, docs_url=None, redoc_url=None)
@@ -117,9 +121,28 @@ def authenticated(request: Request) -> bool:
     except (ValueError, KeyError):
         return False
 
-def require_admin(request: Request):
-    if not authenticated(request):
-        raise HTTPException(401, "Войдите в панель")
+
+def _building_session(request: Request) -> dict | None:
+    cookie = request.cookies.get("tk_session", "")
+    if not cookie.startswith("v:") or len(cookie) > 256:
+        return None
+    try:
+        _, username, expires, nonce, mac = cookie.split(":")
+        if int(expires) <= time.time() or len(nonce) < 12:
+            return None
+    except ValueError:
+        return None
+    account = auth.building_account(username)
+    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)):
+        return account
+    return None
+
+
+def _building_signature(payload: str, account: dict) -> str:
+    return signature(f"{payload}:{auth.session_epoch()}:{account['session_key']}")
+
+
+def _verify_origin(request: Request) -> None:
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin:
@@ -127,8 +150,40 @@ def require_admin(request: Request):
             if origin not in (f"http://{host}", f"https://{host}"):
                 raise HTTPException(403, "Недопустимый источник запроса")
 
+
+def require_admin(request: Request):
+    if not authenticated(request):
+        raise HTTPException(401, "Войдите как администратор")
+    _verify_origin(request)
+
+
+def scoped_access(request: Request) -> str:
+    if authenticated(request):
+        scope = ""
+    else:
+        account = _building_session(request)
+        if not account:
+            raise HTTPException(401, "Войдите в панель")
+        scope = account["building"]
+    _verify_origin(request)
+    return scope
+
+
+def _scope_building(requested: str, allowed: str) -> str:
+    if allowed and requested and requested != allowed:
+        raise HTTPException(403, "Отчёт доступен только по вашему корпусу")
+    return allowed or requested
+
+
 class Login(BaseModel):
     password: str
+    username: str = Field(default="", max_length=32)
+
+
+class BuildingAccountIn(BaseModel):
+    building: str = Field(min_length=1, max_length=100)
+    password: str | None = Field(default=None, max_length=256)
+    max_user_id: str | None = Field(default=None, pattern=r"^[0-9]{1,20}$")
 
 class RoomIn(BaseModel):
     building: str = Field(min_length=1, max_length=100)
@@ -161,6 +216,11 @@ class BulkPairingCodesIn(BaseModel):
     validity_minutes: Literal[30, 120, 1440, 10080] = 1440
 
 
+class MaxUserRoomsIn(BaseModel):
+    room_ids: list[int] = Field(default_factory=list, max_length=250)
+    notify: bool = False
+
+
 class SettingsIn(BaseModel):
     organization_name: str = Field(min_length=1, max_length=100)
     timezone: str = Field(min_length=1, max_length=64)
@@ -174,6 +234,19 @@ class SettingsIn(BaseModel):
     retention_days: int = Field(default=0, ge=0, le=3650)
     alerts_enabled: bool = False
     alert_cooldown_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class ReportSubscriptionIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    building: str = Field(default="", max_length=100)
+    frequency: Literal["daily", "weekly"]
+    send_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    weekday: int = Field(default=0, ge=0, le=6)
+    enabled: bool = True
+
+
+class ReportSubscriptionEnabledIn(BaseModel):
+    enabled: bool
 
 
 class NotificationSendIn(BaseModel):
@@ -214,6 +287,7 @@ def index():
     # Never cache the HTML shell: each request must fetch the correct assets.
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     html = html.replace("__ASSET_FINGERPRINT__", _ASSET_FINGERPRINT)
+    html = html.replace("__APP_VERSION__", __version__)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 @app.get("/health")
@@ -222,7 +296,12 @@ def health():
 
 @app.get("/api/session")
 def session(request: Request):
-    return {"authenticated": authenticated(request)}
+    if authenticated(request):
+        return {"authenticated": True}
+    account = _building_session(request)
+    if account:
+        return {"authenticated": True, "building": account["building"]}
+    return {"authenticated": False}
 
 @app.post("/api/login")
 def login(payload: Login, request: Request, response: Response):
@@ -231,17 +310,24 @@ def login(payload: Login, request: Request, response: Response):
     failures = [t for t in FAILED_LOGINS.get(ip, []) if now - t < 300]
     if len(failures) >= 5:
         raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
-    if not auth.check_password(payload.password):
+    username = payload.username.strip().lower()
+    viewer = auth.check_building_password(username, payload.password) if username else None
+    if (username and not viewer) or (not username and not auth.check_password(payload.password)):
         failures.append(now)
         FAILED_LOGINS[ip] = failures
         raise HTTPException(401, "Неверный пароль")
     FAILED_LOGINS.pop(ip, None)
-    response.set_cookie("tk_session", session_cookie(), httponly=True, samesite="strict",
+    if viewer:
+        session_data = f"v:{username}:{int(time.time()) + 8 * 3600}:{secrets.token_urlsafe(18)}"
+        cookie = f"{session_data}:{_building_signature(session_data, viewer)}"
+    else:
+        cookie = session_cookie()
+    response.set_cookie("tk_session", cookie, httponly=True, samesite="strict",
                         secure=(os.getenv("TERMOKONTUR_SECURE_COOKIE") == "1" or request.url.scheme == "https"),
                         max_age=8 * 3600, path="/")
-    return {"ok": True}
+    return {"ok": True, "building": viewer["building"]} if viewer else {"ok": True}
 
-@app.post("/api/logout", dependencies=[Depends(require_admin)])
+@app.post("/api/logout", dependencies=[Depends(scoped_access)])
 def logout(response: Response):
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True}
@@ -626,8 +712,10 @@ def restore_backup(payload: RestoreBackupIn, response: Response):
 @app.post("/api/backups/import", dependencies=[Depends(require_admin)])
 async def import_backup(request: Request):
     length = request.headers.get("content-length")
-    if length is not None and (not length.isdigit() or int(length) > maintenance.MAX_IMPORT_BYTES):
-        raise HTTPException(413, "Максимальный размер файла — 100 МБ")
+    limit = maintenance.MAX_IMPORT_BYTES
+    too_large = f"Максимальный размер загружаемой копии — {limit:,} байт".replace(",", " ")
+    if length is not None and (not length.isdigit() or len(length) > 20 or int(length) > limit):
+        raise HTTPException(413, too_large)
     destination = maintenance.backup_dir()
     temp_path = None
     try:
@@ -637,11 +725,11 @@ async def import_backup(request: Request):
             size = 0
             async for chunk in request.stream():
                 size += len(chunk)
-                if size > maintenance.MAX_IMPORT_BYTES:
-                    raise HTTPException(413, "Максимальный размер файла — 100 МБ")
+                if size > limit:
+                    raise HTTPException(413, too_large)
                 tmp.write(chunk)
         temp_path.chmod(0o600)
-        maintenance.inspect(temp_path)
+        await asyncio.to_thread(maintenance.inspect, temp_path)
         name = maintenance._filename("import")
         temp_path.rename(destination / name)
         return {"name": name, "size": size}
@@ -665,24 +753,127 @@ def prune_readings(payload: RestoreBackupIn):
     return {"deleted": result["readings"], "backup": snapshot["name"]}
 
 
-@app.get("/api/dashboard", dependencies=[Depends(require_admin)])
-def dashboard():
-    return db.dashboard(int(settings.get("stale_hours", "26")))
+@app.get("/api/dashboard")
+def dashboard(scope: str = Depends(scoped_access)):
+    return db.dashboard(int(settings.get("stale_hours", "26")), scope)
 
-@app.get("/api/dashboard/history", dependencies=[Depends(require_admin)])
+@app.get("/api/dashboard/history")
 def dashboard_history(days: int = Query(14, ge=7, le=90),
-                      building: str = Query("", max_length=100)):
+                      building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
     """Calendar-day aggregates; each cabinet counts once per day."""
     if days not in (7, 14, 30, 90):
         raise HTTPException(422, "Выберите период: 7, 14, 30 или 90 дней")
     return db.dashboard_history(
-        days=days, building=building, timezone_name=settings.get("timezone", "UTC")
+        days=days, building=_scope_building(building, scope), timezone_name=settings.get("timezone", "UTC")
     )
 
 
-@app.get("/api/daily", dependencies=[Depends(require_admin)])
-def daily_report():
-    return daily.summary()
+@app.get("/api/daily")
+def daily_report(scope: str = Depends(scoped_access)):
+    return daily.summary(building=scope)
+
+
+@app.get("/api/school-calendar", dependencies=[Depends(require_admin)])
+def calendar_settings():
+    calendar, weekdays = school_calendar.load()
+    return {**calendar.model_dump(), "default_weekdays": sorted(weekdays), "buildings": school_calendar.buildings()}
+
+
+@app.put("/api/school-calendar", dependencies=[Depends(require_admin)])
+def save_calendar(payload: school_calendar.Calendar):
+    try:
+        school_calendar.save(payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return calendar_settings()
+
+
+@app.get("/api/building-accounts", dependencies=[Depends(require_admin)])
+def building_accounts():
+    return {"accounts": auth.list_building_accounts(), "buildings": school_calendar.buildings()}
+
+
+@app.put("/api/building-accounts/{username}", dependencies=[Depends(require_admin)])
+def save_building_account(username: str, payload: BuildingAccountIn):
+    try:
+        return auth.save_building_account(username.lower(), **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/api/building-accounts/{username}", dependencies=[Depends(require_admin)])
+def delete_building_account(username: str):
+    if not auth.remove_building_account(username):
+        raise HTTPException(404, "Учётная запись не найдена")
+    return {"ok": True}
+
+def _report_snapshot(start: str, end: str, building: str) -> dict:
+    try:
+        return reports.build(start, end, building)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/reports")
+def get_report(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    return JSONResponse(_report_snapshot(start, end, _scope_building(building, scope)),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/reports/export.xlsx")
+def export_report_excel(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    report = _report_snapshot(start, end, _scope_building(building, scope))
+    return Response(
+        content=report_exports.workbook(report),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="termokontur-report-{start}-{end}.xlsx"',
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/reports/export.pdf")
+def export_report_pdf(start: str, end: str, building: str = Query("", max_length=100), scope: str = Depends(scoped_access)):
+    report = _report_snapshot(start, end, _scope_building(building, scope))
+    try:
+        content = report_exports.pdf(report)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(
+        content=content, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="termokontur-report-{start}-{end}.pdf"',
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/reports/subscriptions", dependencies=[Depends(require_admin)])
+def get_report_subscriptions():
+    return JSONResponse(report_schedule.subscriptions(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/reports/subscriptions", dependencies=[Depends(require_admin)], status_code=201)
+def create_report_subscription(payload: ReportSubscriptionIn):
+    if not settings.get("max_token", ""):
+        raise HTTPException(409, "Для автоматических отчётов сначала настройте токен MAX")
+    try:
+        return report_schedule.create(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.patch("/api/reports/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def change_report_subscription(subscription_id: int, payload: ReportSubscriptionEnabledIn):
+    if not report_schedule.set_enabled(subscription_id, payload.enabled):
+        raise HTTPException(404, "Расписание не найдено")
+    return {"ok": True, "enabled": payload.enabled}
+
+
+@app.delete("/api/reports/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def delete_report_subscription(subscription_id: int):
+    if not report_schedule.remove(subscription_id):
+        raise HTTPException(404, "Расписание не найдено")
+    return {"ok": True}
+
 
 @app.get("/api/rooms", dependencies=[Depends(require_admin)])
 def rooms(include_inactive: bool = False):
@@ -761,6 +952,69 @@ def patch_room(room_id: int, payload: RoomPatch):
         return db.update_room(room_id, patch)
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Кабинет с таким названием уже существует")
+
+@app.get("/api/max/users", dependencies=[Depends(require_admin)])
+def max_users():
+    return JSONResponse(db.list_max_users(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/max/users/{user_id}/refresh", dependencies=[Depends(require_admin)])
+def refresh_max_user_profile(user_id: str):
+    """Refresh an existing user's MAX profile using their verified dialog."""
+    if not user_id.isdecimal() or len(user_id) > 64:
+        raise HTTPException(404, "Пользователь MAX не найден")
+    users = db.list_max_users()
+    if not any(user["user_id"] == user_id for user in users):
+        raise HTTPException(404, "Пользователь MAX не найден")
+    chat_id = db.max_user_dialog_chat_id(user_id)
+    if chat_id is None:
+        raise HTTPException(
+            409, "Нет ID диалога. Попросите сотрудника отправить боту /start, затем обновите список."
+        )
+    token = settings.get("max_token", "") or ""
+    if not token:
+        raise HTTPException(409, "Сначала настройте токен MAX")
+    try:
+        response = httpx.get(
+            f"https://platform-api2.max.ru/chats/{chat_id}",
+            headers={"Authorization": token}, timeout=8,
+        )
+        response.raise_for_status()
+        chat = response.json()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise HTTPException(502, "Не удалось получить профиль из MAX. Повторите позже.") from exc
+    if not isinstance(chat, dict) or chat.get("type") != "dialog":
+        raise HTTPException(502, "MAX не вернул данные личного диалога")
+    profile = chat.get("dialog_with_user")
+    if (not isinstance(profile, dict) or profile.get("is_bot")
+            or str(profile.get("user_id")) != user_id):
+        raise HTTPException(502, "MAX не подтвердил профиль выбранного пользователя")
+    if not any(isinstance(profile.get(k), str) and profile[k].strip()
+               for k in ("first_name", "last_name", "name", "username")):
+        raise HTTPException(409, "MAX не передал имя пользователя. Попросите его проверить профиль.")
+    db.remember_max_user(profile)
+    return JSONResponse(
+        {"ok": True, "profile": next(
+            user for user in db.list_max_users() if user["user_id"] == user_id
+        )},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.put("/api/max/users/{user_id}/rooms", dependencies=[Depends(require_admin)])
+def assign_max_user_rooms(user_id: str, payload: MaxUserRoomsIn):
+    if not user_id.isdecimal() or len(user_id) > 64:
+        raise HTTPException(404, "Пользователь MAX не найден")
+    if payload.notify and not settings.get("max_token", ""):
+        raise HTTPException(409, "Для уведомления сначала настройте токен MAX")
+    try:
+        response = db.set_max_user_rooms(user_id, payload.room_ids, notify=payload.notify)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse(response, headers={"Cache-Control": "no-store"})
+
 
 @app.get("/api/max/pairing-codes", dependencies=[Depends(require_admin)])
 def active_max_codes():

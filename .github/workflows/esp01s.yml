@@ -6,12 +6,14 @@ on:
     paths:
       - "firmware/esp01s/**"
       - "termokontur/sensors.py"
+      - "termokontur/__init__.py"
       - "tests/test_esp01.py"
       - ".github/workflows/esp01s.yml"
   pull_request:
     paths:
       - "firmware/esp01s/**"
       - "termokontur/sensors.py"
+      - "termokontur/__init__.py"
       - "tests/test_esp01.py"
       - ".github/workflows/esp01s.yml"
 
@@ -36,8 +38,14 @@ jobs:
       - run: pio run -d firmware/esp01s -e esp01s-1mb
       - name: Inspect built image
         run: |
-          test -s firmware/esp01s/.pio/build/esp01s-1mb/firmware.bin
-          wc -c firmware/esp01s/.pio/build/esp01s-1mb/firmware.bin
+          python - <<'PY'
+          from pathlib import Path
+          from runpy import run_path
+          version = run_path("termokontur/__init__.py")["__version__"]
+          image = Path("firmware/esp01s/.pio/build/esp01s-1mb/firmware.bin").read_bytes()
+          assert (version.encode() + bytes(1)) in image
+          print(f"ESP-01S {version}, {len(image)} bytes")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: termokontur-esp01s-1mb
