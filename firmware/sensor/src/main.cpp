@@ -49,6 +49,7 @@
 using sensor::Record;
 static constexpr gpio_num_t USB_PIN = GPIO_NUM_4;
 static constexpr char MODEL[] = "c3-sht40-v1";
+static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
 static bool net_started = false;
 static EventGroupHandle_t events;
@@ -431,6 +432,7 @@ static std::string post(const std::string &path, const std::string &body,
   return result;
 }
 static uint8_t time_quality = 0;
+static bool server_supports_replay = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -454,6 +456,7 @@ static bool sync_time() {
   state.saved_time = (int64_t)epoch;
   // An empty chain means use the built-in public CA bundle (TLS proxy).
   std::string certificate = root->valuestring;
+  server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -539,7 +542,7 @@ static cJSON *identity_payload() {
   add(j, "public_key", identity_public);
   add(j, "hardware_id", hardware_id());
   add(j, "sensor_type", sensor_type);
-  add(j, "firmware", FW_VERSION);
+  add(j, "firmware", firmware_version());
   return j;
 }
 static bool identity_authenticate() {
@@ -550,7 +553,7 @@ static bool identity_authenticate() {
   auto challenge = text(j, "challenge"), message = text(j, "message");
   cJSON_Delete(j);
   auto expected = "TK-AUTH-1\n" + challenge + "\n" + identity_fingerprint + "\n" +
-                  hardware_id() + "\n" + sensor_type + "\n" + FW_VERSION;
+                  hardware_id() + "\n" + sensor_type + "\n" + firmware_version();
   if (challenge.size() != 64 || message != expected) return false;
   auto signature = identity_sign(message);
   if (signature.empty()) return false;
@@ -612,7 +615,7 @@ static void ota(cJSON *meta, uint16_t mv) {
   int id = number(meta, "id"), size = number(meta, "size");
   auto part = esp_ota_get_next_update_partition(nullptr);
   if (!part || size < 256 || (size_t)size > part->size || sha.size() != 64 ||
-      ver == FW_VERSION)
+      ver == firmware_version())
     return;
   state.ota_failures++;
   if (!save_state())
@@ -693,16 +696,24 @@ static void ota(cJSON *meta, uint16_t mv) {
   }
   last_error = "ota_failed";
 }
-static bool sync(sensor::Journal &journal, uint16_t mv) {
-  if (!wifi_up())
-    return false;
-  if (!sync_time()) return false;
+static bool sync(sensor::Journal &journal, uint16_t mv,
+                 bool time_prepared = false) {
+  // Reuse the trusted server time and Wi-Fi connection obtained before the
+  // first measurement. Keep both operations within one radio-on budget.
+  if (!time_prepared) {
+    if (!wifi_up())
+      return false;
+    if (!sync_time())
+      return false;
+  }
   if (time(nullptr) < 1700000000) {
     last_error = "time_required";
     return false;
   }
   if (!enroll())
     return false;
+  uint64_t cursor = state.ack;
+  bool replaying = false;
   for (int page = 0; page < 64 && available(); page++) {
     if (!journal.scan())
       return false;
@@ -711,9 +722,15 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
           *array = cJSON_AddArrayToObject(j, "records");
     add(j, "model", MODEL);
     add(j, "sensor_type", sensor_type);
-    add(j, "firmware", FW_VERSION);
+    add(j, "firmware", firmware_version());
     num(j, "next_seq", state.next);
     num(j, "lost", lost);
+    if (server_supports_replay) {
+      num(j, "device_ack", state.ack);
+      num(j, "device_lost_base", state.lost_base);
+      if (replaying)
+        cJSON_AddBoolToObject(j, "replay", true);
+    }
     num(j, "battery_mv", mv);
     num(j, "config_version", cfg.version);
     num(j, "boots", state.boots);
@@ -722,10 +739,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
     add(j, "error", last_error);
     wifi_ap_record_t ap{};
     num(j, "rssi", esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : -127);
-    uint64_t max_sent = state.ack;
+    uint64_t max_sent = cursor;
     int count = 0;
     for (auto entry : journal.entries())
-      if (entry.seq >= state.ack && count < 32) {
+      if (entry.seq >= cursor && count < 32) {
         Record r;
         if (!journal.read(entry, r)) {
           cJSON_Delete(j);
@@ -766,17 +783,29 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
     j = cJSON_Parse(response.c_str());
     if (!j)
       return false;
+    auto rewind = cJSON_GetObjectItemCaseSensitive(j, "replay_from");
+    if (server_supports_replay && !replaying && cJSON_IsNumber(rewind) &&
+        sensor::valid_ack(rewind->valuedouble, 1, state.ack - 1)) {
+      cursor = rewind->valuedouble;
+      replaying = true;
+      cJSON_Delete(j);
+      continue;
+    }
     auto ack_node = cJSON_GetObjectItemCaseSensitive(j, "ack_seq");
     double ack_num = cJSON_IsNumber(ack_node) ? ack_node->valuedouble : 0;
-    if (!sensor::valid_ack(ack_num, state.ack, max_sent)) {
+    const uint64_t ack_limit = replaying && count == 0 ? state.ack : max_sent;
+    if (!sensor::valid_ack(ack_num, cursor, ack_limit)) {
       cJSON_Delete(j);
       last_error = "invalid_ack";
       return false;
     }
     uint64_t ack = ack_num;
     State old = state;
-    state.lost_base += journal.missing(state.ack, ack);
-    state.ack = ack;
+    if (ack > state.ack) {
+      state.lost_base += journal.missing(state.ack, ack);
+      state.ack = ack;
+    }
+    replaying = ack < state.ack;
     int64_t now = number(j, "time");
     if (now >= 1700000000 && now <= 4102444800) {
       timeval tv{(time_t)now, 0};
@@ -801,8 +830,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv) {
       return true;
     }
     cJSON_Delete(j);
-    if (count == 0 || ack == old.ack)
-      return true;
+    if (ack == cursor)
+      return !replaying;
+    cursor = ack;
   }
   return false;
 }
@@ -897,7 +927,7 @@ static void usb_setup_task(void *) {
           if (cmd == "hello") {
             num(out,"protocol",1); add(out,"public_key",identity_public);
             add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
-            add(out,"firmware",FW_VERSION); add(out,"sensor_type",sensor_type);
+            add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
           } else if (cmd == "sign") {
             auto signature=identity_sign(text(j,"message"));
@@ -1085,15 +1115,29 @@ extern "C" void app_main() {
                                              &ota_state) == ESP_OK &&
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
+  const bool measurement_due =
+      cfg.enabled &&
+      rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure;
+  // Hardware RESET and power loss invalidate RTC time. Obtain a validated
+  // HTTPS server timestamp before sampling so the first reading has a date.
+  // If offline or below the Wi-Fi threshold, preserve the untimed reading.
+  const bool clock_preflight = sensor::needs_clock_preflight(
+      time_quality != 0, measurement_due, mv >= cfg.wifi_min_mv);
+  bool time_prepared = false;
+  if (clock_preflight) {
+    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    if (wifi_up()) {
+      time_prepared = sync_time();
+    } else {
+      stop_network();
+    }
+  }
   Record measurement{};
   measurement.boot = rt.boot;
   measurement.uptime = rt.uptime + esp_timer_get_time() / 1000000;
   measurement.battery = mv;
   measurement.interval = cfg.measure_s;
-  bool measured =
-      cfg.enabled &&
-      rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure &&
-      sensor_read(measurement);
+  bool measured = measurement_due && sensor_read(measurement);
   if (charging()) {
     rt.charging = true;
     sleep_for(cfg.measure_s);
@@ -1126,8 +1170,11 @@ extern "C" void app_main() {
   }
   auto now = time(nullptr);
   if ((rt.next_send == 0 || now >= rt.next_send) && mv >= cfg.wifi_min_mv) {
-    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
-    bool ok = sync(journal, mv);
+    if (!clock_preflight)
+      deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    // Do not start another full Wi-Fi session if the time preflight failed.
+    bool ok = (!clock_preflight || time_prepared) &&
+              sync(journal, mv, time_prepared);
     stop_network();
     now = time(nullptr);
     if (ok) {
@@ -1140,6 +1187,8 @@ extern "C" void app_main() {
       rt.failures++;
       rt.next_send = now + backoff;
     }
+  } else if (clock_preflight) {
+    stop_network();
   }
   if (charging())
     rt.charging = true;

@@ -73,10 +73,14 @@ def interpret(user_id: str, command: str, event_id: str) -> str:
         lines = ["📅 Показания за " + snapshot["local_date"] + ":"]
         for room in selected:
             name = room["building"] + " / " + room["name"]
-            if room["daily_status"] == "missing":
+            if room["measured_temp"] is not None:
+                lines.append(f"✅ {room['measured_temp']:g} °C — " + name)
+            elif room["daily_status"] == "awaiting":
+                lines.append("📶 Ожидаем выгрузку датчика — " + name)
+            elif room["expected"]:
                 lines.append("⏳ Нет показаний — " + name)
             else:
-                lines.append(f"✅ {room['measured_temp']:g} °C — " + name)
+                lines.append("📅 По графику свободно — " + name)
         return "\n".join(lines) if len(lines) > 1 else "ℹ️ Все привязанные кабинеты отключены."
     if action == "/unbind":
         if len(parts) != 2 or not parts[1].isdigit():

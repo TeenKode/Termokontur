@@ -70,7 +70,7 @@ def test_one_claim_per_day_and_retry(client):
 
 
 def test_pending_groups_and_bot_sends_only_missing(client, monkeypatch):
-    settings.update({"timezone": "UTC"})
+    settings.update({"timezone": "UTC", "reminder_days": "0,1,2,3,4,5,6"})
     r1 = db.create_room("Старшая", "1", "101", "Кабинет", 18, 24)
     r2 = db.create_room("Старшая", "1", "102", "Кабинет", 18, 24)
     for room in (r1, r2):
@@ -105,6 +105,7 @@ def test_pending_groups_and_bot_sends_only_missing(client, monkeypatch):
 
 
 def test_two_colleagues_receive_reminder_only_until_one_reports(client, monkeypatch):
+    settings.update({"reminder_days": "0,1,2,3,4,5,6"})
     room = db.create_room("Корпус", "1", "102", "Кабинет", 18, 24)
     for user in ("7", "8"):
         assert db.bind_code(user, db.issue_code(room["id"]))
@@ -135,6 +136,7 @@ def test_two_colleagues_receive_reminder_only_until_one_reports(client, monkeypa
 
 
 def test_reminder_rechecks_snapshot_when_colleague_submits_before_send(client, monkeypatch):
+    settings.update({"reminder_days": "0,1,2,3,4,5,6"})
     room = db.create_room("Корпус", "1", "103", "Кабинет", 18, 24)
     for user in ("7", "8"):
         assert db.bind_code(user, db.issue_code(room["id"]))

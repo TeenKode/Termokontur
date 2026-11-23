@@ -66,8 +66,12 @@ def menu_buttons(uid: str) -> list[list[dict]]:
         for room in rooms[page * PER_PAGE:(page + 1) * PER_PAGE]:
             label = f"{room['building']} / {room['name']}"[:42]
             today = status.get(room["id"])
-            if today and today["daily_status"] != "missing":
+            if today and today["measured_temp"] is not None:
                 label += f" · ✅ {today['measured_temp']:g}°"
+            elif today and today["daily_status"] == "awaiting":
+                label += " · Ожидаем датчик"
+            elif today and not today["expected"]:
+                label += " · По графику свободно"
             else:
                 label += " · ⏳ Не сдано"
             rows.append([_btn(label, f"tk:room:{'s' if mode == 'send_room' else 'c'}:{room['id']}:{s['local_day']}")])

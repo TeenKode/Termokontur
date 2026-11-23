@@ -76,19 +76,22 @@ def workbook(report: dict) -> bytes:
         ("Кабинето-дней за период", report["summary"]["rooms_total"]),
         ("Кабинето-дней с измерениями", report["summary"]["rooms_measured"]),
         ("Без показаний", report["summary"]["missing"]),
+        ("Ожидают выгрузку", report["summary"]["awaiting"]),
         ("Сдача показаний, %", report["summary"]["coverage"]),
         ("Средняя температура, °C", report["summary"]["average"]),
+        ("Средняя влажность, %", report["summary"]["humidity_average"]),
         ("Отклонений по среднесуточной", report["summary"]["out_of_range"]),
         ("Измерений вне порогов", report["summary"]["deviations"]),
     ]
     for i, (label,value) in enumerate(info, 3):
         overview.write(i, 0, label)
         overview.write(i, 1, _cell(value))
-    overview.merge_range(18, 0, 21, 1, report["note"], note)
+    note_row = len(info) + 4
+    overview.merge_range(note_row, 0, note_row + 4, 1, report["note"], note)
 
     sheet("Сдача", [
         ("Дата","date",14), ("Кабинето-дней","rooms_total",19),
-        ("С измерениями","rooms_measured",18), ("Пропуски","missing",16),
+        ("С измерениями","rooms_measured",18), ("Пропуски","missing",16), ("Ожидают выгрузку","awaiting",20),
         ("Охват, %","coverage",14), ("Средняя, °C","average",16),
         ("Вне диапазона","out_of_range",19), ("Измерений","readings",16),
     ], report["daily"])
@@ -108,6 +111,9 @@ def workbook(report: dict) -> bytes:
         ("Вне нормы по среднему","out_of_range",25),
         ("Последнее измерение","measured_at",26),
         ("Кто передал","reporter_name",34),
+        ("Средняя влажность, %","humidity_average",23),
+        ("Мин. влажность, %","humidity_minimum",21),
+        ("Макс. влажность, %","humidity_maximum",21),
     ], report["room_daily"])
     sheet("Здания", [
         ("Дата","date",15), ("Здание","building",25),
@@ -115,6 +121,12 @@ def workbook(report: dict) -> bytes:
         ("Пропуски","missing",14), ("Охват, %","coverage",14),
         ("Средняя, °C","average",17), ("Минимум, °C","minimum",17),
         ("Максимум, °C","maximum",17), ("Вне нормы","out_of_range",16),
+    ], report["building_daily"])
+    sheet("Влажность", [
+        ("Дата","date",15), ("Здание","building",25),
+        ("Средняя влажность, %","humidity_average",23), ("Минимум, %","humidity_minimum",16),
+        ("Максимум, %","humidity_maximum",16), ("Кабинетов с данными","humidity_rooms",23),
+        ("Замеров","humidity_readings",15),
     ], report["building_daily"])
     staff_rows = [{**row, "rooms": "; ".join(row["rooms"])} for row in report["staff"]]
     sheet("Сотрудники", [
@@ -192,18 +204,20 @@ def pdf(report: dict) -> bytes:
         ("Кабинето-дней",s["rooms_total"]),
         ("С измерениями",s["rooms_measured"]),
         ("Не измерено",s["missing"]),
-        ("Охват",f"{s['coverage']:g}%"),
+        ("Ожидают выгрузку",s["awaiting"]),
+        ("Охват",f"{s['coverage']:g}%" if s["coverage"] is not None else "—"),
         ("Средняя температура",f"{s['average']:g} °C" if s["average"] is not None else "—"),
+        ("Средняя влажность",f"{s['humidity_average']:g} %" if s["humidity_average"] is not None else "—"),
         ("Дней кабинетов вне порогов",s["out_of_range"]),
         ("Отдельных измерений вне порогов",s["deviations"]),
     ], [342,181])
     add_table("Сравнение зданий",["Здание","Охват","Средняя","Пропуски","Откл."],[
-        (r["building"],f"{r['coverage']:g}%",
+        (r["building"],f"{r['coverage']:g}%" if r["coverage"] is not None else "—",
          f"{r['average']:g} °C" if r["average"] is not None else "—",
          r["missing"],r["out_of_range"]) for r in report["building_summary"]
     ],[205,75,95,77,71])
     add_table("Температура и сдача по кабинетам",["Здание / кабинет","Охват","Средняя","Пропуски","Откл."],[
-        (r["building"]+" / "+r["room"],f"{r['coverage']:g}%",
+        (r["building"]+" / "+r["room"],f"{r['coverage']:g}%" if r["coverage"] is not None else "—",
          f"{r['average']:g} °C" if r["average"] is not None else "—",
          r["days_missing"],r["out_of_range_days"]) for r in report["rooms"]
     ],[205,75,95,77,71])

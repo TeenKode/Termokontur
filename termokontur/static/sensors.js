@@ -25,6 +25,7 @@ async function refreshSensors(){
       card.append(name,el("p","muted",d.building+" · "+d.room_name),el("strong","",sensorStatus[d.status]||d.status),
         el("p","",(d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно")+" · "+sensorWhen(d.last_seen)),
         sensorButton("Открыть",()=>openSensor(d.id)));cards.append(card);
+      if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
     }
     $("sensor-state").textContent=devices.length?"Датчиков: "+devices.length+". Указано состояние последнего подключения.":"Подключите первый датчик по USB или по коду.";
     // Do not overwrite a partially edited MQTT form during refresh.

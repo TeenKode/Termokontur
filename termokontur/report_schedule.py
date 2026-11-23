@@ -25,6 +25,8 @@ def subscriptions() -> list[dict]:
                             'MAX ID ' || s.user_id) AS recipient,
                    (SELECT COUNT(*) FROM report_dispatches d
                     WHERE d.subscription_id=s.id) AS periods_queued,
+                   (SELECT COUNT(*) FROM report_waiting w
+                    WHERE w.subscription_id=s.id) AS periods_waiting,
                    (SELECT MAX(o.delivered_at) FROM report_dispatches d
                     JOIN max_outbox o ON o.event_id=d.event_id
                     WHERE d.subscription_id=s.id) AS last_delivered_at
@@ -63,6 +65,8 @@ def set_enabled(subscription_id: int, enabled: bool) -> bool:
     with db.connect() as conn:
         cursor = conn.execute("UPDATE report_subscriptions SET enabled=? WHERE id=?",
                               (int(enabled), subscription_id))
+        if not enabled:
+            conn.execute("DELETE FROM report_waiting WHERE subscription_id=?", (subscription_id,))
         return cursor.rowcount > 0
 
 
@@ -97,48 +101,55 @@ def queue_due(now: datetime | None = None) -> dict:
     for s in subscriptions():
         if not s["enabled"]:
             continue
+        with db.connect() as conn:
+            scopes = {row["period_key"]: (row["first_day"], row["last_day"], row["period_key"])
+                      for row in conn.execute("""
+                          SELECT * FROM report_waiting WHERE subscription_id=?
+                      """, (s["id"],))}
         scope = _scope(s, local)
-        if scope is None:
-            continue
-        start, end, period_key = scope
-        with db.connect() as conn:
-            if conn.execute(
-                "SELECT 1 FROM report_dispatches WHERE subscription_id=? AND period_key=?",
-                (s["id"], period_key),
-            ).fetchone():
-                continue
-        key = (start, end, s["building"])
-        if key not in cached:
-            cached[key] = reports.build(start, end, s["building"], now=instant)
-        message = reports.max_summary(cached[key])
-        event_id = hashlib.sha256(f"report:{s['id']}:{period_key}".encode()).hexdigest()
-        stamp = db.utc_now()
-        # May overlap a second worker; primary-key claim and outbox transaction
-        # make this safe under at-least-once schedule evaluation.
-        with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            exists = conn.execute("""
-                SELECT 1 FROM report_dispatches WHERE subscription_id=? AND period_key=?
-            """, (s["id"],period_key)).fetchone()
-            active = conn.execute("""
-                SELECT 1 FROM report_subscriptions WHERE id=? AND enabled=1
-            """, (s["id"],)).fetchone()
-            if exists or not active:
-                continue
-            conn.execute("""
-                INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)
-            """, (event_id,stamp))
-            conn.execute("""
-                INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
-                VALUES(?,?,?,?)
-            """, (event_id,s["user_id"],message,stamp))
-            conn.execute("""
-                INSERT INTO max_outbox_ui(event_id,delivery_mode,notify)
-                VALUES(?,'notice',1)
-            """, (event_id,))
-            conn.execute("""
-                INSERT INTO report_dispatches(subscription_id,period_key,event_id)
-                VALUES(?,?,?)
-            """, (s["id"],period_key,event_id))
-            queued += 1
+        if scope:
+            scopes[scope[2]] = scope
+        for start, end, period_key in sorted(scopes.values()):
+            queued += _queue_period(s, start, end, period_key, instant, cached)
     return {"queued": queued}
+
+
+def _queue_period(subscription, start, end, period_key, instant, cached) -> int:
+    sid = subscription["id"]
+    with db.connect() as conn:
+        if conn.execute("SELECT 1 FROM report_dispatches WHERE subscription_id=? AND period_key=?",
+                        (sid, period_key)).fetchone():
+            return 0
+    key = (start, end, subscription["building"])
+    if key not in cached:
+        cached[key] = reports.build(*key, now=instant)
+    report = cached[key]
+    if report["summary"]["sync_pending"]:
+        with db.connect() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO report_waiting(subscription_id,period_key,first_day,last_day)
+                SELECT id,?,?,? FROM report_subscriptions WHERE id=? AND enabled=1
+                AND NOT EXISTS (
+                    SELECT 1 FROM report_dispatches WHERE subscription_id=? AND period_key=?
+                )
+            """, (period_key, start, end, sid, sid, period_key))
+        return 0
+    message = reports.max_summary(report)
+    event_id = hashlib.sha256(f"report:{sid}:{period_key}".encode()).hexdigest()
+    stamp = db.utc_now()
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        claim = conn.execute("""
+            INSERT OR IGNORE INTO report_dispatches(subscription_id,period_key,event_id)
+            SELECT id,?,? FROM report_subscriptions WHERE id=? AND enabled=1
+        """, (period_key, event_id, sid))
+        if not claim.rowcount:
+            return 0
+        conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)",
+                     (event_id, stamp))
+        conn.execute("INSERT INTO max_outbox(event_id,user_id,text,next_retry_at) VALUES(?,?,?,?)",
+                     (event_id, subscription["user_id"], message, stamp))
+        conn.execute("INSERT INTO max_outbox_ui(event_id,delivery_mode,notify) VALUES(?,'notice',1)",
+                     (event_id,))
+        conn.execute("DELETE FROM report_waiting WHERE subscription_id=? AND period_key=?", (sid, period_key))
+    return 1

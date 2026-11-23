@@ -232,7 +232,7 @@ def test_bootstrap_uses_server_time_and_active_public_certificate(client, monkey
     for response in (client.get('/api/sensors/bootstrap', headers={'Origin':'http://192.168.4.1'}),
                      client.post('/api/sensors/bootstrap', json={})):
         assert response.status_code == 200
-        assert response.json() == {'time':1794700100, 'ca':'active-public-chain'}
+        assert response.json() == {'time':1794700100, 'ca':'active-public-chain', 'sync_replay':True}
         assert response.headers['cache-control'] == 'no-store'
         assert response.headers['access-control-allow-origin'] == '*'
         assert 'access-control-allow-credentials' not in response.headers

@@ -10,7 +10,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db, settings
+from . import db, school_calendar, sensor_monitor, settings
 
 
 def local_zone() -> ZoneInfo:
@@ -29,8 +29,10 @@ def daily_bounds(now: datetime | None = None) -> tuple[date, str, str]:
     return day, start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")
 
 
-def summary(now: datetime | None = None) -> dict:
-    day, start, end = daily_bounds(now)
+def summary(now: datetime | None = None, building: str = "") -> dict:
+    instant = now or datetime.now(timezone.utc)
+    day, start, end = daily_bounds(instant)
+    calendar, weekdays = school_calendar.load()
     with db.connect() as conn:
         rows = conn.execute("""
             SELECT p.id, p.building, p.floor, p.name, p.kind,
@@ -43,15 +45,26 @@ def summary(now: datetime | None = None) -> dict:
                 WHERE room_id=p.id AND observed_at>=? AND observed_at<?
                 ORDER BY observed_at DESC, id DESC LIMIT 1
             )
-            WHERE p.active=1
+            WHERE p.active=1 AND (?='' OR p.building=?)
             ORDER BY p.building, p.name
-        """, (start, end))
+        """, (start, end, building, building))
         rooms = [dict(row) for row in rows]
+        devices = sensor_monitor.by_room(conn, building)
     counts = {"measured": 0, "missing": 0, "out_of_range": 0}
+    expected = {building: calendar.for_building(building, weekdays)(day)
+                for building in {room["building"] for room in rooms}}
+    start_epoch, end_epoch = (int(datetime.fromisoformat(value).timestamp()) for value in (start, end))
+    now_epoch = int(instant.timestamp())
     for room in rooms:
+        room["expected"] = expected[room["building"]]
+        room["waiting_until"] = None
         if room["measured_at"] is None:
-            room["daily_status"] = "missing"
-            counts["missing"] += 1
+            if room["expected"]:
+                room["waiting_until"] = sensor_monitor.waiting_until(devices.get(room["id"], ()), start_epoch,
+                                                                   end_epoch, now_epoch)
+            room["daily_status"] = ("not_expected" if not room["expected"] else
+                                    "awaiting" if room["waiting_until"] else "missing")
+            counts["missing"] += room["daily_status"] == "missing"
         else:
             counts["measured"] += 1
             if not room["min_temp"] <= room["measured_temp"] <= room["max_temp"]:
@@ -92,19 +105,20 @@ def reminders_due(now: datetime | None = None) -> bool:
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     local = instant.astimezone(zone)
-    weekdays = settings.get("reminder_days", "0,1,2,3,4")
     try:
-        allowed = {int(value.strip()) for value in weekdays.split(",")}
         hour, minute = map(int, settings.get("reminder_time", "09:00").split(":"))
         window = int(settings.get("reminder_window_minutes", "120"))
     except ValueError as exc:
         raise ValueError("Invalid reminder settings") from exc
-    if not all(0 <= value <= 6 for value in allowed) or not (0 <= hour <= 23 and 0 <= minute <= 59) or not (1 <= window <= 240):
+    if not (0 <= hour <= 23 and 0 <= minute <= 59) or not (1 <= window <= 240):
         raise ValueError("Invalid reminder settings")
-    if local.weekday() not in allowed:
-        return False
     begin = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return begin <= local < begin + timedelta(minutes=window)
+    if not begin <= local < begin + timedelta(minutes=window):
+        return False
+    calendar, weekdays = school_calendar.load()
+    with db.connect() as conn:
+        buildings = [row[0] for row in conn.execute("SELECT DISTINCT building FROM rooms WHERE active=1")]
+    return any(calendar.for_building(building, weekdays)(local.date()) for building in (buildings or [""]))
 
 
 def claim_reminder(day: str, user_id: str, now: datetime | None = None) -> bool:
