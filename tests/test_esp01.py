@@ -2,7 +2,7 @@
 
 import time
 import pytest
-from termokontur import db, sensors
+from termokontur import db, migrations, sensors
 
 
 def esp01(admin):
@@ -73,3 +73,22 @@ def test_esp01_cannot_receive_c3_firmware(admin):
         fw_id = conn.execute("SELECT id FROM sensor_firmware WHERE version='9.0.0'").fetchone()[0]
     r = admin.put(f"/api/sensors/devices/{device}/ota?firmware_id={fw_id}")
     assert r.status_code == 422, r.text
+
+
+def test_schema_v1_upgrade_keeps_existing_c3_device(admin):
+    room = db.create_room("Школа", "1", "101", "Кабинет", 18, 24)
+    reply = admin.post("/api/sensors/devices", json={"name": "C3", "room_id": room["id"]})
+    assert reply.status_code == 200, reply.text
+    device = reply.json()
+    with db.connect() as conn:
+        conn.execute("ALTER TABLE sensor_devices DROP COLUMN model")
+        conn.execute("PRAGMA user_version=1")
+
+    db.initialize()
+    db.initialize()
+    with db.connect() as conn:
+        assert migrations.read_version(conn) == migrations.SCHEMA_VERSION
+        stored = sensors.get_device(conn, device["device_id"])
+        assert stored["model"] == sensors.MODEL
+        assert stored["room_id"] == room["id"]
+        assert stored["enrollment_hash"] == sensors.digest(device["code"])

@@ -27,7 +27,8 @@ def bootstrap() -> None:
         salt = secrets.token_bytes(24)
         conn.execute(
             """INSERT INTO admin_account(id, salt, password_hash, session_epoch)
-               VALUES (1, ?, ?, 1)""",
+               VALUES (1, ?, ?, 1)
+               ON CONFLICT(id) DO NOTHING""",
             (salt.hex(), _digest(initial, salt)),
         )
 

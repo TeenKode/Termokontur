@@ -2,9 +2,10 @@ name: ESP-01S 1MB firmware and API
 
 on:
   push:
-    branches: [feat/esp01s-1mb-support]
+    branches: [main]
     paths:
       - "firmware/esp01s/**"
+      - "termokontur/migrations.py"
       - "termokontur/sensors.py"
       - "termokontur/__init__.py"
       - "tests/test_esp01.py"
@@ -12,10 +13,14 @@ on:
   pull_request:
     paths:
       - "firmware/esp01s/**"
+      - "termokontur/migrations.py"
       - "termokontur/sensors.py"
       - "termokontur/__init__.py"
       - "tests/test_esp01.py"
       - ".github/workflows/esp01s.yml"
+
+permissions:
+  contents: read
 
 jobs:
   api:
