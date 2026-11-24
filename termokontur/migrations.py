@@ -76,7 +76,13 @@ def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
     )""")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets)
+def _session_revocations(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS session_revocations (
+        digest TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS session_revocations_expiry ON session_revocations(expires_at)")
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _session_revocations)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

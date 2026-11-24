@@ -1,6 +1,7 @@
 """Login, sessions and building-level access to the panel."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import secrets
@@ -9,7 +10,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from .. import auth, school_calendar
+from .. import auth, db, school_calendar
 
 router = APIRouter(prefix="/api")
 
@@ -24,6 +25,24 @@ def session_cookie() -> str:
     return f"{payload}:{signature(payload + ':' + str(auth.session_epoch()))}"
 
 
+def _session_digest(cookie: str) -> str:
+    return hashlib.sha256(cookie.encode()).hexdigest()
+
+
+def _revoked(cookie: str) -> bool:
+    with db.connect() as conn:
+        return conn.execute("SELECT 1 FROM session_revocations WHERE digest=? AND expires_at>?",
+                            (_session_digest(cookie), int(time.time()))).fetchone() is not None
+
+
+def _revoke(cookie: str) -> None:
+    parts = cookie.split(":")
+    expires = int(parts[2] if parts[0] == "v" else parts[0])
+    with db.connect() as conn:
+        conn.execute("DELETE FROM session_revocations WHERE expires_at<=?", (int(time.time()),))
+        conn.execute("INSERT OR IGNORE INTO session_revocations VALUES(?,?)", (_session_digest(cookie), expires))
+
+
 def authenticated(request: Request) -> bool:
     cookie = request.cookies.get("tk_session", "")
     try:
@@ -32,7 +51,7 @@ def authenticated(request: Request) -> bool:
             return False
         return hmac.compare_digest(
             mac, signature(f"{expires}:{nonce}:{auth.session_epoch()}")
-        )
+        ) and not _revoked(cookie)
     except (ValueError, KeyError):
         return False
 
@@ -48,7 +67,7 @@ def _building_session(request: Request) -> dict | None:
     except ValueError:
         return None
     account = auth.building_account(username)
-    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)):
+    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)) and not _revoked(cookie):
         return account
     return None
 
@@ -143,7 +162,9 @@ def login(payload: Login, request: Request, response: Response):
 
 
 @router.post("/logout", dependencies=[Depends(scoped_access)])
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    # Revoke this token, not every active session of the administrator.
+    _revoke(request.cookies["tk_session"])
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True}
 

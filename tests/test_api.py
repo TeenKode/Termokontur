@@ -345,3 +345,14 @@ def test_reading_corrections_api_and_authentication(client):
     assert changes[0]["old_value"] == 21
     assert changes[0]["new_value"] == 22
     assert client.get("/api/readings/999999/corrections").status_code == 404
+
+
+def test_logout_revokes_copied_cookie_without_revoking_other_sessions(admin):
+    original = admin.cookies.get("tk_session")
+    assert admin.post("/api/login",json={"password":"this-is-a-test-admin-password"}).status_code == 200
+    other = admin.cookies.get("tk_session")
+    assert other != original
+    assert admin.post("/api/logout").status_code == 200
+    assert admin.get("/api/session",headers={"Cookie":"tk_session="+other}).json()["authenticated"] is False
+    assert admin.get("/api/session",headers={"Cookie":"tk_session="+original}).json()["authenticated"] is True
+    assert admin.get("/api/rooms",headers={"Cookie":"tk_session="+other}).status_code == 401
