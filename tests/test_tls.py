@@ -44,6 +44,9 @@ def test_only_admin_can_manage_tls(client):
     assert post_pair(client, cert, key).status_code == 401
     assert client.post("/api/tls/apply").status_code == 401
     assert client.delete("/api/tls/certificate").status_code == 401
+    assert client.get("/api/tls/sensor-ca").status_code == 401
+    assert client.post("/api/tls/sensor-ca", files={"certificates": ("ca.cer", cert)}).status_code == 401
+    assert client.delete("/api/tls/sensor-ca").status_code == 401
 
 
 def test_upload_rollover_and_remove(admin):
@@ -135,3 +138,52 @@ def test_sensor_ca_override_contains_only_public_certificates(admin, monkeypatch
     assert admin.get('/api/sensors/bootstrap').json()['ca'] == certificate.decode('ascii')
     path.write_bytes(certificate + key)
     assert admin.get('/api/sensors/bootstrap').status_code == 503
+
+
+def ca_pair(name="School CA", expires_days=365, issuer=None):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    issuer_cert, issuer_key = issuer or (None, key)
+    cert = (x509.CertificateBuilder().subject_name(subject)
+            .issuer_name(issuer_cert.subject if issuer_cert else subject)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.now(timezone.utc)-timedelta(days=2))
+            .not_valid_after(datetime.now(timezone.utc)+timedelta(days=expires_days))
+            .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True)
+            .sign(issuer_key,hashes.SHA256()))
+    return cert,key
+
+
+def test_sensor_ca_upload_der_and_chain(admin, monkeypatch):
+    root, root_key = ca_pair()
+    intermediate, ikey = ca_pair("Intermediate", issuer=(root,root_key))
+    leaf_key = rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    leaf = (x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,"termokontur.server.local")]))
+            .issuer_name(intermediate.subject).public_key(leaf_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.now(timezone.utc)-timedelta(days=1))
+            .not_valid_after(datetime.now(timezone.utc)+timedelta(days=30))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("termokontur.server.local")]),critical=False)
+            .sign(ikey,hashes.SHA256()))
+    monkeypatch.setattr(tls,"_managed",True)
+    monkeypatch.setattr(tls,"_running_certificate",(leaf.public_bytes(serialization.Encoding.PEM)+intermediate.public_bytes(serialization.Encoding.PEM)).decode())
+    files=[("certificates",("root.cer",root.public_bytes(serialization.Encoding.DER))),
+           ("certificates",("intermediate.pem",intermediate.public_bytes(serialization.Encoding.PEM)))]
+    response=admin.post("/api/tls/sensor-ca",files=files)
+    assert response.status_code==200,response.text
+    assert response.json()["chain_matches"] is True
+    assert response.json()["server_hosts"]==["termokontur.server.local"]
+    assert len(response.json()["certificates"])==2
+    expected=(root.public_bytes(serialization.Encoding.PEM)+intermediate.public_bytes(serialization.Encoding.PEM)).decode()
+    assert admin.get("/api/sensors/bootstrap").json()["ca"]==expected
+    assert admin.get("/api/tls/status").json()["configured"] is False
+    expired,_=ca_pair(expires_days=-1)
+    for bad in [expired.public_bytes(serialization.Encoding.PEM), leaf.public_bytes(serialization.Encoding.PEM), b"PRIVATE KEY", b"broken"]:
+        assert admin.post("/api/tls/sensor-ca",files={"certificates":("bad.cer",bad)}).status_code==422
+        assert tls.sensor_certificate()==expected
+    wrong,_=ca_pair("Wrong CA")
+    response=admin.post("/api/tls/sensor-ca",files={"certificates":("wrong.cer",wrong.public_bytes(serialization.Encoding.DER))})
+    assert response.json()["chain_matches"] is False
+    assert admin.get("/api/sensors/bootstrap").status_code==503
+    assert admin.delete("/api/tls/sensor-ca").json()["source"]=="automatic"

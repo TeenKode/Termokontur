@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 
 from . import db
 
@@ -238,12 +239,147 @@ def server_kwargs() -> dict:
     }
 
 
+SENSOR_CA_KEY = "sensor_ca_pem"
+SENSOR_CA_LIMIT = 8000
+
+
+def _panel_sensor_ca() -> str:
+    with db.connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (SENSOR_CA_KEY,)).fetchone()
+    return row["value"] if row else ""
+
+
+def _ca_certificates(raw: bytes):
+    if not raw or len(raw) > MAX_UPLOAD or b"PRIVATE KEY" in raw:
+        raise ValueError("Загрузите только публичные сертификаты УЦ, без закрытого ключа.")
+    try:
+        certs = (x509.load_pem_x509_certificates(raw) if b"-----BEGIN CERTIFICATE-----" in raw
+                 else [x509.load_der_x509_certificate(raw)])
+    except ValueError:
+        raise ValueError("Не удалось прочитать сертификаты. Используйте PEM, CER, CRT или DER.") from None
+    if not certs:
+        raise ValueError("Сертификаты не найдены.")
+    unique = {cert.fingerprint(hashes.SHA256()): cert for cert in certs}
+    certs = list(unique.values())
+    now = datetime.now(timezone.utc)
+    for cert in certs:
+        if not cert.not_valid_before_utc <= now < cert.not_valid_after_utc:
+            raise ValueError("Сертификат УЦ ещё не действует или просрочен: " + _name(cert.subject))
+        try:
+            if not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+                raise ValueError("Нужен сертификат центра сертификации, а не сайта.")
+        except x509.ExtensionNotFound:
+            raise ValueError("Сертификат не содержит признака CA: " + _name(cert.subject)) from None
+        try:
+            if not cert.extensions.get_extension_for_class(x509.KeyUsage).value.key_cert_sign:
+                raise ValueError("Сертификат не разрешает подписывать сертификаты.")
+        except x509.ExtensionNotFound:
+            pass
+    return certs
+
+
+def _chain_matches(certs) -> bool | None:
+    # Diagnostic of the active built-in listener, not a substitute for actual
+    # TLS hostname/chain verification by the sensor. A proxy may serve a different chain.
+    if not _managed or not _running_certificate:
+        return None
+    try:
+        served = x509.load_pem_x509_certificates(_running_certificate.encode("ascii"))
+    except (ValueError, UnicodeError):
+        return False
+    if not served:
+        return False
+    trusted = {cert.fingerprint(hashes.SHA256()) for cert in certs}
+    now = datetime.now(timezone.utc)
+
+    def walk(child, seen):
+        fingerprint = child.fingerprint(hashes.SHA256())
+        if fingerprint in seen or not child.not_valid_before_utc <= now < child.not_valid_after_utc:
+            return False
+        if fingerprint in trusted:
+            return True
+        for issuer in [*served[1:], *certs]:
+            try:
+                if not issuer.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+                    continue
+                child.verify_directly_issued_by(issuer)
+            except (ValueError, TypeError, InvalidSignature, UnsupportedAlgorithm, x509.ExtensionNotFound):
+                continue
+            if walk(issuer, seen | {fingerprint}):
+                return True
+        return False
+
+    return walk(served[0], set())
+
+
+def sensor_ca_state() -> dict:
+    saved = _panel_sensor_ca()
+    path = os.getenv("TERMOKONTUR_SENSOR_CA_FILE", "")
+    source = "upload" if saved else "environment" if path else "automatic"
+    result = {"source": source, "configured": source != "automatic", "certificates": [],
+              "chain_matches": None, "error": "", "server_hosts": []}
+    if _running_certificate:
+        try:
+            leaf = x509.load_pem_x509_certificate(_running_certificate.encode("ascii"))
+            san = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            result["server_hosts"] = san.get_values_for_type(x509.DNSName) + [
+                str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+        except (ValueError, UnicodeError, x509.ExtensionNotFound):
+            pass
+    if source == "automatic":
+        return result
+    try:
+        raw = saved.encode("ascii") if saved else Path(path).read_bytes()
+        certs = _ca_certificates(raw)
+        result["chain_matches"] = _chain_matches(certs)
+        result["certificates"] = [
+            {"subject": _name(cert.subject), "issuer": _name(cert.issuer),
+             "expires_at": cert.not_valid_after_utc.isoformat(),
+             "sha256": cert.fingerprint(hashes.SHA256()).hex()}
+            for cert in certs
+        ]
+    except (ValueError, OSError, UnicodeError) as exc:
+        result["error"] = str(exc) if isinstance(exc, ValueError) else "Не удалось прочитать сертификат УЦ."
+    return result
+
+
+def upload_sensor_ca(parts: list[bytes]) -> dict:
+    if not parts or sum(map(len, parts)) > MAX_UPLOAD:
+        raise ValueError("Выберите сертификаты УЦ общим размером до 256 КБ.")
+    certs = {}
+    for raw in parts:
+        for cert in _ca_certificates(raw):
+            certs[cert.fingerprint(hashes.SHA256())] = cert
+    pem = b"".join(cert.public_bytes(serialization.Encoding.PEM) for cert in certs.values())
+    if len(pem) > SENSOR_CA_LIMIT:
+        raise ValueError("Цепочка PEM превышает 8000 байт — предел памяти датчика.")
+    with db.connect() as conn:
+        conn.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (SENSOR_CA_KEY, pem.decode("ascii")))
+    return sensor_ca_state()
+
+
+def remove_sensor_ca() -> dict:
+    with db.connect() as conn:
+        conn.execute("DELETE FROM settings WHERE key=?", (SENSOR_CA_KEY,))
+    return sensor_ca_state()
+
+
 def sensor_certificate() -> str:
     """Only the active public chain; staged uploads and private keys never leave storage.
 
     For private reverse proxies, the operator can supply their public CA chain
     via TERMOKONTUR_SENSOR_CA_FILE. Public proxies use the built-in CA bundle.
     """
+    saved = _panel_sensor_ca()
+    if saved:
+        certs = _ca_certificates(saved.encode("ascii"))
+        if len(saved.encode("ascii")) > SENSOR_CA_LIMIT:
+            raise ValueError("Invalid sensor CA chain")
+        if _chain_matches(certs) is False:
+            raise ValueError("Configured CA does not validate the active server chain")
+        return saved
     path = os.getenv("TERMOKONTUR_SENSOR_CA_FILE", "")
     if path:
         raw = Path(path).read_bytes()

@@ -34,6 +34,7 @@
 #include "freertos/task.h"
 #include "journal.hpp"
 #include "mbedtls/sha256.h"
+#include "mbedtls/x509.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "policy.hpp"
@@ -508,7 +509,22 @@ static std::string post(const std::string &path, const std::string &body,
   if (auth)
     esp_http_client_set_header(h, "Authorization", bearer.c_str());
   std::string result;
+  if (path == "/api/sensors/bootstrap")
+    printf("TLS: clock epoch=%lld; trust=%s (%u bytes)\n", (long long)time(nullptr),
+           ca.empty() ? "public CA bundle" : "provisioned CA", (unsigned)ca.size());
   esp_err_t err = esp_http_client_open(h, body.size());
+  if (err != ESP_OK) {
+    int tls_code = 0, tls_flags = 0;
+    esp_http_client_get_and_clear_last_tls_error(h, &tls_code, &tls_flags);
+    if (tls_code || tls_flags) {
+      printf("TLS: error=0x%x verify_flags=0x%x\n", (unsigned)tls_code, (unsigned)tls_flags);
+      if (tls_flags) {
+        char info[512]{};
+        mbedtls_x509_crt_verify_info(info, sizeof info, "TLS: ", (uint32_t)tls_flags);
+        printf("%s", info);
+      }
+    }
+  }
   if (err == ESP_OK) {
     size_t sent = 0;
     while (sent < body.size() && available()) {
@@ -565,6 +581,9 @@ static bool server_supports_usb_sync = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
+  if (time(nullptr) < 1700000000 || time(nullptr) > 4102444800) {
+    last_error = "tls_clock_invalid"; puts("TLS: invalid clock; configure the board again"); return false;
+  }
   auto response = post("/api/sensors/bootstrap", "{}", false);
   auto j = cJSON_Parse(response.c_str());
   if (!j) return false;

@@ -1148,7 +1148,7 @@ window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if
 /* Accessible settings workspace: categories, overview and independent saves. */
 const settingsGroups = {
   general:["general-settings-form"],notifications:["reminders-settings-form","alerts-settings-form"],
-  backups:["maintenance-form"],tls:["tls-form"],calendar:["calendar-form"]
+  backups:["maintenance-form"],tls:["tls-form","sensor-ca-form"],calendar:["calendar-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
 function settingsDirty(){
@@ -1193,7 +1193,7 @@ function setSettingsCategory(category){
   if(category==="backups")void loadBackups();
   if(category==="updates")void loadUpdateStatus();
   if(category==="max")void loadMaxDiagnostics();
-  if(category==="tls")void loadTlsStatus();
+  if(category==="tls"){void loadTlsStatus();void loadSensorCa();}
   if(category==="notifications")void loadNotificationCenter();
   if(category==="calendar")void loadSchoolCalendar();
   if(category==="access")void loadBuildingAccounts();
@@ -1270,6 +1270,36 @@ async function loadSettings() {
     if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
 }
+async function loadSensorCa(){
+  try{
+    const state=await api("/api/tls/sensor-ca");
+    const label={upload:"CA из панели",environment:"CA из окружения",automatic:"Автоматический режим"};
+    $("sensor-ca-status").textContent=state.error?"Ошибка: "+state.error:
+      label[state.source]+(state.chain_matches===true?" · Подпись цепочки HTTPS подтверждена":
+      state.chain_matches===false?" · CA не соответствует активному HTTPS: проверьте цепочку":" · Проверка активной цепочки недоступна");
+    const lines=state.certificates.flatMap(c=>[c.subject+" · действует до "+new Date(c.expires_at).toLocaleDateString("ru-RU"),"Издатель: "+c.issuer,"SHA-256: "+c.sha256]);
+    if(state.server_hosts.length)lines.push("Имена активного HTTPS: "+state.server_hosts.join(", "));
+    $("sensor-ca-details").replaceChildren(...lines.map(line=>el("p","",line)));
+    $("sensor-ca-remove").disabled=state.source!=="upload";
+  }catch(error){$("sensor-ca-status").textContent=error.message;}
+}
+$("sensor-ca-form").addEventListener("submit",async event=>{
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector("button");
+  button.disabled=true;const finish=beginRequest("/api/tls/sensor-ca","POST");
+  try{
+    const response=await fetch("/api/tls/sensor-ca",{method:"POST",credentials:"same-origin",body:new FormData(form)});
+    if(response.status===401){enterLogin();throw Error("Сеанс завершился");}
+    const data=await response.json();
+    if(!response.ok)throw Error(typeof data.detail==="string"?data.detail:"Не удалось загрузить CA");
+    form.reset();markSettingsSaved(form,"CA сохранены");await loadSensorCa();
+    toast(data.chain_matches===false?"CA сохранены, но цепочка не совпадает":"Сертификаты датчиков сохранены",data.chain_matches===false);
+  }catch(error){form.querySelector(".settings-save-feedback").textContent=error.message;toast(error.message,true);}
+  finally{button.disabled=false;finish();}
+});
+$("sensor-ca-remove").addEventListener("click",async()=>{
+  if(!confirm("Удалить CA датчиков? Платы могут потерять связь после изменения цепочки."))return;
+  try{await api("/api/tls/sensor-ca","DELETE");await loadSensorCa();toast("CA удалены");}catch(error){toast(error.message,true);}
+});
 /* TLS certificate upload is multipart; never expose key material in JSON. */
 let tlsCache=null;
 async function loadTlsStatus(){
