@@ -36,50 +36,70 @@
   <div id="app-root" class="shell" hidden>
     <aside class="sidebar">
       <div class="brand"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
-      <div class="nav-caption">РАЗДЕЛЫ</div>
-      <nav class="navigation" aria-label="Разделы">
-        <button type="button" data-tab="overview" class="nav-button active"><span class="nav-icon">▦</span>Обзор</button>
-        <button type="button" data-tab="readings" class="nav-button" data-admin-only><span class="nav-icon">≋</span>Измерения</button>
-        <button type="button" data-tab="rooms" class="nav-button" data-admin-only><span class="nav-icon">▤</span>Помещения</button>
-        <button type="button" data-tab="reports" class="nav-button"><span class="nav-icon">▥</span>Отчёты</button>
-        <button type="button" data-tab="staff" class="nav-button" data-admin-only><span class="nav-icon">♙</span>Сотрудники</button>
-        <button type="button" data-tab="sensors" class="nav-button" data-admin-only><span class="nav-icon">◉</span>Датчики</button>
-        <button type="button" data-tab="settings" class="nav-button" data-admin-only><span class="nav-icon">⚙</span>Настройки</button>
-      </nav>
-      <div class="sidebar-foot">
-        <span class="connection-dot"></span> Локальный сервер
-        <button type="button" id="logout" class="logout-btn">Выйти</button>
+      <button type="button" id="navigation-toggle" class="navigation-toggle" aria-expanded="false" aria-controls="sidebar-menu">Разделы</button>
+      <div id="sidebar-menu" class="sidebar-menu">
+        <nav class="navigation" aria-label="Разделы">
+          <button type="button" data-tab="overview" class="nav-button active" aria-current="page"><span class="nav-icon" aria-hidden="true">▦</span>Обзор</button>
+          <button type="button" data-tab="readings" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">≋</span>Измерения</button>
+          <button type="button" data-tab="rooms" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">▤</span>Помещения</button>
+          <button type="button" data-tab="reports" class="nav-button"><span class="nav-icon" aria-hidden="true">▥</span>Отчёты</button>
+          <button type="button" data-tab="staff" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">♙</span>Сотрудники</button>
+          <button type="button" data-tab="sensors" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">◉</span>Датчики</button>
+          <button type="button" data-tab="settings" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">⚙</span>Настройки</button>
+        </nav>
+        <div class="sidebar-foot"><button type="button" id="logout" class="logout-btn">Выйти</button></div>
       </div>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div><div class="eyebrow" id="panel-scope">МОНИТОРИНГ МИКРОКЛИМАТА</div><small class="muted" id="panel-version">v__APP_VERSION__</small></div>
+        <div class="panel-meta">
+          <span id="panel-scope" class="panel-scope" hidden></span>
+          <small id="panel-version" class="panel-version">v__APP_VERSION__</small>
+          <time id="updated-at" class="muted" hidden></time>
+        </div>
         <div class="topbar-actions">
+          <button type="button" id="refresh" class="btn secondary" aria-label="Обновить данные" title="Обновить данные"><span class="refresh-symbol" aria-hidden="true">↻</span><span class="refresh-label">Обновить</span></button>
           <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
-          <span id="updated-at" class="muted">—</span>
-          <button type="button" id="refresh" class="btn secondary">↻ Обновить</button>
-          <button type="button" id="logout-mobile" class="btn secondary logout-mobile">Выйти</button>
         </div>
       </header>
 
       <section id="view-overview" class="view">
-        <div class="heading">
-          <div><h1>Температура в школе</h1><p>Средняя температура и показания за сегодня.</p></div>
-          <button type="button" class="btn primary" id="quick-reading">+ Добавить измерение</button>
+        <div class="heading overview-heading">
+          <h1>Температура помещений</h1>
+          <div class="heading-actions overview-actions" data-admin-only>
+            <select id="building-filter" aria-label="Корпус"><option value="">Все корпуса</option></select>
+            <button type="button" class="btn primary" id="quick-reading">+ Добавить замер</button>
+          </div>
         </div>
         <div class="dashboard-hero">
           <div class="dashboard-hero-main">
-            <span class="dashboard-eyebrow">СРЕДНЯЯ ТЕМПЕРАТУРА ПО ЗДАНИЯМ СЕГОДНЯ</span>
+            <span class="dashboard-eyebrow">Средняя за сегодня</span>
             <div class="dashboard-hero-value" id="avg-today">—</div>
-            <p id="avg-today-desc">Показаний пока нет</p>
-            <span id="avg-change" class="dashboard-change">Для сравнения нужны измерения за два дня</span>
+            <p id="avg-today-desc" hidden>Показаний пока нет</p>
+            <span id="avg-change" class="dashboard-change" hidden></span>
           </div>
           <div class="dashboard-hero-coverage">
-            <span class="dashboard-eyebrow">ПОКАЗАНИЯ ЗА СЕГОДНЯ</span>
+            <span class="dashboard-eyebrow">Охват за сегодня</span>
             <strong id="today-coverage">—</strong>
-            <p id="today-coverage-desc">Кабинеты с показаниями</p>
-            <progress id="coverage-progress" max="100" value="0" aria-label="Доля кабинетов с показаниями сегодня"></progress>
-            <small id="today-alerts">Отклонений по среднесуточной температуре: —</small>
+            <progress id="coverage-progress" max="100" value="0" aria-label="Доля помещений с показаниями сегодня" hidden></progress>
+            <p id="today-coverage-desc" hidden></p>
+            <small id="today-alerts" hidden></small>
+          </div>
+        </div>
+
+        <div class="metrics overview-metrics">
+          <button type="button" class="metric" data-overview-status="" aria-controls="latest-readings"><span class="metric-label">Все помещения</span><strong id="count-total">—</strong></button>
+          <button type="button" class="metric" data-overview-status="normal" aria-controls="latest-readings"><span class="metric-label">В норме</span><strong id="count-normal" class="good">—</strong></button>
+          <button type="button" class="metric" data-overview-status="alert" aria-controls="latest-readings"><span class="metric-label">Вне нормы</span><strong id="count-alert" class="bad">—</strong></button>
+          <button type="button" class="metric" data-overview-status="missing" aria-controls="latest-readings"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">—</strong></button>
+        </div>
+
+        <div class="panel daily-panel">
+          <div class="panel-heading"><div><h2>Сбор по графику</h2><p id="daily-date">Сегодня по времени организации</p></div><strong id="daily-counts" class="daily-total">—</strong></div>
+          <div class="daily-missing">
+            <p id="daily-status" class="daily-complete" role="status">Загрузка…</p>
+            <details id="daily-missing-rooms" class="daily-group" hidden><summary></summary><div class="daily-tags"></div></details>
+            <details id="daily-awaiting-rooms" class="daily-group" hidden><summary></summary><div class="daily-tags"></div></details>
           </div>
         </div>
 
@@ -87,9 +107,6 @@
           <div class="panel-heading dashboard-trend-heading">
             <div><h2>Среднесуточная температура по зданиям</h2><p>Средняя по каждому зданию и по школе. Каждый кабинет имеет равный вес.</p></div>
             <div class="dashboard-controls">
-              <label for="building-filter">Корпус
-                <select id="building-filter"><option value="">Все корпуса</option></select>
-              </label>
               <label for="history-period">Период
                 <select id="history-period">
                   <option value="7">7 дней</option>
@@ -98,7 +115,7 @@
                   <option value="90">90 дней</option>
                 </select>
               </label>
-              <button type="button" class="btn secondary" id="history-export">↓ CSV</button>
+              <button type="button" class="btn secondary" id="history-export" aria-label="Скачать историю в CSV">↓ CSV</button>
             </div>
           </div>
           <div id="history-state" class="history-state" role="status" aria-live="polite">Загружаем историю…</div>
@@ -116,7 +133,7 @@
           </div>
         </div>
 
-        <div class="panel building-panel">
+        <div id="building-panel" class="panel building-panel" hidden>
           <div class="panel-heading">
             <div><h2>Сравнение зданий</h2><p>Температура за сегодня, изменение за сутки и сбор показаний.</p></div>
           </div>
@@ -128,38 +145,34 @@
           <p id="building-matrix-empty" class="empty" hidden>Добавьте здания и показания для сравнения.</p>
         </div>
 
-        <div class="metrics overview-metrics">
-          <article class="metric"><span class="metric-label">Всего помещений</span><strong id="count-total">0</strong><small>Активных кабинетов</small></article>
-          <article class="metric"><span class="metric-label">В пределах нормы</span><strong id="count-normal" class="good">0</strong><small>По последнему актуальному измерению</small></article>
-          <article class="metric"><span class="metric-label">Отклонения</span><strong id="count-alert" class="bad">0</strong><small>Ниже или выше нормы</small></article>
-          <article class="metric"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">0</strong><small>Требуется измерение</small></article>
-        </div>
-
-        <details class="room-drilldown">
+        <details id="room-drilldown" class="room-drilldown" hidden>
           <summary>Температура кабинетов по дням</summary>
-        <div class="panel dashboard-heatmap-panel">
-          <div class="panel-heading">
-            <div><h2>Температура по кабинетам</h2><p id="heatmap-description">Средняя температура за день.</p></div>
-            <input id="heatmap-search" type="search" placeholder="Найти кабинет" aria-label="Поиск кабинета в таблице средних температур">
+          <div class="panel dashboard-heatmap-panel">
+            <div class="panel-heading">
+              <p id="heatmap-description">Средняя температура за день.</p>
+              <input id="heatmap-search" type="search" placeholder="Найти кабинет" aria-label="Поиск кабинета в таблице средних температур">
+            </div>
+            <div class="heatmap-guide"><span class="heatmap-guide-normal">В норме</span><span class="heatmap-guide-low">Ниже нормы</span><span class="heatmap-guide-high">Выше нормы</span><span class="heatmap-guide-empty">Нет показаний</span></div>
+            <div class="table-scroll heatmap-scroll"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
+            <p id="heatmap-empty" class="empty" hidden>Кабинеты не найдены.</p>
           </div>
-          <div class="heatmap-guide"><span class="heatmap-guide-normal">В норме</span><span class="heatmap-guide-low">Ниже нормы</span><span class="heatmap-guide-high">Выше нормы</span><span class="heatmap-guide-empty">Нет показаний</span></div>
-          <div class="table-scroll heatmap-scroll"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
-          <p id="heatmap-empty" class="empty" hidden>Кабинеты не найдены.</p>
-        </div>
-
         </details>
-        <div class="panel daily-panel">
-          <div class="panel-heading"><div><h2>Сбор показаний за сегодня</h2><p id="daily-date">По времени сервера</p></div><strong id="daily-counts" class="daily-total">—</strong></div>
-          <div id="daily-missing" class="daily-missing" aria-live="polite">Загрузка…</div>
-        </div>
-        <div class="panel">
+        <section class="panel latest-readings" id="latest-readings" aria-labelledby="latest-readings-title">
           <div class="panel-heading">
-            <div><h2>Последние показания</h2><p>Температура и отклонения от нормы.</p></div>
-            <div class="filter-row"><input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета"></div>
+            <h2 id="latest-readings-title" tabindex="-1">Последние показания</h2>
+            <div class="filter-row latest-filters">
+              <input id="search-rooms" type="search" placeholder="Поиск кабинета" aria-label="Поиск кабинета">
+              <select id="overview-status" aria-label="Статус измерения">
+                <option value="">Все статусы</option>
+                <option value="normal">В норме</option>
+                <option value="alert">Вне нормы</option>
+                <option value="missing">Нет свежих данных</option>
+              </select>
+            </div>
           </div>
-          <div class="table-scroll"><table><thead><tr><th>Помещение</th><th>Корпус</th><th>Температура</th><th>Норма</th><th>Получено</th><th>Статус</th></tr></thead><tbody id="overview-table"></tbody></table></div>
-          <p id="overview-empty" class="empty" hidden>Помещения ещё не добавлены. Перейдите в раздел «Помещения».</p>
-        </div>
+          <div class="table-scroll"><table class="latest-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Статус</th><th scope="col">Норма</th><th scope="col">Получено</th></tr></thead><tbody id="overview-table"></tbody></table></div>
+          <p id="overview-empty" class="empty" role="status" hidden></p>
+        </section>
       </section>
 
       <section id="view-readings" class="view" hidden>
@@ -326,9 +339,12 @@
       <section id="view-settings" class="view" hidden>
         <div class="heading settings-heading">
           <div><h1>Настройки</h1><p>Подключения, уведомления и резервные копии.</p></div>
-          <span class="settings-managed">Параметры хранятся на сервере</span>
         </div>
         <div class="settings-layout">
+          <div class="settings-picker">
+            <label for="settings-category">Раздел настроек</label>
+            <select id="settings-category"></select>
+          </div>
           <nav class="settings-navigation" aria-label="Категории настроек">
             <span class="settings-nav-caption">УПРАВЛЕНИЕ</span>
             <button type="button" class="settings-nav-button active" data-settings-target="summary" aria-current="page">Обзор системы</button>

@@ -38,13 +38,12 @@ function harness(){
   const nav=Object.fromEntries(names.map(name=>[name,node()]));
   const panes=Object.fromEntries(categories.map(name=>[name,node({hidden:name!=="summary",dataset:{settingsView:name}})]));
   const buttons=Object.fromEntries(categories.map(name=>[name,node({dataset:{settingsTarget:name}})]));
-  const topbar=node({top:0}),layout=node({top:200});
+  const appRoot=node({top:0}),layout=node({top:200}),settingsCategory={value:"summary"};
   const calls={scrolls:[],chart:0,backups:0,updates:0,max:0};
-  viewport={scrollY:0,scrollTo:({top,behavior})=>{calls.scrolls.push({top,behavior});viewport.scrollY=top;}};
+  viewport={scrollY:0,scrollPaddingTop:"12px",scrollTo:({top,behavior})=>{calls.scrolls.push({top,behavior});viewport.scrollY=top;}};
   const document={
     getElementById:(id)=>views[id.slice(5)],
     querySelector:(selector)=>{
-      if(selector===".topbar")return topbar;
       if(selector===".settings-layout")return layout;
       const tab=selector.match(/^\[data-tab="(.+)"\]$/);
       if(tab)return nav[tab[1]];
@@ -58,9 +57,10 @@ function harness(){
       throw Error("Unexpected selectorAll: "+selector);
     }
   };
-  const ctx=vm.createContext({document,window:viewport,
+  const ctx=vm.createContext({document,window:viewport,settingsCategory,
+    getComputedStyle:()=>({scrollPaddingTop:viewport.scrollPaddingTop}),
     show:(id,yes)=>{views[id.slice(5)].hidden=!yes;},
-    $:(id)=>views[id.slice(5)],
+    $:(id)=>id==="app-root"?appRoot:views[id.slice(5)],
     drawChart:()=>calls.chart++,
     loadBackups:()=>calls.backups++,
     loadUpdateStatus:()=>calls.updates++,
@@ -68,7 +68,7 @@ function harness(){
   });
   vm.runInContext('let selectedTab="overview",selectedSettingsCategory="summary";\n'+
     ["scrollToSectionStart","setTab","setSettingsCategory"].map(extractFunction).join("\n"),ctx);
-  return {ctx,views,nav,panes,buttons,calls};
+  return {ctx,views,nav,panes,buttons,calls,settingsCategory};
 }
 test("main navigation scrolls to top before hiding a long section",()=>{
   const h=harness();
@@ -114,6 +114,7 @@ test("settings categories keep scroll steady and skip repeated data loads",()=>{
   assert.equal(h.panes.backups.hidden,false);
   assert.equal(h.panes.summary.hidden,true);
   assert.equal(h.buttons.backups.attributes.get("aria-current"),"page");
+  assert.equal(h.settingsCategory.value,"backups");
   assert.equal(h.calls.backups,1);
   viewport.scrollY=185;
   vm.runInContext('setSettingsCategory("backups")',h.ctx);
@@ -121,6 +122,14 @@ test("settings categories keep scroll steady and skip repeated data loads",()=>{
   assert.equal(h.calls.backups,1);
   vm.runInContext('setSettingsCategory("security")',h.ctx);
   assert.equal(viewport.scrollY,185,"near the settings header do not force-scroll");
+});
+test("settings navigation leaves space above its picker for the mobile header",()=>{
+  const h=harness();
+  viewport.scrollPaddingTop="72px";
+  viewport.scrollY=720;
+  vm.runInContext('setSettingsCategory("backups")',h.ctx);
+  assert.equal(viewport.scrollY,128);
+  assert.equal(h.settingsCategory.value,"backups");
 });
 test("global feedback and busy indicators never change layout size",()=>{
   assert.match(styles,/html\{scrollbar-gutter:stable\}/);

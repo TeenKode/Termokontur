@@ -18,6 +18,25 @@ const el = (tag, className = "", value = "") => {
   if(value !== null && value !== undefined) item.textContent = String(value);
   return item;
 };
+const navigationToggle = $("navigation-toggle");
+function closeNavigation(restoreFocus=false) {
+  if(navigationToggle.getAttribute("aria-expanded")!=="true")return;
+  navigationToggle.setAttribute("aria-expanded","false");
+  if(restoreFocus)navigationToggle.focus({preventScroll:true});
+}
+navigationToggle.addEventListener("click",()=>{
+  const open=navigationToggle.getAttribute("aria-expanded")==="true";
+  navigationToggle.setAttribute("aria-expanded",String(!open));
+});
+document.querySelector(".sidebar").addEventListener("keydown",event=>{
+  if(event.key!=="Escape"||!navigationToggle.offsetWidth)return;
+  closeNavigation(true);
+});
+for(const type of ["click","focusin"]){
+  document.addEventListener(type,event=>{
+    if(!event.target.closest(".sidebar"))closeNavigation();
+  });
+}
 function toast(message, isError = false) {
   const target = $("toast");
   target.textContent = message; target.className = "toast show" + (isError ? " error" : " success");
@@ -115,26 +134,29 @@ async function api(path, method = "GET", body) {
   } finally {finish();}
 }
 function enterLogin() {
+  closeNavigation();
   show("login-screen",true); show("app-root",false); $("password").value="";
 }
 function enterApp(session) {
   panelOpened=true;
   buildingScope=session.building||"";
   for(const element of document.querySelectorAll("[data-admin-only]"))element.hidden=Boolean(buildingScope);
-  if(buildingScope)$("panel-scope").textContent=buildingScope;
+  $("panel-scope").textContent=buildingScope;
+  show("panel-scope",Boolean(buildingScope));
   show("login-screen",false);show("app-root",true);
 }
 // Move to the beginning of a different section before replacing long content.
 // Otherwise the browser clamps/anchors scroll to the shorter new page and
 // sticky navigation visibly jumps. Never animate this corrective scroll.
 function scrollToSectionStart(section){
-  const top=section.getBoundingClientRect().top+window.scrollY;
-  if(window.scrollY>top+16)window.scrollTo({top:Math.max(0,top-12),behavior:"instant"});
+  const offset=parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop)||12;
+  const top=Math.max(0,section.getBoundingClientRect().top+window.scrollY-offset);
+  if(window.scrollY>top+16)window.scrollTo({top,behavior:"instant"});
 }
 function setTab(name) {
   const target=$("view-"+name);
   if(!target || (selectedTab===name && !target.hidden))return false;
-  scrollToSectionStart(document.querySelector(".topbar"));
+  scrollToSectionStart($("app-root"));
   selectedTab = name;
   for(const view of ["overview","rooms","staff","reports","readings","sensors","settings"]) {
     const active=view===name;
@@ -159,8 +181,10 @@ function renderFilters() {
   const oldBuilding=$("building-filter").value, oldReading=$("reading-filter").value;
   for(const id of ["building-filter","reading-filter","reading-room"]) $(id).replaceChildren();
   option($("building-filter"),"","Все корпуса");
-  for(const building of [...new Set(rooms.map(r=>r.building))].sort()) option($("building-filter"),building,building);
-  $("building-filter").value=buildingScope||oldBuilding;
+  const buildings=new Set(rooms.map(room=>room.building));
+  if(buildingScope)buildings.add(buildingScope);
+  for(const building of [...buildings].sort())option($("building-filter"),building,building);
+  $("building-filter").value=buildingScope||(buildings.has(oldBuilding)?oldBuilding:"");
   $("building-filter").disabled=Boolean(buildingScope);
   option($("reading-filter"),"","Все помещения");
   for(const room of rooms) {
@@ -177,25 +201,26 @@ function renderDaily() {
   const expected=selected.filter(r=>r.expected);
   const missing=selected.filter(r=>r.daily_status==="missing");
   const awaiting=selected.filter(r=>r.daily_status==="awaiting");
-  $("daily-date").textContent="На "+daily.local_date+" · "+daily.timezone+(building?" · "+building:"");
+  $("daily-date").textContent=fullDay(daily.local_date)+" · "+daily.timezone;
   $("daily-counts").textContent=(expected.length-missing.length-awaiting.length)+" из "+expected.length;
-  const area=$("daily-missing");area.replaceChildren();
-  if(!missing.length&&!awaiting.length){
-    const message=expected.length?"Показания по графику собраны.":
+  show("daily-status",!missing.length&&!awaiting.length);
+  if(!$("daily-status").hidden){
+    $("daily-status").textContent=expected.length?"Показания по графику собраны.":
       selected.length?"По календарю сегодня нет обязательных замеров.":"Нет помещений в выбранном корпусе.";
-    area.append(el("p","daily-complete",message));
-    return;
   }
-  for(const [group,title] of [[missing,"Нет измерений"],[awaiting,"Ожидаем выгрузку датчика"]]){
-    if(!group.length)continue;
-    area.append(el("p","daily-heading",title+": "+group.length));
-    const list=el("div","daily-tags");
-    for(const room of group){
+  for(const [id,group,title] of [
+    ["daily-missing-rooms",missing,"Нет измерений"],
+    ["daily-awaiting-rooms",awaiting,"Ожидаем выгрузку датчика"],
+  ]){
+    const details=$(id);
+    details.hidden=!group.length;
+    details.querySelector("summary").textContent=title+" · "+group.length;
+    const labels=group.map(room=>{
       const label=el("span","daily-tag",room.building+" · "+room.name);
       if(room.waiting_until)label.title="Окно выгрузки до "+when(new Date(room.waiting_until*1000).toISOString());
-      list.append(label);
-    }
-    area.append(list);
+      return label;
+    });
+    details.querySelector(".daily-tags").replaceChildren(...labels);
   }
 }
 function renderOverview() {
@@ -207,20 +232,28 @@ function renderOverview() {
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
-  const search=$("search-rooms").value.toLocaleLowerCase("ru");
-  const filtered=selected.filter(r=>(r.name+" "+r.building+" "+r.kind).toLocaleLowerCase("ru").includes(search));
+  const search=$("search-rooms").value.trim().toLocaleLowerCase("ru");
+  const status=$("overview-status").value;
+  const filtered=selected.filter(room=>{
+    const roomStatus=["below","above"].includes(room.status)?"alert":room.status;
+    const name=(room.name+" "+room.building+" "+room.kind).toLocaleLowerCase("ru");
+    return (!status||status===roomStatus)&&name.includes(search);
+  });
   const tbody=$("overview-table");tbody.replaceChildren();
   for(const item of filtered){
-    const tr=el("tr");cell(tr,item.name);cell(tr,item.building);
+    const tr=el("tr");
+    cell(tr,item.name).append(el("small","latest-building",item.building));
     const val=cell(tr,temperature(item.last_temp),"temp"+(item.status==="below"?" low":item.status==="above"?" high":""));
     val.title=item.last_source?"Источник: "+(sources[item.last_source]||item.last_source):"";
+    const label=item.status==="missing"&&item.last_at?"Устарело":statuses[item.status];
+    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,label||item.status));
     cell(tr,Number(item.min_temp).toLocaleString("ru-RU")+"–"+Number(item.max_temp).toLocaleString("ru-RU")+" °C");
     cell(tr,when(item.last_at));
-    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,statuses[item.status]||item.status));
     tbody.append(tr);
   }
   show("overview-empty",filtered.length===0);
-  $("overview-empty").textContent=overview.length?"Помещения не найдены.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
+  $("overview-empty").textContent=selected.length?"По выбранным фильтрам помещений нет.":
+    building?"В этом корпусе пока нет помещений.":"Помещения пока не добавлены.";
 }
 function shortDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7):"—";}
 function fullDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4):"—";}
@@ -272,24 +305,26 @@ function renderHistory(){
   const series=historyData.series;
   const today=series[series.length-1],yesterday=series[series.length-2];
   $("avg-today").textContent=temperature(today.average);
-  $("avg-today-desc").textContent=today.average==null?
-    "За сегодня показаний пока нет.":
-    "По "+today.rooms_measured+" из "+today.rooms_total+" кабинетов · "+historyData.timezone;
+  show("avg-today-desc",today.average==null);
   const change=$("avg-change");
   change.className="dashboard-change";
-  if(today.average!=null&&yesterday?.average!=null){
+  change.hidden=today.average==null||yesterday?.average==null;
+  if(!change.hidden){
     const diff=today.average-yesterday.average;
     change.textContent=(Math.abs(diff)<0.005?"Без изменений":(diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C")+" к предыдущему дню";
     if(diff>0.005)change.classList.add("rise");
     if(diff< -0.005)change.classList.add("fall");
-  }else change.textContent="Для сравнения нужны показания за сегодня и вчера";
+  }
   $("today-coverage").textContent=today.coverage+"%";
-  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" кабинетов с данными";
+  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" помещений";
   $("coverage-progress").value=today.coverage;
-  $("today-alerts").textContent="Отклонения по среднесуточной: "+today.out_of_range;
+  show("today-coverage-desc",true);
+  show("coverage-progress",true);
+  $("today-alerts").textContent="Вне нормы по средней: "+today.out_of_range;
+  show("today-alerts",today.out_of_range>0);
   const hasReadings=series.some(x=>x.average!=null);
   show("history-empty",!hasReadings);
-  $("history-chart").hidden=!hasReadings;
+  show("history-chart-frame",hasReadings);
   renderHistoryTable();
   renderBuildingSummary();
   renderBuildingMatrix();
@@ -372,11 +407,11 @@ function renderBuildingMatrix(){
 }
 function drawHistoryChart(){
   const canvas=$("history-chart");
-  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||canvas.hidden)return;
+  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||$("history-chart-frame").hidden)return;
   const series=historyData.series,buildings=historyData.buildings||[];
-  const width=Math.max(280,canvas.parentElement.clientWidth-2),height=310,dpr=window.devicePixelRatio||1;
+  const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
+  if(!width||!height)return;
   canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
-  canvas.style.width=width+"px";canvas.style.height=height+"px";
   const ctx=canvas.getContext("2d");if(!ctx)return;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
   const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
@@ -416,15 +451,15 @@ function drawHistoryChart(){
   if(buildings.length>1)line(series,dark?"#a5bacc":"#6a7b8d",true);
   buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
   ctx.textAlign="center";ctx.fillStyle=historyText;ctx.font="11px system-ui";
-  const step=Math.max(1,Math.ceil(series.length/7));
-  for(let i=0;i<series.length;i++){
-    if(i%step!==0&&i!==series.length-1)continue;
+  const ticks=Math.max(1,Math.min(7,series.length-1,Math.floor(graphWidth/44)));
+  for(let tick=0;tick<=ticks;tick++){
+    const i=Math.round(tick*(series.length-1)/ticks);
     ctx.fillText(shortDay(series[i].date),px(i),height-15);
   }
 }
 function hoverHistoryChart(event){
   const canvas=$("history-chart"),tooltip=$("history-tooltip");
-  if(!historyData||canvas.hidden)return;
+  if(!historyData||$("history-chart-frame").hidden)return;
   const rect=canvas.getBoundingClientRect(),width=rect.width,left=51,right=18;
   const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
   const index=Math.round(ratio*(historyData.series.length-1));
@@ -442,8 +477,15 @@ function hoverHistoryChart(event){
   tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
   tooltip.style.top="6px";
 }
+function resetHistorySummary(){
+  historyData=null;
+  for(const id of ["avg-today","today-coverage"])$(id).textContent="—";
+  for(const id of ["avg-today-desc","avg-change","today-coverage-desc","coverage-progress","today-alerts","building-panel","room-drilldown"])
+    show(id,false);
+}
 async function refreshHistory(){
   const sequence=++historyRequestId,building=$("building-filter").value,days=$("history-period").value;
+  if(historyData&&(historyData.building||"")!==building)resetHistorySummary();
   $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
   $("history-content").hidden=true;
   try{
@@ -451,12 +493,13 @@ async function refreshHistory(){
     if(sequence!==historyRequestId)return;
     historyData=data;
     $("history-state").hidden=true;$("history-content").hidden=false;
+    show("building-panel",true);
+    show("room-drilldown",true);
     renderHistory();
   }catch(error){
     if(sequence!==historyRequestId)return;
-    historyData=null;
+    resetHistorySummary();
     $("history-state").textContent="Не удалось загрузить историю: "+error.message;
-    $("avg-today").textContent="—";$("today-coverage").textContent="—";
   }
 }
 function exportHistory(){
@@ -981,7 +1024,10 @@ async function refresh() {
       renderRooms();renderReadings();renderMaxStaff();
     }
     await refreshHistory();
-    $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
+    const updated=$("updated-at");
+    updated.dateTime=dash.generated_at;
+    updated.textContent="Обновлено "+when(dash.generated_at);
+    updated.hidden=false;
   } catch(error) {toast(error.message,true);}
   finally {refreshBusy=false;}
 }
@@ -1031,14 +1077,23 @@ $("login-form").addEventListener("submit",async event=>{
   }
   catch(error){$("login-error").textContent=error.message;}
 });
-for(const id of ["logout","logout-mobile"])$(id).addEventListener("click",async()=>{
+$("logout").addEventListener("click",async()=>{
   try{await api("/api/logout","POST");window.location.reload();}
   catch(error){toast(error.message,true);}
 });
 $("refresh").addEventListener("click",refresh);
 for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
   const name=nav.dataset.tab;
-  if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
+  const changed=setTab(name);
+  if(navigationToggle.offsetWidth){
+    closeNavigation(!changed);
+    if(changed){
+      const title=$("view-"+name).querySelector("h1");
+      title.tabIndex=-1;
+      title.focus({preventScroll:true});
+    }
+  }
+  if(!changed)return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
   if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
@@ -1047,6 +1102,16 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
 $("search-rooms").addEventListener("input",renderOverview);
+$("overview-status").addEventListener("change",renderOverview);
+for(const button of document.querySelectorAll("[data-overview-status]")){
+  button.addEventListener("click",()=>{
+    $("overview-status").value=button.dataset.overviewStatus;
+    $("search-rooms").value="";
+    renderOverview();
+    $("latest-readings-title").focus({preventScroll:true});
+    $("latest-readings").scrollIntoView({block:"start"});
+  });
+}
 $("building-filter").addEventListener("change",()=>{renderOverview();renderDaily();refreshHistory();});
 $("history-period").addEventListener("change",refreshHistory);
 $("heatmap-search").addEventListener("input",renderHeatmap);
@@ -1054,7 +1119,12 @@ $("history-export").addEventListener("click",exportHistory);
 $("history-chart").addEventListener("pointermove",hoverHistoryChart);
 $("history-chart").addEventListener("pointerleave",()=>{$("history-tooltip").hidden=true;});
 $("reading-filter").addEventListener("change",refreshReadings);
-$("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
+$("quick-reading").addEventListener("click",()=>{
+  $("reading-form").reset();
+  const firstRoom=rooms.find(room=>room.building===$("building-filter").value);
+  if(firstRoom)$("reading-room").value=String(firstRoom.id);
+  $("reading-dialog").showModal();
+});
 $("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
@@ -1151,14 +1221,21 @@ const settingsGroups = {
   backups:["maintenance-form"],tls:["tls-form","sensor-ca-form"],calendar:["calendar-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
+const settingsCategory=$("settings-category");
+for(const button of document.querySelectorAll(".settings-nav-button")){
+  option(settingsCategory,button.dataset.settingsTarget,button.textContent.trim());
+}
+settingsCategory.addEventListener("change",()=>setSettingsCategory(settingsCategory.value));
 function settingsDirty(){
   return !!document.querySelector('.settings-pane form[data-dirty="true"]');
 }
 function updateDirtyNavigation(){
   for(const [category,forms] of Object.entries(settingsGroups)){
     const dirty=forms.some(id=>$(id).dataset.dirty==="true");
-    for(const button of document.querySelectorAll('.settings-nav-button[data-settings-target="'+category+'"]'))
-      button.classList.toggle("is-dirty",dirty);
+    const button=document.querySelector('.settings-nav-button[data-settings-target="'+category+'"]');
+    const choice=settingsCategory.querySelector('option[value="'+category+'"]');
+    button.classList.toggle("is-dirty",dirty);
+    choice.textContent=button.textContent.trim()+(dirty?" · не сохранено":"");
   }
 }
 function markSettingsSaved(form,message){
@@ -1182,6 +1259,7 @@ function setSettingsCategory(category){
   if(!target || (selectedSettingsCategory===category && !target.hidden))return;
   scrollToSectionStart(document.querySelector(".settings-layout"));
   selectedSettingsCategory=category;
+  settingsCategory.value=category;
   for(const pane of document.querySelectorAll("[data-settings-view]"))
     pane.hidden=pane.dataset.settingsView!==category;
   for(const button of document.querySelectorAll(".settings-nav-button")){
