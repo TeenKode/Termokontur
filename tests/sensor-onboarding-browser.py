@@ -25,7 +25,10 @@ SIMULATED_USB=r'''(() => {
   port={async open(){const self=this;this.readable=new ReadableStream({start(c){self.rx=c;}});this.writable=new WritableStream({async write(value){
    const req=JSON.parse(new TextDecoder().decode(value).trim().slice(6));let response={id:req.id};const pair=await key;
    const publicBytes=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',publicBytes)));
-   if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
+   if(req.cmd==='hello'){
+    Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
+    if(!window.simOmitProvisioned)response.provisioned=Boolean(window.savedUSB);
+   }
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
    else if(req.cmd==='configure'){if(window.simSaveFailure){response.error='NVS test failure';}else{window.savedUSB=req;response.saved=true;response.verified=true;}}
    else if(req.cmd==='verify_configuration'){Object.assign(response,{verified:true,device:window.savedUSB.device,sensor_type:window.savedUSB.sensor_type,config:window.savedUSB.config});}
@@ -169,8 +172,22 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/11-usb-authorized.jpg'),type='jpeg',quality=85)
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
                 assert len(api.get('/api/sensors/devices').json())==1
-                page.click('#usb-close');page.click('#sensor-refresh')
+                page.click('#usb-close')
+                other_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 102'}).json()
+                page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
+                # Rejected reconfiguration must leave the previous USB settings in place.
+                for omit_provisioned in (False, True):
+                    page.evaluate('(value)=>window.simOmitProvisioned=value',omit_provisioned)
+                    page.click('#sensor-usb-open')
+                    page.fill('#usb-name','Демо: изменение настроек')
+                    page.select_option('#usb-room',str(other_room['id']))
+                    page.select_option('#usb-type','ds18b20')
+                    page.fill('#usb-ssid','Other-Network')
+                    page.click('#usb-configure')
+                    expect(page.locator('#usb-status')).to_contain_text('Смените помещение в карточке датчика')
+                    assert page.evaluate('window.savedUSB')==saved
+                    page.click('#usb-close')
                 page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
                 page.locator('#sensor-detail summary').filter(has_text='Обновление прошивки').click()
                 page.select_option('#sensor-firmware', f'bundled:{version}')

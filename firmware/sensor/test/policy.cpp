@@ -26,12 +26,13 @@ int main() {
     assert(!sensor::valid_ack(1.5, 1, end));
   }
   // After RESET / power loss, sample first and then obtain authenticated UTC.
-  assert(sensor::needs_clock_after_sample(false, true, true));
+  assert(sensor::needs_bootstrap_after_sample(false, true, true, false));
   // An already checked RTC, a scheduled sleep cycle and a weak battery do
   // not force a network wakeup.
-  assert(!sensor::needs_clock_after_sample(true, true, true));
-  assert(!sensor::needs_clock_after_sample(false, false, true));
-  assert(!sensor::needs_clock_after_sample(false, true, false));
+  assert(!sensor::needs_bootstrap_after_sample(true, true, true, false));
+  assert(!sensor::needs_bootstrap_after_sample(false, false, true, false));
+  assert(!sensor::needs_bootstrap_after_sample(false, true, false, false));
+  assert(sensor::needs_bootstrap_after_sample(true, true, true, true));
   assert(sensor::sample_epoch(1795520000, 1000000, 13500000) == 1795519988);
   assert(sensor::sample_epoch(1795520000, 0, 0) == 1795520000);
   assert(sensor::sample_epoch(1795520000, 2000000, 1000000) == 0);

@@ -176,11 +176,13 @@ async function usbRun(flash){
         throw Error("Сохранённые настройки не совпадают с переданными");
     };
     const base={...data.settings,code:"",sensor_type:data.sensor_type};
-    if(deferred){
+    // Only a confirmed unconfigured board may be written before approval.
+    // Older firmware does not report whether it already has settings.
+    if(deferred&&hello.provisioned===false){
       usbStatus("Сохраняем параметры и проверяем память платы…");
       await verifySaved({...base,device:"",config:data.config});
       savedLocally=true;
-    }else usbStatus("Старая прошивка: проверка записи недоступна. Разрешаем подключение…");
+    }else if(!deferred) usbStatus("Старая прошивка: проверка записи недоступна. Разрешаем подключение…");
     usbStatus("Проверяем подпись платы и разрешаем подключение…");
     const challenge=await api("/api/sensors/auth/challenge","POST",identity);
     const signed=await serial.request("sign",{message:challenge.message});
