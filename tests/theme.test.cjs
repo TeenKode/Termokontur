@@ -56,6 +56,7 @@ test("theme bootstraps before stylesheet, includes dialogs and canvas colors",()
   const html=fs.readFileSync(path.join(root,"termokontur/static/index.html"),"utf8");
   const css=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
   const js=fs.readFileSync(path.join(root,"termokontur/static/app.js"),"utf8");
+  const charts=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
   const py=fs.readFileSync(path.join(root,"termokontur/app.py"),"utf8");
   assert.ok(html.indexOf("/static/theme.js")<html.indexOf("/static/style.css"));
   assert.equal((html.match(/data-theme-toggle/g)||[]).length,2);
@@ -63,9 +64,9 @@ test("theme bootstraps before stylesheet, includes dialogs and canvas colors",()
   assert.match(css,/html\[data-theme="dark"\] dialog/);
   assert.match(css,/html\[data-theme="dark"\] \.status\.below/);
   assert.match(css,/html\[data-theme="dark"\] \.heatmap-table/);
-  assert.match(js,/function renderTrend\(/);
-  assert.match(js,/const ink=dark\?/);
-  assert.match(js,/grid=dark\?/);
+  assert.match(charts,/function renderTrend\(/);
+  assert.match(charts,/const ink=dark\?/);
+  assert.match(charts,/grid=dark\?/);
   assert.match(js,/darkBuildingPalette/);
   assert.match(js,/document\.addEventListener\("termokontur:themechange",redrawPanelTrends\)/);
   assert.match(py, /_ASSET_FINGERPRINT\s*=\s*hashlib\.sha256\([\s\S]+?"theme\.js"/);
