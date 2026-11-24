@@ -22,7 +22,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   await api("/api/rooms",{building:"Школа",name:"12"});cookie="";
   const html=await(await fetch(base)).text();const console=new VirtualConsole();console.on("jsdomError",e=>errors.push(String(e)));
   dom=new JSDOM(html,{url:base,runScripts:"outside-only",pretendToBeVisual:true,virtualConsole:console});
-  const w=dom.window,d=w.document;w.fetch=fetchWithCookies;w.confirm=()=>true;w.scrollTo=()=>{};w.matchMedia=()=>({matches:false,addEventListener(){}});
+  const w=dom.window,d=w.document;w.fetch=fetchWithCookies;w.AbortSignal=AbortSignal;w.confirm=()=>true;w.scrollTo=()=>{};w.matchMedia=()=>({matches:false,addEventListener(){}});
   w.HTMLElement.prototype.scrollIntoView=()=>{};
   const ctx=new Proxy({measureText:()=>({width:50})},{get:(o,k)=>k in o?o[k]:()=>{}});w.HTMLCanvasElement.prototype.getContext=()=>ctx;
   w.addEventListener("error",e=>errors.push(String(e.error)));
