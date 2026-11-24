@@ -217,7 +217,14 @@
         <div id="sensor-detail" class="panel" hidden>
           <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
-          <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Измерения без точной даты есть только в таблице.</p></div>
+          <div class="chart-container">
+            <canvas id="sensor-chart" width="900" height="260" role="img" aria-label="График измерений датчика"></canvas>
+            <ul class="sensor-chart-legend" aria-label="Линии графика">
+              <li id="sensor-temperature-key" hidden>Температура, °C</li>
+              <li id="sensor-humidity-key" hidden>Влажность, %</li>
+            </ul>
+            <p class="chart-note">Измерения без точной даты есть в таблице.</p>
+          </div>
           <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
           <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
           <details open><summary>Последние измерения</summary><div class="table-scroll sensor-record-scroll" tabindex="0" role="region" aria-label="Измерения датчика"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
@@ -877,8 +884,12 @@
 <label>Пароль сети настройки (необязательно)<input id="usb-setup-password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите пароль сети настройки<input id="usb-setup-confirm" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
 <label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Случайный пароль сети настройки</label><div id="usb-config-fields" class="field-grid"></div><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
 <label class="archive-toggle"><input id="usb-new-board" type="checkbox"> Подтверждаю удаление всех данных платы: настроек, ключа и журнала. Для обновления работающего датчика используйте его карточку.</label>
-<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" role="status" aria-live="polite"></p><pre id="usb-log" class="usb-log" hidden></pre>
+<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" role="status" aria-live="polite"></p>
 <div class="heading-actions"><button id="usb-flash" class="btn primary" type="submit">Прошить и настроить</button><button id="usb-configure" class="btn secondary" type="button">Настроить без прошивки</button><button id="usb-close" class="btn secondary" type="button">Закрыть</button></div>
+<section id="usb-log-panel" hidden>
+  <div class="sensor-firmware-heading"><h3>Журнал прошивки</h3><button id="usb-log-end" class="btn secondary" type="button" disabled>К последней строке</button></div>
+  <pre id="usb-log" class="serial-log" tabindex="0" role="region" aria-label="Журнал прошивки"></pre>
+</section>
 </form></dialog>
 </body>
 </html>
