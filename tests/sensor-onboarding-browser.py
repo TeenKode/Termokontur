@@ -44,6 +44,7 @@ SIMULATED_USB=r'''(() => {
   window.simBootArmed=false;
   port.rx.enqueue(new TextEncoder().encode('BOOT: Сервер подтвердил получение замера.\n'));
  };
+ window.emitSensorLog=lines=>port.rx.enqueue(new TextEncoder().encode(lines.join('\n')+'\n'));
  window.radioConnect=async()=>{
   const pair=await key;const raw=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const ident={public_key:hex(raw),hardware_id:'0123456789ab',sensor_type:window.savedUSB.sensor_type,firmware:'0.1.5'};
   const post=async(path,body)=>{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json();};
@@ -55,6 +56,26 @@ SIMULATED_USB=r'''(() => {
   if(!reply.ok)throw Error(await reply.text());return reply.json();
  };
 })();'''
+
+
+def verify_log_follow(page, log_id, emit):
+    log = page.locator(f"#{log_id}")
+    page.evaluate(emit, [f"Проверка журнала {index}" for index in range(1, 51)])
+    expect(log).to_contain_text("Проверка журнала 50")
+    at_end = "el=>el.scrollHeight > el.clientHeight && el.scrollHeight-el.clientHeight-el.scrollTop <= 2"
+    assert log.evaluate(at_end)
+
+    log.evaluate("el=>{el.scrollTop=0;}")
+    page.evaluate(emit, ["Строка во время чтения"])
+    expect(log).to_contain_text("Строка во время чтения")
+    assert log.evaluate("el=>el.scrollTop") == 0
+
+    page.locator(f"#{log_id}-end").click()
+    assert log.evaluate(at_end)
+    page.evaluate(emit, ["Строка после возврата к концу"])
+    expect(log).to_contain_text("Строка после возврата к концу")
+    assert log.evaluate(at_end)
+
 
 spec=importlib.util.spec_from_file_location('onboarding_fixture',ROOT/'tests/test_sensor_onboarding.py')
 fixtures=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixtures)
@@ -100,7 +121,14 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 wrapper='''export {SensorSerial,verifyIdentity,connectSensor} from './test-real-sensor-usb.mjs';
                 export async function flashFactory(port,image,metadata,callbacks){
                   if(image.byteLength!==metadata.size)throw Error('size mismatch');
-                  await callbacks.checkBoard('0123456789ab');if(callbacks.prepareSettings)window.savedUSB=await callbacks.prepareSettings('0123456789ab');callbacks.progress(100);window.simFlashed=true;return '0123456789ab';
+                  await callbacks.checkBoard('0123456789ab');
+                  if(callbacks.prepareSettings)window.savedUSB=await callbacks.prepareSettings('0123456789ab');
+                  window.emitFlashLog=lines=>lines.forEach(callbacks.log);
+                  await new Promise(resolve=>{
+                    window.finishFlash=resolve;
+                    callbacks.log('Тестовая запись прошивки');
+                  });
+                  callbacks.progress(100);window.simFlashed=true;return '0123456789ab';
                 }'''
                 page.route('**/static/sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=wrapper))
                 page.goto(base);page.fill('#password','browser-test-password');page.click('#login-form button[type="submit"]')
@@ -137,6 +165,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.locator('#sensor-usb-form details summary').click()
                 expect(page.locator('#sensor-usb-form [name="measure_s"]')).to_have_value('75')
                 page.fill('#sensor-usb-form input[name="measure_s"]','60')
+                expect(page.locator('#usb-config-fields input[name="wifi_min_mv"]')).to_have_value('0')
+                expect(page.locator('#usb-config-fields input[name="ota_min_mv"]')).to_have_value('3600')
+                page.fill('#usb-config-fields input[name="cutoff_mv"]','3200')
+                page.fill('#usb-config-fields input[name="wifi_min_mv"]','3100')
+                page.fill('#usb-config-fields input[name="ota_min_mv"]','0')
                 page.locator('#sensor-usb-form details summary').click()
                 page.check('#usb-new-board')
                 # The chooser is asynchronous: prevent a second setup before it closes.
@@ -169,8 +202,15 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 with page.expect_response(base + firmware_url + '/esp32-c3-factory.bin') as image:
                     page.click('#usb-flash')
                 assert image.value.ok
-                expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
-                expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
+                expect(page.locator('#usb-log')).to_contain_text('Тестовая запись прошивки')
+                expect(page.locator('#usb-close')).to_be_disabled()
+                assert page.locator('#usb-log').evaluate("""log=>{
+                    const dialog=log.closest('dialog').getBoundingClientRect(), bounds=log.getBoundingClientRect();
+                    return bounds.top>=dialog.top-1&&bounds.bottom<=dialog.bottom+1;
+                }""")
+                verify_log_follow(page, 'usb-log', 'lines=>window.emitFlashLog(lines)')
+                page.evaluate('window.finishFlash()')
+                expect(page.locator('#usb-status')).to_contain_text('Ожидаем подтверждения регистрации по Wi-Fi',timeout=30000)
                 assert page.evaluate('window.simFlashed && !window.simFinished') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
@@ -178,6 +218,8 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
                 assert api.get('/api/sensors/defaults').json()['config']['measure_s']==75
+                assert saved['config']['cutoff_mv']==saved['config']['wifi_min_mv']==3200
+                assert saved['config']['ota_min_mv']==3300
                 assert page.input_value('#usb-wifi-password')==''
                 onboard=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/onboard')]
                 assert not onboard
@@ -190,6 +232,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/11-usb-authorized.jpg'),type='jpeg',quality=85)
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
+                expect(page.locator('#usb-status')).to_contain_text('Сервер подтвердил регистрацию по Wi-Fi')
                 assert len(api.get('/api/sensors/devices').json())==1
                 page.click('#usb-close')
                 other_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 102'}).json()
@@ -232,7 +275,9 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     page.click('#sensor-usb-open')
                     expect(page.locator('#sensor-usb-dialog')).to_be_visible();assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                     assert page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollWidth<=el.clientWidth+1')
+                    expect(page.locator('#usb-log-panel')).to_be_hidden()
                     page.screenshot(path=f'/tmp/termokontur-usb-{width}.png');page.click('#usb-close')
+                page.set_viewport_size({'width':1440,'height':1100})
                 page.get_by_role('link', name='Отладка прошивки').click()
                 expect(page.get_by_role('heading', name='Отладка прошивки')).to_be_visible()
                 page.click('#debug-connect')
@@ -255,6 +300,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert page.locator('#debug-wifi-password').text_content() == ' Wi-Fi <demo> & pass  '
                 expect(page.locator('#debug-log')).to_contain_text('SETUP password: [скрыт]')
                 expect(page.locator('#debug-log')).not_to_contain_text('masked-test-password')
+                verify_log_follow(page, 'debug-log', 'lines=>window.emitSensorLog(lines)')
                 with page.expect_download() as debug_log:
                     page.click('#debug-save')
                 saved_log = debug_log.value.path().read_text(encoding='utf-8')

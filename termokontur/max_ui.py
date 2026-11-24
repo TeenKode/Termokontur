@@ -51,8 +51,7 @@ def _btn(title: str, payload: str) -> dict:
 def menu_buttons(uid: str) -> list[list[dict]]:
     """A fresh menu is included even after errors and reminder/alert messages."""
     rows = [
-        [_btn("🌡️ Отправить за сегодня", "tk:send")],
-        [_btn("✏️ Изменить за сегодня", "tk:change")],
+        [_btn("Отправить", "tk:send")],
         [_btn("📊 Показания", "tk:today"), _btn("🏫 Кабинеты", "tk:rooms")],
     ]
     s = _session(uid)
@@ -355,7 +354,7 @@ def handle_start(uid: str, payload: str, event_id: str) -> str:
         room = db.bind_code(uid, payload, event_id)
         if room is None:
             return "⚠️ Код недействителен или истёк. Запросите новый у администратора."
-        return f"✅ Кабинет привязан: {room['building']} / {room['name']}.\nТеперь выберите «Отправить за сегодня»."
+        return f"✅ Кабинет привязан: {room['building']} / {room['name']}.\nТеперь выберите «Отправить»."
     rooms = db.bound_rooms(uid)
     if rooms:
         return "🌡️ Термоконтур. Ваших кабинетов: " + str(len(rooms)) + "."

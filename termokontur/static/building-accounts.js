@@ -34,7 +34,7 @@ async function loadBuildingAccounts() {
       edit.addEventListener("click",()=>editBuildingAccount(account));
       const remove=el("button","btn secondary","Удалить");
       remove.type="button";
-      remove.addEventListener("click",async()=>{
+      onOperation(remove,"Отзываем доступ к корпусу…",async()=>{
         if(!confirm("Удалить доступ для "+account.username+"?"))return;
         try{
           await api("/api/building-accounts/"+encodeURIComponent(account.username),"DELETE");
@@ -49,8 +49,7 @@ async function loadBuildingAccounts() {
 }
 
 $("building-account-reset").addEventListener("click",()=>editBuildingAccount());
-buildingAccountForm.addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation(buildingAccountForm,"Сохраняем учётную запись…",async()=>{
   const username=$("building-account-name").value.trim();
   const payload={
     building:$("building-account-building").value,

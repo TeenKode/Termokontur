@@ -1,9 +1,11 @@
 import {SensorSerial, verifyIdentity} from "./sensor-usb.mjs";
+import {createSerialLog} from "./sensor-log.mjs";
 
 const field = name => document.getElementById("debug-" + name);
 const panelVersion = field("panel-version").textContent;
 const supported = Boolean(window.isSecureContext && navigator.serial);
 const log = field("log");
+const journal = createSerialLog(log, field("log-end"), 65536);
 const diagnostics = ["firmware", "hardware", "sensor-type", "pending", "temperature", "humidity", "battery"];
 const clock = new Intl.DateTimeFormat("ru-RU", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const number = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 2});
@@ -39,10 +41,7 @@ function controls() {
 
 function appendLog(line) {
   if (!line) return;
-  const follow = log.scrollHeight - log.clientHeight - log.scrollTop < 20;
-  const entry = "[" + clock.format(new Date()) + "] " + line + "\n";
-  log.textContent = (log.textContent + entry).slice(-65536);
-  if (follow) log.scrollTop = log.scrollHeight;
+  journal.append("[" + clock.format(new Date()) + "] " + line);
   controls();
 }
 
@@ -186,7 +185,7 @@ field("wifi").addEventListener("click", () => {
   else setSetupWifi(null);
 });
 field("clear").addEventListener("click", () => {
-  log.textContent = "";
+  journal.clear();
   controls();
 });
 field("save").addEventListener("click", () => {

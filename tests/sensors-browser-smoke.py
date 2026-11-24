@@ -93,12 +93,16 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 assert page.locator('#sensor-config-form .archive-toggle').inner_text().strip()=="Измерять температуру"
                 labels=page.evaluate("""() => {
                     const context=document.getElementById("sensor-chart").getContext("2d");
-                    const before=context.fillText, labels=[];
+                    const before=context.fillText, arc=context.arc, labels=[], points=[];
                     context.fillText=function(text,...args){ labels.push(String(text));return before.call(this,text,...args); };
-                    try{drawSensorChart();}finally{context.fillText=before;}
-                    return labels;
+                    context.arc=function(x,y,...args){ points.push([x,y]);return arc.call(this,x,y,...args); };
+                    try{drawSensorChart();}finally{context.fillText=before;context.arc=arc;}
+                    return {labels,points};
                 }""")
-                assert "100%" not in labels and "0%" not in labels,labels
+                assert "100%" not in labels["labels"] and "0%" not in labels["labels"],labels
+                assert len(labels["points"]) == 1,labels
+                expect(page.locator("#sensor-temperature-key")).to_be_visible()
+                expect(page.locator("#sensor-humidity-key")).to_be_hidden()
                 assert not errors,errors
                 browser.close()
         print("Browser smoke passed: login, create/enroll, 48 records, config delivery, desktop/mobile, light/dark, no JS errors or page overflow")

@@ -1,140 +1,202 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
-let historyData = null, historyRequestId = 0;
+let historyData = null, historyRequestId = 0, readingRequestId = 0;
 const selectedMaxRooms = new Set();
 let activeMaxCodes = [], issuedMaxCodes = [];
 let maxStaff = [], selectedMaxStaff = null;
-let reportsData = null, selectedReportSection = "coverage";
+let reportsData = null, reportRequestId = 0, selectedReportSection = "coverage";
 let buildingScope = "";
 let panelOpened = false;
 const maxAssignmentRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
+function setFeedback(id,message,state=""){
+  const target=$(id);
+  if(target.textContent!==message)target.textContent=message;
+  if(state)target.dataset.state=state;
+  else delete target.dataset.state;
+}
 const el = (tag, className = "", value = "") => {
   const item = document.createElement(tag);
   if(className) item.className = className;
   if(value !== null && value !== undefined) item.textContent = String(value);
   return item;
 };
-function toast(message, isError = false) {
-  const target = $("toast");
-  target.textContent = message; target.className = "toast show" + (isError ? " error" : " success");
-  target.setAttribute("role",isError?"alert":"status");
-  target.setAttribute("aria-live",isError?"assertive":"polite");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { target.className = "toast"; }, 4200);
+const navigationToggle = $("navigation-toggle");
+function closeNavigation(restoreFocus=false) {
+  if(navigationToggle.getAttribute("aria-expanded")!=="true")return;
+  navigationToggle.setAttribute("aria-expanded","false");
+  if(restoreFocus)navigationToggle.focus({preventScroll:true});
 }
-/* Unified operation feedback. Background polling stays silent; user actions
-   show an in-button spinner and a polite, accessible global progress message. */
-let interactionButton=null, interactionAt=0, foregroundCount=0, networkFailed=false;
-const buttonOperations=new WeakMap();
-let operationRegion=null;
-function operationStatus(message,kind="working"){
-  if(!operationRegion){
-    operationRegion=document.createElement("div");
-    operationRegion.id="operation-status";
-    operationRegion.className="operation-status";
-    operationRegion.setAttribute("role","status");
-    operationRegion.setAttribute("aria-live","polite");
-    operationRegion.hidden=true;
-    const topbar=document.querySelector(".topbar");
-    (topbar?.parentNode||document.body).insertBefore(operationRegion,topbar?.nextSibling||null);
-  }
-  operationRegion.textContent=message;
-  operationRegion.dataset.kind=kind;
-  operationRegion.hidden=!message;
+navigationToggle.addEventListener("click",()=>{
+  const open=navigationToggle.getAttribute("aria-expanded")==="true";
+  navigationToggle.setAttribute("aria-expanded",String(!open));
+});
+document.querySelector(".sidebar").addEventListener("keydown",event=>{
+  if(event.key!=="Escape"||!navigationToggle.offsetWidth)return;
+  closeNavigation(true);
+});
+for(const type of ["click","focusin"]){
+  document.addEventListener(type,event=>{
+    if(!event.target.closest(".sidebar"))closeNavigation();
+  });
 }
-document.addEventListener("click",event=>{
-  const button=event.target.closest("button");
-  if(button){interactionButton=button;interactionAt=Date.now();}
-},true);
-document.addEventListener("submit",event=>{
-  const button=event.submitter||event.target.querySelector('button[type="submit"]');
-  if(button){interactionButton=button;interactionAt=Date.now();}
-},true);
-function beginRequest(path,method){
-  const userAction=Date.now()-interactionAt<1200 && interactionButton?.isConnected;
-  if(!userAction)return ()=>{};
-  const button=interactionButton;
-  // Navigation switches are not save operations. Showing a spinner inside
-  // a tab changes its label width and can move adjacent tabs.
-  if(button.matches("[data-tab], [data-settings-target]"))return ()=>{};
-  const existing=buttonOperations.get(button);
-  if(existing) {
-    existing.count++;
-  }else{
-    buttonOperations.set(button,{count:1,disabled:button.disabled});
-    button.classList.add("operation-busy");
-    button.setAttribute("aria-busy","true");
-    button.disabled=true;
+const sessionEndedMessage="Сеанс завершился. Войдите снова.";
+const serverOfflineMessage="Нет связи с сервером. Проверьте подключение.";
+const browserOfflineMessage="Нет сети. Проверьте подключение.";
+let connectionProblem="";
+const activeOperations=new Map();
+
+function syncFeedbackContainer(){
+  const openDialogs=[...document.querySelectorAll("dialog[open]")];
+  const container=openDialogs.find(dialog=>dialog.contains(document.activeElement))||openDialogs.at(-1)||document.body;
+  const feedback=$("panel-feedback");
+  if(feedback.parentElement!==container)container.append(feedback);
+}
+const dialogObserver=new MutationObserver(syncFeedbackContainer);
+for(const dialog of document.querySelectorAll("dialog")){
+  dialogObserver.observe(dialog,{attributes:true,attributeFilter:["open"]});
+}
+function hideToast(){
+  clearTimeout(toastTimer);
+  show("toast",false);
+}
+function scheduleToast(){
+  clearTimeout(toastTimer);
+  const target=$("toast");
+  if(!target.hidden&&!target.matches(":hover, :focus-within")){
+    toastTimer=setTimeout(hideToast,target.dataset.kind==="error"?10000:5000);
   }
-  foregroundCount++;
-  const label=method==="GET"?"Загружаем данные…":method==="DELETE"?"Удаляем…":"Сохраняем изменения…";
-  operationStatus(label);
-  return ()=>{
-    const current=buttonOperations.get(button);
-    if(current&&--current.count===0){
-      button.classList.remove("operation-busy");
-      button.removeAttribute("aria-busy");
-      button.disabled=current.disabled;
-      buttonOperations.delete(button);
+}
+$("toast-close").addEventListener("click",hideToast);
+for(const type of ["pointerenter","pointerleave","focusin","focusout"]){
+  $("toast").addEventListener(type,()=>queueMicrotask(scheduleToast));
+}
+function toast(message,isError=false){
+  if(!message||message===sessionEndedMessage||isError&&message===connectionProblem)return;
+  syncFeedbackContainer();
+  $("toast").dataset.kind=isError?"error":"success";
+  $("toast-message").setAttribute("role",isError?"alert":"status");
+  show("toast",true);
+  $("toast-message").textContent=message;
+  scheduleToast();
+}
+function renderOperationStatus(){
+  let message=connectionProblem;
+  if(!message){
+    for(const operation of activeOperations.values()){
+      if(operation.visible)message=operation.message;
     }
-    foregroundCount=Math.max(0,foregroundCount-1);
-    if(!foregroundCount&&!networkFailed)operationStatus("");
-  };
+  }
+  const region=$("operation-status");
+  if(region.textContent!==message)region.textContent=message;
+  region.dataset.kind=connectionProblem?"error":"working";
+  show("operation-status",Boolean(message));
+}
+async function runOperation(button,message,action,owner=button){
+  if(activeOperations.has(owner)||button?.disabled)return;
+  const operation={message,visible:false};
+  activeOperations.set(owner,operation);
+  button?.classList.add("operation-busy");
+  button?.setAttribute("aria-busy","true");
+  button?.setAttribute("aria-disabled","true");
+  const timer=setTimeout(()=>{
+    operation.visible=true;
+    syncFeedbackContainer();
+    renderOperationStatus();
+  },250);
+  try{await action();}
+  catch(error){toast(error.message,true);}
+  finally{
+    clearTimeout(timer);
+    activeOperations.delete(owner);
+    button?.classList.remove("operation-busy");
+    button?.removeAttribute("aria-busy");
+    button?.removeAttribute("aria-disabled");
+    renderOperationStatus();
+  }
+}
+function onOperation(control,message,action){
+  const isForm=control.tagName==="FORM";
+  control.addEventListener(isForm?"submit":"click",event=>{
+    if(isForm&&event.submitter?.value==="cancel")return;
+    if(isForm)event.preventDefault();
+    const button=isForm
+      ?event.submitter||control.querySelector('button[type="submit"],button:not([type])')
+      :control;
+    void runOperation(button,message,()=>action(event),control);
+  });
 }
 window.addEventListener("offline",()=>{
-  networkFailed=true;operationStatus("Нет сети. Проверьте подключение.","error");
+  connectionProblem=browserOfflineMessage;
+  renderOperationStatus();
 });
-window.addEventListener("online",()=>{
-  networkFailed=false;
-  operationStatus(foregroundCount?"Восстанавливаем соединение…":"","working");
-});
-async function api(path, method = "GET", body) {
-  const finish=beginRequest(path,method);
-  try{
-    const opts = {method, credentials:"same-origin", headers:{"Accept":"application/json"}};
-    if(path.startsWith("/api/update/"))opts.cache="no-store";
-    if(body !== undefined) { opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(body); }
-    let response;
-    try {response=await fetch(path, opts);}
-    catch(error){
-      networkFailed=true;
-      operationStatus("Сервер недоступен. Проверьте подключение.","error");
-      throw new Error("Нет связи с сервером. Проверьте сеть.");
-    }
-    if(networkFailed){networkFailed=false;operationStatus("");}
-    if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
-    if(!response.ok) {
-      let detail = response.statusText;
-      try { const error=await response.json(); detail=typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail); } catch {}
-      throw new Error(detail || "Ошибка запроса");
-    }
-    return response.json();
-  } finally {finish();}
+window.addEventListener("online",()=>{void api("/health").catch(()=>{});});
+async function api(path,method="GET",body){
+  const opts={method,credentials:"same-origin",headers:{"Accept":"application/json"}};
+  if(path.startsWith("/api/update/"))opts.cache="no-store";
+  if(body instanceof FormData)opts.body=body;
+  else if(body instanceof Blob){
+    opts.headers["Content-Type"]="application/octet-stream";
+    opts.body=body;
+  }
+  else if(body!==undefined){
+    opts.headers["Content-Type"]="application/json";
+    opts.body=JSON.stringify(body);
+  }
+  let response;
+  try{response=await fetch(path,opts);}
+  catch{
+    connectionProblem=navigator.onLine===false?browserOfflineMessage:serverOfflineMessage;
+    renderOperationStatus();
+    throw new Error(connectionProblem);
+  }
+  if(connectionProblem&&navigator.onLine!==false){
+    connectionProblem="";
+    renderOperationStatus();
+  }
+  if(response.status===401&&path!=="/api/login"){
+    if(!$("app-root").hidden)enterLogin(sessionEndedMessage);
+    throw new Error(sessionEndedMessage);
+  }
+  if(!response.ok){
+    const error=await response.json().catch(()=>null);
+    const detail=error?.detail;
+    const message=typeof detail==="string"?detail:
+      Array.isArray(detail)?"Проверьте поля формы и повторите попытку.":"Ошибка запроса ("+response.status+").";
+    throw Object.assign(new Error(message),{status:response.status});
+  }
+  return response.json();
 }
-function enterLogin() {
+function enterLogin(message="") {
+  closeNavigation();
+  for(const dialog of document.querySelectorAll("dialog[open]"))dialog.close();
+  hideToast();
   show("login-screen",true); show("app-root",false); $("password").value="";
+  $("login-error").textContent=message;
 }
 function enterApp(session) {
   panelOpened=true;
   buildingScope=session.building||"";
   for(const element of document.querySelectorAll("[data-admin-only]"))element.hidden=Boolean(buildingScope);
-  if(buildingScope)$("panel-scope").textContent=buildingScope;
+  $("panel-scope").textContent=buildingScope;
+  show("panel-scope",Boolean(buildingScope));
   show("login-screen",false);show("app-root",true);
 }
 // Move to the beginning of a different section before replacing long content.
 // Otherwise the browser clamps/anchors scroll to the shorter new page and
 // sticky navigation visibly jumps. Never animate this corrective scroll.
 function scrollToSectionStart(section){
-  const top=section.getBoundingClientRect().top+window.scrollY;
-  if(window.scrollY>top+16)window.scrollTo({top:Math.max(0,top-12),behavior:"instant"});
+  const offset=parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop)||12;
+  const top=Math.max(0,section.getBoundingClientRect().top+window.scrollY-offset);
+  if(window.scrollY>top+16)window.scrollTo({top,behavior:"instant"});
 }
 function setTab(name) {
   const target=$("view-"+name);
   if(!target || (selectedTab===name && !target.hidden))return false;
-  scrollToSectionStart(document.querySelector(".topbar"));
+  scrollToSectionStart($("app-root"));
   selectedTab = name;
   for(const view of ["overview","rooms","staff","reports","readings","sensors","settings"]) {
     const active=view===name;
@@ -157,18 +219,27 @@ function temperature(value) {return value === null || value === undefined ? "—
 function option(select,value,label) {const o=el("option","",label);o.value=value;select.append(o);}
 function renderFilters() {
   const oldBuilding=$("building-filter").value, oldReading=$("reading-filter").value;
+  const oldManualRoom=$("reading-room").value;
   for(const id of ["building-filter","reading-filter","reading-room"]) $(id).replaceChildren();
   option($("building-filter"),"","Все корпуса");
-  for(const building of [...new Set(rooms.map(r=>r.building))].sort()) option($("building-filter"),building,building);
-  $("building-filter").value=buildingScope||oldBuilding;
+  const buildings=new Set(rooms.map(room=>room.building));
+  if(buildingScope)buildings.add(buildingScope);
+  for(const building of [...buildings].sort())option($("building-filter"),building,building);
+  $("building-filter").value=buildingScope||(buildings.has(oldBuilding)?oldBuilding:"");
   $("building-filter").disabled=Boolean(buildingScope);
   option($("reading-filter"),"","Все помещения");
+  option($("reading-room"),"","Выберите помещение");
   for(const room of rooms) {
     const label=room.building+" · "+room.name;
     option($("reading-filter"),String(room.id),label);
     option($("reading-room"),String(room.id),label);
   }
   $("reading-filter").value=oldReading;
+  if(!$("reading-filter").value)$("reading-filter").value="";
+  $("reading-room").value=oldManualRoom;
+  if(!$("reading-room").value)$("reading-room").value="";
+  show("reading-room-hint",rooms.length===0);
+  $("reading-save").disabled=rooms.length===0;
 }
 function renderDaily() {
   if(!daily) return;
@@ -177,25 +248,26 @@ function renderDaily() {
   const expected=selected.filter(r=>r.expected);
   const missing=selected.filter(r=>r.daily_status==="missing");
   const awaiting=selected.filter(r=>r.daily_status==="awaiting");
-  $("daily-date").textContent="На "+daily.local_date+" · "+daily.timezone+(building?" · "+building:"");
+  $("daily-date").textContent=fullDay(daily.local_date)+" · "+daily.timezone;
   $("daily-counts").textContent=(expected.length-missing.length-awaiting.length)+" из "+expected.length;
-  const area=$("daily-missing");area.replaceChildren();
-  if(!missing.length&&!awaiting.length){
-    const message=expected.length?"Показания по графику собраны.":
+  show("daily-status",!missing.length&&!awaiting.length);
+  if(!$("daily-status").hidden){
+    $("daily-status").textContent=expected.length?"Показания по графику собраны.":
       selected.length?"По календарю сегодня нет обязательных замеров.":"Нет помещений в выбранном корпусе.";
-    area.append(el("p","daily-complete",message));
-    return;
   }
-  for(const [group,title] of [[missing,"Нет измерений"],[awaiting,"Ожидаем выгрузку датчика"]]){
-    if(!group.length)continue;
-    area.append(el("p","daily-heading",title+": "+group.length));
-    const list=el("div","daily-tags");
-    for(const room of group){
+  for(const [id,group,title] of [
+    ["daily-missing-rooms",missing,"Нет измерений"],
+    ["daily-awaiting-rooms",awaiting,"Ожидаем выгрузку датчика"],
+  ]){
+    const details=$(id);
+    details.hidden=!group.length;
+    details.querySelector("summary").textContent=title+" · "+group.length;
+    const labels=group.map(room=>{
       const label=el("span","daily-tag",room.building+" · "+room.name);
       if(room.waiting_until)label.title="Окно выгрузки до "+when(new Date(room.waiting_until*1000).toISOString());
-      list.append(label);
-    }
-    area.append(list);
+      return label;
+    });
+    details.querySelector(".daily-tags").replaceChildren(...labels);
   }
 }
 function renderOverview() {
@@ -207,20 +279,28 @@ function renderOverview() {
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
-  const search=$("search-rooms").value.toLocaleLowerCase("ru");
-  const filtered=selected.filter(r=>(r.name+" "+r.building+" "+r.kind).toLocaleLowerCase("ru").includes(search));
+  const search=$("search-rooms").value.trim().toLocaleLowerCase("ru");
+  const status=$("overview-status").value;
+  const filtered=selected.filter(room=>{
+    const roomStatus=["below","above"].includes(room.status)?"alert":room.status;
+    const name=(room.name+" "+room.building+" "+room.kind).toLocaleLowerCase("ru");
+    return (!status||status===roomStatus)&&name.includes(search);
+  });
   const tbody=$("overview-table");tbody.replaceChildren();
   for(const item of filtered){
-    const tr=el("tr");cell(tr,item.name);cell(tr,item.building);
+    const tr=el("tr");
+    cell(tr,item.name).append(el("small","table-building",item.building));
     const val=cell(tr,temperature(item.last_temp),"temp"+(item.status==="below"?" low":item.status==="above"?" high":""));
     val.title=item.last_source?"Источник: "+(sources[item.last_source]||item.last_source):"";
+    const label=item.status==="missing"&&item.last_at?"Устарело":statuses[item.status];
+    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,label||item.status));
     cell(tr,Number(item.min_temp).toLocaleString("ru-RU")+"–"+Number(item.max_temp).toLocaleString("ru-RU")+" °C");
     cell(tr,when(item.last_at));
-    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,statuses[item.status]||item.status));
     tbody.append(tr);
   }
   show("overview-empty",filtered.length===0);
-  $("overview-empty").textContent=overview.length?"Помещения не найдены.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
+  $("overview-empty").textContent=selected.length?"По выбранным фильтрам помещений нет.":
+    building?"В этом корпусе пока нет помещений.":"Помещения пока не добавлены.";
 }
 function shortDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7):"—";}
 function fullDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4):"—";}
@@ -272,24 +352,27 @@ function renderHistory(){
   const series=historyData.series;
   const today=series[series.length-1],yesterday=series[series.length-2];
   $("avg-today").textContent=temperature(today.average);
-  $("avg-today-desc").textContent=today.average==null?
-    "За сегодня показаний пока нет.":
-    "По "+today.rooms_measured+" из "+today.rooms_total+" кабинетов · "+historyData.timezone;
+  show("avg-today-desc",today.average==null);
   const change=$("avg-change");
   change.className="dashboard-change";
-  if(today.average!=null&&yesterday?.average!=null){
+  change.hidden=today.average==null||yesterday?.average==null;
+  if(!change.hidden){
     const diff=today.average-yesterday.average;
     change.textContent=(Math.abs(diff)<0.005?"Без изменений":(diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C")+" к предыдущему дню";
     if(diff>0.005)change.classList.add("rise");
     if(diff< -0.005)change.classList.add("fall");
-  }else change.textContent="Для сравнения нужны показания за сегодня и вчера";
+  }
   $("today-coverage").textContent=today.coverage+"%";
-  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" кабинетов с данными";
+  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" помещений";
   $("coverage-progress").value=today.coverage;
-  $("today-alerts").textContent="Отклонения по среднесуточной: "+today.out_of_range;
+  show("today-coverage-desc",true);
+  show("coverage-progress",true);
+  $("today-alerts").textContent="Вне нормы по средней: "+today.out_of_range;
+  show("today-alerts",today.out_of_range>0);
   const hasReadings=series.some(x=>x.average!=null);
   show("history-empty",!hasReadings);
-  $("history-chart").hidden=!hasReadings;
+  show("history-chart-frame",hasReadings);
+  show("history-legend",hasReadings);
   renderHistoryTable();
   renderBuildingSummary();
   renderBuildingMatrix();
@@ -297,8 +380,9 @@ function renderHistory(){
   renderHeatmap();
   if(hasReadings)drawHistoryChart();
 }
-const buildingPalette=["#0f9e83","#4d79c7","#e08b3f","#8768c3","#c55a83","#3f9da5","#a0763d","#78883f","#b45855","#6479a2"];
-function buildingColor(index){return buildingPalette[index%buildingPalette.length];}
+const buildingPalette=["#087b65","#356bad","#ad591d","#7951af","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
+const darkBuildingPalette=["#5bdac1","#87b7fc","#f6ae68","#bfa0f6","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
+function buildingColor(index){const palette=document.documentElement.dataset.theme==="dark"?darkBuildingPalette:buildingPalette;return palette[index%palette.length];}
 function renderHistoryLegend(){
   const legend=$("history-legend");legend.replaceChildren();
   if(!historyData)return;
@@ -309,7 +393,7 @@ function renderHistoryLegend(){
     item.append(line,document.createTextNode(building.name));
     legend.append(item);
   });
-  if(buildings.length>1){
+  if(buildings.length!==1){
     const item=el("span","history-key");
     item.append(el("i","history-key-school"),document.createTextNode("Вся школа"));
     legend.append(item);
@@ -370,80 +454,161 @@ function renderBuildingMatrix(){
   }
   show("building-matrix-empty",buildings.length===0);
 }
-function drawHistoryChart(){
-  const canvas=$("history-chart");
-  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||canvas.hidden)return;
-  const series=historyData.series,buildings=historyData.buildings||[];
-  const width=Math.max(280,canvas.parentElement.clientWidth-2),height=310,dpr=window.devicePixelRatio||1;
-  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
-  canvas.style.width=width+"px";canvas.style.height=height+"px";
-  const ctx=canvas.getContext("2d");if(!ctx)return;
-  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
-  const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
-  const observed=[...series,...buildings.flatMap(x=>x.series)].map(x=>x.average).filter(v=>v!==null);
-  if(!observed.length)return;
-  let minimum=Math.floor(Math.min(...observed)-1),maximum=Math.ceil(Math.max(...observed)+1);
-  if(maximum-minimum<4){const mid=(minimum+maximum)/2;minimum=mid-2;maximum=mid+2;}
-  const px=i=>left+(series.length===1?graphWidth/2:graphWidth*i/(series.length-1));
-  const py=v=>top+(maximum-v)/(maximum-minimum)*graphHeight;
-  const dark=document.documentElement.dataset.theme==="dark";
-  const historyGrid=dark?"#354961":"#eaf0f4",historyText=dark?"#b4c5da":"#8594a6";
-  ctx.font="12px system-ui";ctx.strokeStyle=historyGrid;ctx.fillStyle=historyText;ctx.textAlign="right";ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const value=minimum+(maximum-minimum)*(4-i)/4,y=top+graphHeight*i/4;
-    ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();
-    ctx.fillText(value.toLocaleString("ru-RU",{maximumFractionDigits:1})+"°",left-8,y+4);
+/* Shared canvas trends: one layout, readable scales, and gap-aware series. */
+function trendScale(values,percent=false){
+  if(percent)return {min:0,max:100,step:25};
+  const lo=Math.min(...values),hi=Math.max(...values);
+  const span=Math.max(4,hi-lo+1);
+  const target=span/4,power=10**Math.floor(Math.log10(target));
+  const steps=[1,2,2.5,5,10,20].map(v=>v*power);
+  for(const step of steps){
+    if(step<target)continue;
+    const min=Math.floor((lo-.5)/step)*step;
+    if(min+4*step>=hi+.5)return {min,max:min+4*step,step};
   }
-  function line(points,color,dashed=false){
-    ctx.strokeStyle=color;ctx.lineWidth=dashed?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
-    ctx.setLineDash(dashed?[7,5]:[]);
-    // Each segment is drawn separately, so missing calendar dates never bridge.
-    for(let i=0;i<points.length-1;i++){
-      if(points[i].average==null||points[i+1].average==null)continue;
-      ctx.beginPath();ctx.moveTo(px(i),py(points[i].average));
-      ctx.lineTo(px(i+1),py(points[i+1].average));ctx.stroke();
+  return {min:lo-1,max:hi+1,step:(hi-lo+2)/4};
+}
+function trendTicks(positions,width,labelWidth){
+  if(!positions.length)return [];
+  if(positions.length===1)return [0];
+  const last=positions.length-1,available=Math.max(1,Math.floor(width/labelWidth));
+  if(width<labelWidth)return [last];
+  const chosen=[0];
+  for(let i=1;i<last;i++){
+    if(chosen.length>=available)break;
+    if((positions[i]-positions[chosen.at(-1)])*width>=labelWidth&&
+       (positions[last]-positions[i])*width>=labelWidth)chosen.push(i);
+  }
+  if((positions[last]-positions[chosen.at(-1)])*width>=labelWidth)chosen.push(last);
+  return chosen;
+}
+function renderTrend(canvas,options){
+  const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
+  if(!width||!height)return;
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const dark=document.documentElement.dataset.theme==="dark";
+  const ink=dark?"#b9c9dc":"#465d73",grid=dark?"#35465b":"#e0e8ef",surface=dark?"#18283b":"#fff";
+  const frame=canvas.parentElement;
+  let tooltip=frame.querySelector(".trend-tooltip")||frame.querySelector("#history-tooltip");
+  if(!tooltip){tooltip=el("div","trend-tooltip");frame.append(tooltip);}
+  tooltip.classList.add("trend-tooltip");tooltip.hidden=true;
+  canvas.onpointermove=canvas.onpointerleave=canvas.onpointerdown=canvas.onkeydown=canvas.onblur=null;
+  const data=options.points,series=options.series.filter(s=>s.values.some(Number.isFinite));
+  const primary=series.filter(s=>s.unit!=="%"),humidity=series.filter(s=>s.unit==="%");
+  const dual=primary.length>0&&humidity.length>0;
+  const scale=trendScale(primary.flatMap(s=>s.values.filter(Number.isFinite)),!primary.length);
+  const secondary=trendScale([],true);
+  const left=width<320?47:58,right=width-(dual?47:20),top=29,bottom=height-35;
+  const plotWidth=right-left,plotHeight=bottom-top;
+  const times=data.map((p,i)=>Number.isFinite(p.time)?p.time:i);
+  const first=Math.min(...times),last=Math.max(...times);
+  const positions=times.map(t=>last===first?.5:(t-first)/(last-first));
+  const x=i=>left+positions[i]*plotWidth;
+  const y=(v,s)=>{const a=dual&&s.unit==="%"?secondary:scale;return bottom-(v-a.min)/(a.max-a.min)*plotHeight;};
+  const format=v=>Number(v.toFixed(2)).toLocaleString("ru-RU",{maximumFractionDigits:2});
+  function draw(active=-1){
+    ctx.clearRect(0,0,width,height);
+    ctx.font="12px system-ui";ctx.fillStyle=ink;ctx.textBaseline="middle";
+    if(!series.length||plotWidth<=0||plotHeight<=0){
+      ctx.textAlign="center";ctx.fillText(options.empty||"Нет данных за выбранный период",width/2,height/2,Math.max(1,width-24));return;
+    }
+    ctx.font="600 11px system-ui";ctx.textAlign="left";ctx.fillStyle=primary.length&&dual?primary[0].color:ink;
+    ctx.fillText(primary.length?"Температура, °C":"Влажность, %",left,12);
+    if(dual){ctx.textAlign="right";ctx.fillStyle=humidity[0].color;ctx.fillText(width<360?"%":"Влажность, %",right,12);}
+    ctx.font="11px system-ui";
+    for(let i=0;i<=4;i++){
+      const yy=bottom-i*plotHeight/4;
+      ctx.strokeStyle=grid;ctx.lineWidth=1;ctx.setLineDash(i===0?[]:[3,4]);
+      ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();
+      ctx.fillStyle=ink;ctx.textAlign="right";ctx.fillText(format(scale.min+i*scale.step),left-8,yy);
+      if(dual){ctx.textAlign="left";ctx.fillText(String(i*25)+"%",right+7,yy);}
     }
     ctx.setLineDash([]);
-    for(let i=0;i<points.length;i++){
-      if(points[i].average==null)continue;
-      ctx.beginPath();ctx.arc(px(i),py(points[i].average),dashed?2.3:3.3,0,Math.PI*2);
-      ctx.fillStyle=dashed?color:(dark?"#152438":"#fff");ctx.fill();
-      if(!dashed){ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();}
+    const labelWidth=Math.max(44,...data.map(p=>ctx.measureText(p.label).width+15));
+    ctx.fillStyle=ink;
+    for(const i of trendTicks(positions,plotWidth,labelWidth)){
+      ctx.textAlign=positions[i]<.01?"left":positions[i]>.99?"right":"center";
+      ctx.fillText(data[i].label,x(i),height-13);
+    }
+    for(const s of series){
+      ctx.strokeStyle=s.color;ctx.lineWidth=s.dash?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
+      ctx.setLineDash(s.dash||[]);ctx.beginPath();
+      const connected=i=>i>0&&Number.isFinite(s.values[i-1])&&Number.isFinite(s.values[i])&&(!options.contiguous||options.contiguous(i));
+      for(let i=0;i<data.length;i++){
+        if(!Number.isFinite(s.values[i]))continue;
+        if(connected(i))ctx.lineTo(x(i),y(s.values[i],s));else ctx.moveTo(x(i),y(s.values[i],s));
+      }
+      ctx.stroke();ctx.setLineDash([]);
+      for(let i=0;i<data.length;i++){
+        if(!Number.isFinite(s.values[i]))continue;
+        const isolated=!connected(i)&&!connected(i+1);
+        if(!isolated&&active!==i&&data.length>Math.max(24,plotWidth/17))continue;
+        ctx.beginPath();ctx.arc(x(i),y(s.values[i],s),active===i?4.5:3,0,Math.PI*2);
+        ctx.fillStyle=surface;ctx.fill();ctx.strokeStyle=s.color;ctx.lineWidth=2;ctx.stroke();
+      }
+    }
+    if(active>=0){
+      ctx.strokeStyle=ink;ctx.globalAlpha=.5;ctx.lineWidth=1;ctx.setLineDash([3,4]);
+      ctx.beginPath();ctx.moveTo(x(active),top);ctx.lineTo(x(active),bottom);ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1;
     }
   }
-  // On the school-wide view prioritize building lines, with the school mean
-  // as a restrained dashed reference. When one building is selected, draw only it.
-  if(buildings.length>1)line(series,dark?"#a5bacc":"#6a7b8d",true);
-  buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
-  ctx.textAlign="center";ctx.fillStyle=historyText;ctx.font="11px system-ui";
-  const step=Math.max(1,Math.ceil(series.length/7));
-  for(let i=0;i<series.length;i++){
-    if(i%step!==0&&i!==series.length-1)continue;
-    ctx.fillText(shortDay(series[i].date),px(i),height-15);
+  draw();
+  if(!series.length||plotWidth<=0||plotHeight<=0){canvas.removeAttribute("tabindex");return;}
+  let active=-1;
+  function select(i){
+    active=i;draw(i);tooltip.replaceChildren();
+    tooltip.append(el("strong","trend-tooltip-date",data[i].title||data[i].label));
+    for(const s of series){
+      const row=el("div","trend-tooltip-row"),key=el("span","trend-tooltip-key"),dot=el("i","trend-tooltip-dot");
+      dot.style.background=s.color;key.append(dot,document.createTextNode(s.name));
+      const v=s.values[i];row.append(key,el("b","",Number.isFinite(v)?format(v)+(s.unit==="%"?" %":" °C"):"Нет данных"));
+      tooltip.append(row);
+    }
+    tooltip.hidden=false;
+    const rect=canvas.getBoundingClientRect(),parent=frame.getBoundingClientRect();
+    const offset=rect.left-parent.left,half=tooltip.offsetWidth/2;
+    tooltip.style.left=Math.max(half+6,Math.min(frame.clientWidth-half-6,offset+x(i)))+"px";
+    tooltip.style.top=(rect.top-parent.top+4)+"px";
+    tooltip.style.transform="translateX(-50%)";
   }
+  function clear(){active=-1;tooltip.hidden=true;draw();}
+  function pointer(event){
+    const rect=canvas.getBoundingClientRect(),px=event.clientX-rect.left;
+    if(px<left-10||px>right+10){clear();return;}
+    let best=0;
+    for(let i=1;i<data.length;i++)if(Math.abs(x(i)-px)<Math.abs(x(best)-px))best=i;
+    if(best!==active)select(best);
+  }
+  canvas.tabIndex=0;
+  canvas.onpointermove=pointer;canvas.onpointerdown=pointer;canvas.onpointerleave=clear;canvas.onblur=clear;
+  canvas.onkeydown=event=>{
+    if(event.key==="Escape"){clear();return;}
+    if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
+    event.preventDefault();
+    select(event.key==="Home"?0:event.key==="End"?data.length-1:Math.max(0,Math.min(data.length-1,active<0?0:active+(event.key==="ArrowRight"?1:-1))));
+  };
 }
-function hoverHistoryChart(event){
-  const canvas=$("history-chart"),tooltip=$("history-tooltip");
-  if(!historyData||canvas.hidden)return;
-  const rect=canvas.getBoundingClientRect(),width=rect.width,left=51,right=18;
-  const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
-  const index=Math.round(ratio*(historyData.series.length-1));
-  const day=historyData.series[index];if(!day)return;
-  const buildings=historyData.buildings||[];
-  const lines=[fullDay(day.date)];
-  for(const building of buildings.slice(0,8)){
-    const value=building.series[index];
-    lines.push(building.name+": "+temperature(value.average)+" ("+value.rooms_measured+"/"+value.rooms_total+")");
-  }
-  if(buildings.length>8)lines.push("Ещё зданий: "+(buildings.length-8));
-  if(buildings.length>1)lines.push("Общая: "+temperature(day.average));
-  tooltip.textContent=lines.join(" · ");
-  tooltip.hidden=false;
-  tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
-  tooltip.style.top="6px";
+function drawHistoryChart(){
+  const canvas=$("history-chart");
+  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||$("history-chart-frame").hidden)return;
+  const {series,buildings=[]}=historyData,dark=document.documentElement.dataset.theme==="dark";
+  const lines=buildings.map((b,i)=>({name:b.name,color:buildingColor(i),unit:"°C",values:b.series.map(d=>d.average)}));
+  if(buildings.length!==1)lines.unshift({name:"Вся школа",color:dark?"#b8c8da":"#63768a",unit:"°C",dash:[7,5],values:series.map(d=>d.average)});
+  renderTrend(canvas,{points:series.map(d=>({label:shortDay(d.date),title:fullDay(d.date)})),series:lines});
+}
+
+function resetHistorySummary(){
+  historyData=null;
+  for(const id of ["avg-today","today-coverage"])$(id).textContent="—";
+  for(const id of ["avg-today-desc","avg-change","today-coverage-desc","coverage-progress","today-alerts","building-panel","room-drilldown"])
+    show(id,false);
 }
 async function refreshHistory(){
   const sequence=++historyRequestId,building=$("building-filter").value,days=$("history-period").value;
+  if(historyData&&(historyData.building||"")!==building)resetHistorySummary();
   $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
   $("history-content").hidden=true;
   try{
@@ -451,12 +616,13 @@ async function refreshHistory(){
     if(sequence!==historyRequestId)return;
     historyData=data;
     $("history-state").hidden=true;$("history-content").hidden=false;
+    show("building-panel",true);
+    show("room-drilldown",true);
     renderHistory();
   }catch(error){
     if(sequence!==historyRequestId)return;
-    historyData=null;
+    resetHistorySummary();
     $("history-state").textContent="Не удалось загрузить историю: "+error.message;
-    $("avg-today").textContent="—";$("today-coverage").textContent="—";
   }
 }
 function exportHistory(){
@@ -480,59 +646,15 @@ function exportHistory(){
 function drawReportTrend(){
   const section=selectedReportSection;
   if(!reportsData||!["temperature","humidity"].includes(section)||$("report-pane-"+section).hidden)return;
-  const humidity=section==="humidity";
-  const canvas=$("report-"+section+"-chart"),days=reportsData.daily;
-  const metric=humidity?"humidity_average":"average",unit=humidity?"%":"°";
-  const color=humidity?"#5289dc":document.documentElement.dataset.theme==="dark"?"#66d7b7":"#0d997d";
-  const width=Math.max(240,Math.round(canvas.parentElement.clientWidth-2));
-  const height=260,dpr=window.devicePixelRatio||1;
-  canvas.width=Math.round(width*dpr);
-  canvas.height=Math.round(height*dpr);
-  const ctx=canvas.getContext("2d");
-  ctx.scale(dpr,dpr);
-  const vals=days.map(row=>row[metric]).filter(value=>value!=null);
-  const dark=document.documentElement.dataset.theme==="dark";
-  const text=dark?"#b7cad6":"#627385";
-  const grid=dark?"#385364":"#dce6e9";
-  ctx.font="12px sans-serif";ctx.textBaseline="middle";
-  if(!vals.length){
-    ctx.fillStyle=text;ctx.fillText(humidity?"Нет замеров влажности":"Нет замеров температуры",20,height/2);
-    return;
-  }
-  const margin={left:56,right:20,top:18,bottom:36};
-  const min=humidity?0:Math.floor(Math.min(...vals)-1),max=humidity?100:Math.ceil(Math.max(...vals)+1);
-  const delta=Math.max(1,max-min);
-  const x=i=>margin.left+(width-margin.left-margin.right)*i/Math.max(1,days.length-1);
-  const y=v=>margin.top+(max-v)/delta*(height-margin.top-margin.bottom);
-  for(let n=0;n<=4;n++){
-    const value=min+(max-min)*n/4,yy=y(value);
-    ctx.strokeStyle=grid;ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(margin.left,yy);ctx.lineTo(width-margin.right,yy);ctx.stroke();
-    ctx.fillStyle=text;ctx.textAlign="right";
-    ctx.fillText(value.toFixed(humidity?0:1)+unit,margin.left-9,yy);
-  }
-  ctx.strokeStyle=color;ctx.lineWidth=2.5;
-  let connected=false;
-  for(let i=0;i<days.length;i++){
-    const v=days[i][metric];
-    if(v==null){connected=false;continue;}
-    if(!connected){ctx.beginPath();ctx.moveTo(x(i),y(v));connected=true;}
-    else ctx.lineTo(x(i),y(v));
-    // Broken periods remain visually distinct.
-    if(i===days.length-1||days[i+1][metric]==null){ctx.stroke();connected=false;}
-  }
-  if(days.length<=45){
-    for(let i=0;i<days.length;i++){
-      const v=days[i][metric];if(v==null)continue;
-      ctx.beginPath();ctx.arc(x(i),y(v),2.5,0,2*Math.PI);
-      ctx.fillStyle=color;ctx.fill();
-    }
-  }
-  ctx.textAlign="left";ctx.fillStyle=text;ctx.textBaseline="bottom";
-  ctx.fillText(fullDay(days[0].date),margin.left,height-8);
-  ctx.textAlign="right";
-  ctx.fillText(fullDay(days[days.length-1].date),width-margin.right,height-8);
+  const humidity=section==="humidity",days=reportsData.daily,dark=document.documentElement.dataset.theme==="dark";
+  const name=humidity?"Средняя влажность":"Средняя температура";
+  renderTrend($("report-"+section+"-chart"),{
+    points:days.map(d=>({label:shortDay(d.date),title:fullDay(d.date)})),
+    series:[{name,unit:humidity?"%":"°C",color:humidity?(dark?"#87b7fc":"#356bad"):(dark?"#5bdac1":"#087b65"),values:days.map(d=>d[humidity?"humidity_average":"average"])}],
+    empty:humidity?"Нет замеров влажности":"Нет замеров температуры"
+  });
 }
+
 function reportNumber(value,suffix=""){
   return value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:2})+suffix;
 }
@@ -545,7 +667,8 @@ function reportTable(bodyId,items,render){
   }
   if(!items.length){
     const tr=el("tr"),td=el("td","","Нет данных за выбранный период");
-    td.colSpan=10;tr.append(td);body.append(tr);
+    td.colSpan=body.closest("table").tHead.rows[0].cells.length;
+    tr.append(td);body.append(tr);
   }
 }
 function reportSection(name){
@@ -565,7 +688,10 @@ function reportKpi(value,label){
 }
 function renderReport(){
   const r=reportsData;
-  if(!r){show("report-kpis",false);return;}
+  show("report-results",Boolean(r));
+  show("report-kpis",Boolean(r));
+  for(const id of ["report-export-excel","report-export-pdf"])$(id).disabled=!r;
+  if(!r)return;
   const s=r.summary;
   const kpis=$("report-kpis");kpis.replaceChildren(
     reportKpi(reportNumber(s.coverage,"%"),"Охват показаниями"),
@@ -573,8 +699,8 @@ function renderReport(){
     reportKpi(reportNumber(s.missing),"Пропущено"),
     reportKpi(reportNumber(s.average," °C"),"Средняя температура"),
     reportKpi(reportNumber(s.out_of_range),"Дней вне порогов")
-  );show("report-kpis",true);
-  $("report-status").textContent="Период "+r.from+" — "+r.to+
+  );
+  $("report-status").textContent="Период "+fullDay(r.from)+" — "+fullDay(r.to)+
     " · "+(r.building||"Все здания")+" · "+r.timezone+
     " · "+r.rooms_count+" помещений"+(s.sync_pending?" · ожидаются пакеты датчиков":"");
   $("report-staff-note").textContent=r.note;
@@ -627,9 +753,8 @@ function renderReport(){
   });
   reportSection(selectedReportSection);
 }
-function reportDateDefaults(){
-  if($("report-start").value&&$("report-end").value)return;
-  const today=daily?.local_date||new Date().toISOString().slice(0,10);
+function reportDateDefaults(today){
+  if($("report-start").value||$("report-end").value)return;
   const date=new Date(today+"T12:00:00Z");
   date.setUTCDate(date.getUTCDate()-6);
   $("report-start").value=date.toISOString().slice(0,10);
@@ -653,19 +778,24 @@ function reportPersonOptions(){
     maxUserName(user)+" · MAX ID "+user.user_id);
   select.value=maxStaff.some(p=>p.user_id===old)?old:"";
 }
+function clearReport(message){
+  reportsData=null;
+  renderReport();
+  $("report-status").textContent=message;
+}
 async function loadReport(){
+  const request=++reportRequestId;
   const start=$("report-start").value,end=$("report-end").value;
-  if(!start||!end)return;
+  if(!start||!end){clearReport("Укажите обе даты отчёта.");return;}
   const query=new URLSearchParams({start,end,building:$("report-building").value});
-  $("report-status").textContent="Формируем отчёт…";
+  clearReport("Формируем отчёт…");
   try{
     const result=await api("/api/reports?"+query);
+    if(request!==reportRequestId)return;
     reportsData=result;
     renderReport();
   }catch(error){
-    reportsData=null;renderReport();
-    $("report-status").textContent="Не удалось сформировать отчёт";
-    toast(error.message,true);
+    if(request===reportRequestId)clearReport("Не удалось сформировать отчёт. "+error.message);
   }
 }
 function reportExport(type){
@@ -696,14 +826,14 @@ function renderReportSubscriptions(schedules){
     if(item.last_delivered_at)info.append(el("small","","Последнее принято MAX: "+when(item.last_delivered_at)));
     const actions=el("div","report-schedule-actions");
     const toggle=el("button","btn secondary",item.enabled?"Выключить":"Включить");
-    toggle.type="button";toggle.addEventListener("click",async()=>{
+    toggle.type="button";onOperation(toggle,"Обновляем расписание…",async()=>{
       try{
         await api("/api/reports/subscriptions/"+item.id,"PATCH",{enabled:!item.enabled});
         await loadReportSubscriptions();toast("Расписание обновлено");
       }catch(error){toast(error.message,true);}
     });
     const remove=el("button","btn secondary","Удалить");
-    remove.type="button";remove.addEventListener("click",async()=>{
+    remove.type="button";onOperation(remove,"Удаляем расписание…",async()=>{
       if(!confirm("Удалить расписание отчётов для «"+title+"»?"))return;
       try{
         await api("/api/reports/subscriptions/"+item.id,"DELETE");
@@ -718,7 +848,11 @@ async function loadReportSubscriptions(){
   renderReportSubscriptions(list);
 }
 async function loadReports(){
-  reportDateDefaults();reportBuildingOptions();
+  if(!$("report-start").value&&!$("report-end").value){
+    const today=daily?.local_date||(await api("/api/daily")).local_date;
+    reportDateDefaults(today);
+  }
+  reportBuildingOptions();
   if(buildingScope)await loadReport();
   else{
     reportPersonOptions();
@@ -773,7 +907,7 @@ function renderMaxStaff(){
     const update=el("button","btn secondary max-staff-refresh","Обновить ФИО");
     update.type="button";
     update.title="Повторно запросить имя и фамилию у MAX";
-    update.addEventListener("click",()=>refreshMaxStaffProfile(user,update));
+    onOperation(update,"Обновляем имя сотрудника…",()=>refreshMaxStaffProfile(user,update));
     const assign=el("button","btn secondary max-staff-assign","Назначить кабинеты");
     assign.type="button";
     assign.addEventListener("click",()=>openMaxAssignment(user));
@@ -847,11 +981,20 @@ function renderRooms(){
       .some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
   for(const room of matching) {
     const row=el("tr", room.active ? "" : "archived-room");
-    cell(row,room.name);
-    const building=cell(row,room.building);
+    row.setAttribute("role","row");
+    cell(row,room.name,"room-name-cell");
+    const building=cell(row,room.building,"room-building-cell");
     if(!room.active)building.append(el("span","archived-label","Отключён"));
-    cell(row,room.floor||"—");cell(row,room.kind);
-    cell(row,room.min_temp+"–"+room.max_temp+" °C");
+    const attributes=[
+      ["Этаж",room.floor||"—"],["Тип",room.kind],
+      ["Норма",room.min_temp+"–"+room.max_temp+" °C"],
+    ];
+    for(const [label,value] of attributes){
+      const detail=cell(row,value,"room-attribute");
+      const heading=el("span","room-attribute-label",label);
+      heading.setAttribute("aria-hidden","true");
+      detail.prepend(heading);
+    }
     const maxCell=cell(row,"","max-users-cell");
     const boundUsers=room.max_users||[];
     if(!boundUsers.length)maxCell.append(el("span","max-unbound","Не привязан"));
@@ -867,12 +1010,12 @@ function renderRooms(){
         const remove=el("button","max-unbind","Отвязать");
         remove.type="button";
         remove.title="Отвязать пользователя "+maxUserName(user)+" от "+room.name;
-        remove.addEventListener("click",()=>unbindMax(room,user));
+        onOperation(remove,"Снимаем привязку MAX…",()=>unbindMax(room,user));
         entry.append(details,remove);list.append(entry);
       }
       maxCell.append(list);
     }
-    const actions=cell(row,"");
+    const actions=cell(row,"","room-actions-cell");
     const duplicate=el("button","","Копировать");
     duplicate.title="Копировать параметры кабинета";
     duplicate.addEventListener("click",()=>openRoom(room,true));
@@ -880,24 +1023,30 @@ function renderRooms(){
     if(room.active){
       const edit=el("button","","Изменить"),pair=el("button","","Код MAX"),disable=el("button","","Отключить");
       edit.addEventListener("click",()=>openRoom(room));
-      pair.addEventListener("click",()=>pairing(room));
-      disable.addEventListener("click",()=>disableRoom(room));
+      onOperation(pair,"Создаём код MAX…",()=>pairing(room));
+      onOperation(disable,"Отключаем помещение…",()=>disableRoom(room));
       actions.prepend(edit);actions.append(pair,disable);
     }else{
       const restore=el("button","","Восстановить");
-      restore.addEventListener("click",()=>restoreRoom(room));
+      onOperation(restore,"Восстанавливаем помещение…",()=>restoreRoom(room));
       actions.append(restore);
     }
+    for(const detail of row.cells)detail.setAttribute("role","cell");
     tbody.append(row);
   }
   show("rooms-empty",matching.length===0);
   if(!matching.length)$("rooms-empty").textContent=allRooms.length?"Помещения не найдены.":"Добавьте первое помещение.";
 }
 function renderReadings(){
+  const chartVisible=Boolean($("reading-filter").value);
+  show("reading-chart-panel",chartVisible);
+  show("reading-chart-hint",!chartVisible);
   const tbody=$("readings-table");tbody.replaceChildren();
   for(const row of readings) {
-    const tr=el("tr");cell(tr,when(row.observed_at));cell(tr,row.building);
-    cell(tr,row.room_name);cell(tr,temperature(row.value),"temp");
+    const tr=el("tr");
+    cell(tr,row.room_name).append(el("small","table-building",row.building));
+    cell(tr,temperature(row.value),"temp");
+    cell(tr,when(row.observed_at));
     cell(tr,sources[row.source]||row.source);
     cell(tr,row.reporter_display||row.reporter||"—");
     const actions=el("td");
@@ -905,7 +1054,7 @@ function renderReadings(){
       row.corrections_count?"История ("+row.corrections_count+")":"Подробнее");
     history.type="button";
     history.setAttribute("aria-label","История показания: "+row.building+" / "+row.room_name);
-    history.addEventListener("click",()=>openReadingHistory(row));
+    onOperation(history,"Загружаем историю показания…",()=>openReadingHistory(row));
     actions.append(history);tr.append(actions);tbody.append(tr);
   }
   show("readings-empty",readings.length===0);
@@ -935,59 +1084,53 @@ async function openReadingHistory(reading){
 $("reading-history-close").addEventListener("click",()=>$("reading-history-dialog").close());
 $("reading-history-done").addEventListener("click",()=>$("reading-history-dialog").close());
 function drawChart(){
-  const canvas=$("reading-chart"), parent=canvas.parentElement;
-  const rectWidth=Math.max(200,parent.clientWidth-46), dpr=window.devicePixelRatio||1;
-  const height=200;
-  canvas.width=rectWidth*dpr;canvas.height=height*dpr;
-  const ctx=canvas.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,rectWidth,height);
   const filter=$("reading-filter").value;
-  const data=readings.filter(r=>!filter||String(r.room_id)===filter).slice(0,40).reverse();
-  const left=44,right=15,top=18,bottom=30,w=rectWidth-left-right,h=height-top-bottom;
-  const values=data.map(x=>Number(x.value));
-  const min=values.length?Math.floor(Math.min(...values)-1):16;
-  const max=values.length?Math.ceil(Math.max(...values)+1):26;
-  const span=Math.max(1,max-min);
+  if(!filter||$("view-readings").hidden)return;
+  const data=readings.filter(r=>String(r.room_id)===filter).slice(0,40).reverse();
   const dark=document.documentElement.dataset.theme==="dark";
-  const chartGrid=dark?"#354961":"#e5ebf1",chartText=dark?"#b4c4d9":"#8492a7";
-  ctx.font="11px system-ui";ctx.textAlign="right";ctx.strokeStyle=chartGrid;ctx.fillStyle=chartText;ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const y=top+h*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(rectWidth-right,y);ctx.stroke();
-    ctx.fillText((max-span*i/4).toFixed(1),left-8,y+4);
-  }
-  if(!data.length){ctx.textAlign="center";ctx.fillText("Нет данных для графика",rectWidth/2,top+h/2);return;}
-  const px=i=>left+(data.length===1?w/2:i*w/(data.length-1));
-  const py=v=>top+h-(v-min)/span*h;
-  ctx.beginPath();data.forEach((x,i)=>{if(i===0)ctx.moveTo(px(i),py(x.value));else ctx.lineTo(px(i),py(x.value));});
-  ctx.strokeStyle="#14a786";ctx.lineWidth=2.5;ctx.stroke();
-  data.forEach((x,i)=>{ctx.beginPath();ctx.arc(px(i),py(x.value),3,0,Math.PI*2);ctx.fillStyle="#14a786";ctx.fill();});
-  ctx.fillStyle=chartText;ctx.textAlign="center";
-  ctx.fillText(when(data[0].observed_at),left+55,height-8);
-  if(data.length>1)ctx.fillText(when(data[data.length-1].observed_at),rectWidth-right-55,height-8);
+  renderTrend($("reading-chart"),{
+    points:data.map(r=>({label:when(r.observed_at),title:when(r.observed_at),time:Date.parse(r.observed_at)})),
+    series:[{name:"Температура",unit:"°C",color:dark?"#5bdac1":"#087b65",values:data.map(r=>r.value==null?null:Number(r.value))}]
+  });
 }
-async function refresh() {
+
+async function refresh({background=false}={}) {
   if(refreshBusy)return;
   refreshBusy=true;
   try {
-    const selected=$("reading-filter").value;
-    const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
-    const adminData=buildingScope?[]:[api("/api/rooms"),api("/api/readings"+params),
+    const adminData=buildingScope?[]:[api("/api/rooms"),
       api("/api/rooms?include_inactive=true"),api("/api/max/users")];
-    const [dash,day,activeRooms,items,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
+    const [dash,day,activeRooms,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
     overview=dash.rooms;rooms=activeRooms||dash.rooms;daily=day;
     renderFilters();renderOverview();renderDaily();
     if(!buildingScope){
-      allRooms=all;readings=items;maxStaff=staff;
-      renderRooms();renderReadings();renderMaxStaff();
+      allRooms=all;maxStaff=staff;
+      renderRooms();renderMaxStaff();
     }
-    await refreshHistory();
-    $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
-  } catch(error) {toast(error.message,true);}
+    await Promise.all([refreshHistory(),buildingScope?undefined:refreshReadings({background})]);
+    const updated=$("updated-at");
+    updated.dateTime=dash.generated_at;
+    updated.textContent="Обновлено "+when(dash.generated_at);
+    updated.hidden=false;
+  } catch(error) {if(!background)toast(error.message,true);}
   finally {refreshBusy=false;}
 }
-async function refreshReadings(){
-  try{const room=$("reading-filter").value;readings=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));renderReadings();}
-  catch(error){toast(error.message,true);}
+async function refreshReadings({background=false}={}){
+  const request=++readingRequestId,room=$("reading-filter").value;
+  try{
+    const result=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));
+    if(request!==readingRequestId)return;
+    readings=result;
+    renderReadings();
+  }catch(error){if(request===readingRequestId&&!background)toast(error.message,true);}
+}
+function openReading({building="",room=""}={}){
+  $("reading-form").reset();
+  const choices=rooms.filter(room=>!building||room.building===building);
+  $("reading-room").value=room||(choices.length===1?String(choices[0].id):"");
+  show("reading-room-hint",rooms.length===0);
+  $("reading-save").disabled=rooms.length===0;
+  $("reading-dialog").showModal();
 }
 function openRoom(room=null, duplicate=false){
   $("room-form").reset();
@@ -1022,8 +1165,8 @@ async function disableRoom(room) {
   try {await api("/api/rooms/"+room.id,"PATCH",{active:false});await refresh();toast("Помещение отключено");}
   catch(error){toast(error.message,true);}
 }
-$("login-form").addEventListener("submit",async event=>{
-  event.preventDefault();$("login-error").textContent="";
+onOperation($("login-form"),"Входим в панель…",async()=>{
+  $("login-error").textContent="";
   try{
     const session=await api("/api/login","POST",{username:$("login-name").value,password:$("password").value});
     if(panelOpened)window.location.reload();
@@ -1031,34 +1174,62 @@ $("login-form").addEventListener("submit",async event=>{
   }
   catch(error){$("login-error").textContent=error.message;}
 });
-for(const id of ["logout","logout-mobile"])$(id).addEventListener("click",async()=>{
+onOperation($("logout"),"Завершаем сеанс…",async()=>{
   try{await api("/api/logout","POST");window.location.reload();}
   catch(error){toast(error.message,true);}
 });
-$("refresh").addEventListener("click",refresh);
+onOperation($("refresh"),"Обновляем данные панели…",()=>refresh());
 for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
   const name=nav.dataset.tab;
-  if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
+  const changed=setTab(name);
+  if(navigationToggle.offsetWidth){
+    closeNavigation(!changed);
+    if(changed){
+      const title=$("view-"+name).querySelector("h1");
+      title.tabIndex=-1;
+      title.focus({preventScroll:true});
+    }
+  }
+  if(!changed)return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
   if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
   if(name==="reports")void loadReports().catch(error=>toast(error.message,true));
   if(name==="sensors")refreshSensors();
-  if(name==="settings"&&!settingsDirty())loadSettings();
+  if(name==="settings"){
+    if(!settingsDirty()||!settingsLoaded)void loadSettings();
+    if(selectedSettingsCategory==="notifications")void loadNotificationCenter();
+  }
 });
 $("search-rooms").addEventListener("input",renderOverview);
+$("overview-status").addEventListener("change",renderOverview);
+for(const button of document.querySelectorAll("[data-overview-status]")){
+  button.addEventListener("click",()=>{
+    $("overview-status").value=button.dataset.overviewStatus;
+    $("search-rooms").value="";
+    renderOverview();
+    $("latest-readings-title").focus({preventScroll:true});
+    $("latest-readings").scrollIntoView({block:"start"});
+  });
+}
 $("building-filter").addEventListener("change",()=>{renderOverview();renderDaily();refreshHistory();});
 $("history-period").addEventListener("change",refreshHistory);
 $("heatmap-search").addEventListener("input",renderHeatmap);
 $("history-export").addEventListener("click",exportHistory);
-$("history-chart").addEventListener("pointermove",hoverHistoryChart);
-$("history-chart").addEventListener("pointerleave",()=>{$("history-tooltip").hidden=true;});
-$("reading-filter").addEventListener("change",refreshReadings);
-$("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
-$("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
+$("reading-filter").addEventListener("change",()=>{
+  readings=[];
+  renderReadings();
+  void refreshReadings();
+});
+$("quick-reading").addEventListener("click",()=>openReading({building:$("building-filter").value}));
+$("add-reading").addEventListener("click",()=>openReading({room:$("reading-filter").value}));
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
-$("report-filter-form").addEventListener("submit",event=>{event.preventDefault();void loadReport();});
+onOperation($("report-filter-form"),"Формируем отчёт…",loadReport);
+$("report-filter-form").addEventListener("change",()=>{
+  reportRequestId++;
+  clearReport("Нажмите «Сформировать», чтобы обновить отчёт.");
+});
 $("report-export-excel").addEventListener("click",()=>reportExport("xlsx"));
 $("report-export-pdf").addEventListener("click",()=>reportExport("pdf"));
 for(const button of document.querySelectorAll("[data-report-section]")){
@@ -1067,7 +1238,7 @@ for(const button of document.querySelectorAll("[data-report-section]")){
 $("report-sub-frequency").addEventListener("change",()=>{
   show("report-sub-weekday-wrapper",$("report-sub-frequency").value==="weekly");
 });
-$("report-sub-form").addEventListener("submit",async event=>{
+onOperation($("report-sub-form"),"Сохраняем расписание отчётов…",async event=>{
   event.preventDefault();
   const user_id=$("report-sub-user").value;
   if(!user_id){toast("Выберите получателя MAX",true);return;}
@@ -1081,11 +1252,12 @@ $("report-sub-form").addEventListener("submit",async event=>{
     await loadReportSubscriptions();toast("Расписание отчётов добавлено");
   }catch(error){toast(error.message,true);}
 });
-$("open-staff").addEventListener("click",()=>{
-  if(setTab("staff"))void loadMaxStaff().catch(error=>toast(error.message,true));
+onOperation($("open-staff"),"Загружаем сотрудников…",async()=>{
+  if(setTab("staff"))await loadMaxStaff();
 });
-$("staff-refresh").addEventListener("click",()=>{
-  void loadMaxStaff().then(()=>toast("Список сотрудников обновлён")).catch(error=>toast(error.message,true));
+onOperation($("staff-refresh"),"Обновляем список сотрудников…",async()=>{
+  await loadMaxStaff();
+  toast("Список сотрудников обновлён");
 });
 $("max-users-search").addEventListener("input",renderMaxStaff);
 $("max-users-unassigned").addEventListener("change",renderMaxStaff);
@@ -1099,8 +1271,7 @@ $("max-assignment-all").addEventListener("change",event=>{
   }
   renderMaxAssignment();
 });
-$("max-user-rooms-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("max-user-rooms-form"),"Сохраняем назначения…",async()=>{
   if(!selectedMaxStaff)return;
   const button=$("max-assignment-save");button.disabled=true;
   const notify=$("max-assignment-notify").checked;
@@ -1117,15 +1288,16 @@ $("max-user-rooms-form").addEventListener("submit",async event=>{
 });
 $("show-inactive").addEventListener("change",renderRooms);
 $("export-rooms").addEventListener("click",()=>{window.location.href="/api/rooms/export.csv";});
-$("export-csv").addEventListener("click",()=>{window.location.href="/api/export.csv";});
+$("export-csv").addEventListener("click",()=>{
+  const room=$("reading-filter").value;
+  window.location.href="/api/export.csv"+(room?"?room_id="+encodeURIComponent(room):"");
+});
 $("close-pairing").addEventListener("click",()=>$("pairing-dialog").close());
 $("copy-pairing").addEventListener("click",async()=>{
   try{await navigator.clipboard.writeText("/bind "+$("pairing-code").textContent);toast("Команда скопирована");}
   catch{toast("Скопируйте команду вручную",true);}
 });
-$("room-form").addEventListener("submit",async event=>{
-  if(event.submitter?.value==="cancel")return;
-  event.preventDefault();
+onOperation($("room-form"),"Сохраняем помещение…",async()=>{
   const roomId=$("edit-room-id").value;
   const data={building:$("room-building").value.trim(),floor:$("room-floor").value.trim(),
     name:$("room-name").value.trim(),kind:$("room-kind").value.trim(),
@@ -1135,14 +1307,14 @@ $("room-form").addEventListener("submit",async event=>{
     $("room-dialog").close();await refresh();toast("Помещение сохранено");}
   catch(error){toast(error.message,true);}
 });
-$("reading-form").addEventListener("submit",async event=>{
-  if(event.submitter?.value==="cancel")return;
-  event.preventDefault();
+onOperation($("reading-form"),"Записываем показание…",async()=>{
   try{await api("/api/readings","POST",{room_id:Number($("reading-room").value),value:Number($("reading-value").value)});
     $("reading-dialog").close();await refresh();toast("Показание записано");}
   catch(error){toast(error.message,true);}
 });
+function redrawPanelTrends(){if(selectedTab==="readings")drawChart();if(selectedTab==="overview"){renderHistoryLegend();renderBuildingSummary();drawHistoryChart();}if(selectedTab==="reports")drawReportTrend();}
 window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();if(selectedTab==="reports")drawReportTrend();});
+document.addEventListener("termokontur:themechange",redrawPanelTrends);
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp(result);await refresh();}else enterLogin();}catch{enterLogin();}})();
 
 /* Accessible settings workspace: categories, overview and independent saves. */
@@ -1151,14 +1323,22 @@ const settingsGroups = {
   backups:["maintenance-form"],tls:["tls-form","sensor-ca-form"],calendar:["calendar-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
+const settingsEditRevision=new WeakMap();
+const settingsCategory=$("settings-category");
+for(const button of document.querySelectorAll(".settings-nav-button")){
+  option(settingsCategory,button.dataset.settingsTarget,button.textContent.trim());
+}
+settingsCategory.addEventListener("change",()=>setSettingsCategory(settingsCategory.value));
 function settingsDirty(){
   return !!document.querySelector('.settings-pane form[data-dirty="true"]');
 }
 function updateDirtyNavigation(){
   for(const [category,forms] of Object.entries(settingsGroups)){
     const dirty=forms.some(id=>$(id).dataset.dirty==="true");
-    for(const button of document.querySelectorAll('.settings-nav-button[data-settings-target="'+category+'"]'))
-      button.classList.toggle("is-dirty",dirty);
+    const button=document.querySelector('.settings-nav-button[data-settings-target="'+category+'"]');
+    const choice=settingsCategory.querySelector('option[value="'+category+'"]');
+    button.classList.toggle("is-dirty",dirty);
+    choice.textContent=button.textContent.trim()+(dirty?" · не сохранено":"");
   }
 }
 function markSettingsSaved(form,message){
@@ -1168,6 +1348,7 @@ function markSettingsSaved(form,message){
   updateDirtyNavigation();
 }
 function markSettingsDirty(form){
+  settingsEditRevision.set(form,(settingsEditRevision.get(form)||0)+1);
   form.dataset.dirty="true";
   const feedback=form.querySelector(".settings-save-feedback");
   if(feedback){feedback.textContent="Есть несохранённые изменения";feedback.dataset.state="unsaved";}
@@ -1182,6 +1363,7 @@ function setSettingsCategory(category){
   if(!target || (selectedSettingsCategory===category && !target.hidden))return;
   scrollToSectionStart(document.querySelector(".settings-layout"));
   selectedSettingsCategory=category;
+  settingsCategory.value=category;
   for(const pane of document.querySelectorAll("[data-settings-view]"))
     pane.hidden=pane.dataset.settingsView!==category;
   for(const button of document.querySelectorAll(".settings-nav-button")){
@@ -1228,13 +1410,13 @@ $("setting-enabled").addEventListener("change",syncNotificationControls);
 $("setting-alerts-enabled").addEventListener("change",syncNotificationControls);
 async function loadSettings() {
   try {
+    settingsCache=await api("/api/settings");
     const pending=new Map();
     for(const id of Object.values(settingsGroups).flat()){
       const form=$(id);
       if(form.dataset.dirty==="true")pending.set(id,
         [...form.querySelectorAll("input,select,textarea")].map(input=>({value:input.value,checked:input.checked})));
     }
-    settingsCache=await api("/api/settings");
     $("setting-organization").value=settingsCache.organization_name;
     $("setting-timezone").value=settingsCache.timezone;
     $("setting-stale").value=settingsCache.stale_hours;
@@ -1266,6 +1448,7 @@ async function loadSettings() {
     syncNotificationControls();
     renderSettingsSummary();
     updateDirtyNavigation();
+    updateNotificationPreview();
     await Promise.all([loadUpdateStatus(),loadBackups()]);
     if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
@@ -1283,20 +1466,18 @@ async function loadSensorCa(){
     $("sensor-ca-remove").disabled=state.source!=="upload";
   }catch(error){$("sensor-ca-status").textContent=error.message;}
 }
-$("sensor-ca-form").addEventListener("submit",async event=>{
-  event.preventDefault();const form=event.currentTarget,button=form.querySelector("button");
-  button.disabled=true;const finish=beginRequest("/api/tls/sensor-ca","POST");
+onOperation($("sensor-ca-form"),"Проверяем сертификаты датчиков…",async event=>{
+  const form=event.currentTarget;
   try{
-    const response=await fetch("/api/tls/sensor-ca",{method:"POST",credentials:"same-origin",body:new FormData(form)});
-    if(response.status===401){enterLogin();throw Error("Сеанс завершился");}
-    const data=await response.json();
-    if(!response.ok)throw Error(typeof data.detail==="string"?data.detail:"Не удалось загрузить CA");
+    const data=await api("/api/tls/sensor-ca","POST",new FormData(form));
     form.reset();markSettingsSaved(form,"CA сохранены");await loadSensorCa();
-    toast(data.chain_matches===false?"CA сохранены, но цепочка не совпадает":"Сертификаты датчиков сохранены",data.chain_matches===false);
-  }catch(error){form.querySelector(".settings-save-feedback").textContent=error.message;toast(error.message,true);}
-  finally{button.disabled=false;finish();}
+    if(data.chain_matches===false){
+      setFeedback("sensor-ca-feedback","Сертификаты сохранены. Цепочка текущего сервера отличается.","warning");
+      toast("Сертификаты сохранены. Цепочка текущего сервера отличается.",true);
+    }else toast("Сертификаты датчиков сохранены");
+  }catch(error){setFeedback("sensor-ca-feedback",error.message,"error");toast(error.message,true);}
 });
-$("sensor-ca-remove").addEventListener("click",async()=>{
+onOperation($("sensor-ca-remove"),"Удаляем сертификаты датчиков…",async()=>{
   if(!confirm("Удалить CA датчиков? Платы могут потерять связь после изменения цепочки."))return;
   try{await api("/api/tls/sensor-ca","DELETE");await loadSensorCa();toast("CA удалены");}catch(error){toast(error.message,true);}
 });
@@ -1337,23 +1518,13 @@ async function loadTlsStatus(){
     $("tls-status").textContent="Не удалось проверить HTTPS: "+error.message;
   }
 }
-$("tls-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("tls-form"),"Загружаем и проверяем сертификат…",async event=>{
   const form=event.currentTarget;
   if(!$("tls-certificate").files.length&&!$("tls-key").files.length){
     toast("Выберите сертификат или ключ",true);return;
   }
-  const finish=beginRequest("/api/tls/certificate","POST");
   try{
-    const response=await fetch("/api/tls/certificate",{
-      method:"POST",credentials:"same-origin",
-      headers:{"Accept":"application/json"},body:new FormData(form)
-    });
-    if(response.status===401){enterLogin();throw Error("Сеанс завершился. Войдите снова.");}
-    if(!response.ok){
-      const body=await response.json().catch(()=>({}));
-      throw Error(typeof body.detail==="string"?body.detail:"Ошибка загрузки сертификата");
-    }
+    await api("/api/tls/certificate","POST",new FormData(form));
     form.reset();
     markSettingsSaved(form,"Сертификат проверен и сохранён");
     toast("Сертификат сохранён. Примените настройки.");
@@ -1362,9 +1533,9 @@ $("tls-form").addEventListener("submit",async event=>{
     $("tls-feedback").textContent="Не сохранено: "+error.message;
     $("tls-feedback").dataset.state="error";
     toast(error.message,true);
-  }finally{finish();}
+  }
 });
-$("tls-remove").addEventListener("click",async()=>{
+onOperation($("tls-remove"),"Удаляем сертификат…",async()=>{
   if(!confirm("Убрать загруженный сертификат? После применения сайт может переключиться на HTTP."))return;
   try{
     await api("/api/tls/certificate","DELETE");
@@ -1372,7 +1543,7 @@ $("tls-remove").addEventListener("click",async()=>{
     toast("Сертификат удалён. Примените настройки.");
   }catch(error){toast(error.message,true);}
 });
-$("tls-apply").addEventListener("click",async()=>{
+onOperation($("tls-apply"),"Применяем настройки HTTPS…",async()=>{
   if(!tlsCache?.restart_pending)return;
   const mode=tlsCache.configured?"HTTPS":"HTTP";
   if(!confirm("Перезапустить панель с протоколом "+mode+"? Адрес страницы может измениться."))return;
@@ -1387,11 +1558,9 @@ $("tls-apply").addEventListener("click",async()=>{
 /* Merge only the current form's fields into fresh settings from the server.
    Other categories and secrets are not inadvertently overwritten. */
 async function saveSettingsPatch(form,patch,message){
-  const button=form.querySelector('button[type="submit"]');
-  if(button.disabled)return;
-  button.disabled=true;
-  const originalText=button.textContent;
-  button.textContent="Сохраняем…";
+  const revision=settingsEditRevision.get(form);
+  const feedback=form.querySelector(".settings-save-feedback");
+  setFeedback(feedback.id,"Сохраняем…","working");
   try{
     const latest=await api("/api/settings");
     const data={...latest,...patch};
@@ -1402,21 +1571,18 @@ async function saveSettingsPatch(form,patch,message){
     settingsCache=await api("/api/settings","PUT",data);
     renderSettingsSummary();
     document.title=settingsCache.organization_name+" — Термоконтур";
-    markSettingsSaved(form,message);
-    toast(message);
+    if(revision===settingsEditRevision.get(form)){
+      markSettingsSaved(form,message);
+      toast(message);
+    }
     return true;
   }catch(error){
-    const feedback=form.querySelector(".settings-save-feedback");
-    if(feedback){feedback.textContent="Не сохранено: "+error.message;feedback.dataset.state="error";}
+    setFeedback(feedback.id,"Не сохранено. "+error.message,"error");
     toast(error.message,true);
     return false;
-  }finally{
-    button.disabled=false;
-    button.textContent=originalText;
   }
 }
-$("general-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("general-settings-form"),"Сохраняем настройки организации…",async event=>{
   const saved=await saveSettingsPatch(event.currentTarget,{
     organization_name:$("setting-organization").value.trim(),
     timezone:$("setting-timezone").value.trim(),
@@ -1424,8 +1590,7 @@ $("general-settings-form").addEventListener("submit",async event=>{
   },"Настройки организации сохранены");
   if(saved)await refresh();
 });
-$("reminders-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("reminders-settings-form"),"Сохраняем напоминания…",async event=>{
   const days=[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value));
   const saved=await saveSettingsPatch(event.currentTarget,{
     reminders_enabled:$("setting-enabled").checked,
@@ -1435,48 +1600,64 @@ $("reminders-settings-form").addEventListener("submit",async event=>{
   },"Расписание напоминаний сохранено");
   if(saved)await refresh();
 });
-$("alerts-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("alerts-settings-form"),"Сохраняем температурные предупреждения…",async event=>{
   await saveSettingsPatch(event.currentTarget,{
     alerts_enabled:$("setting-alerts-enabled").checked,
     alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
   },"Температурные уведомления сохранены");
 });
-/* Targeted MAX notifications: no HTML interpolation of untrusted user names. */
-let notificationPeople=[], notificationSelected=new Set(), notificationRequestId=null, notificationSending=false;
-function notificationTargetIds(){
+/* Targeted MAX notifications use the same recipient snapshot for preview and sending. */
+let notificationPeople=[], notificationSelected=new Set();
+let recipientState="loading", recipientFailure="", notificationSending=false;
+let notificationHistoryBusy=false, renderedNotificationHistory="";
+let lastNotificationDraft=null;
+function notificationTargets(){
   const mode=$("notification-audience").value;
+  const building=$("notification-building").value;
   return notificationPeople.filter(person=>{
     if(mode==="missing")return person.missing;
-    if(mode==="building")return person.rooms.some(room=>room.building===$("notification-building").value);
+    if(mode==="building")return person.rooms.some(room=>room.building===building);
     if(mode==="selected")return notificationSelected.has(person.user_id);
     return true;
-  }).map(person=>person.user_id);
+  });
 }
 function updateNotificationPreview(){
   const mode=$("notification-audience").value;
-  $("notification-building-wrap").hidden=mode!=="building";
-  $("notification-selected-wrap").hidden=mode!=="selected";
-  const chosen=new Set(notificationTargetIds());
-  const people=notificationPeople.filter(x=>chosen.has(x.user_id));
-  const allowed=!!settingsCache?.max_token_configured;
-  $("notification-recipient-summary").textContent=people.length
-    ?"Получателей: "+people.length+(people.length>250?" (максимум 250 за отправку)":"")
-    :"В выбранной группе нет подключённых сотрудников.";
-  $("notification-recipient-names").textContent=people.length
-    ?people.slice(0,8).map(x=>x.name).join(", ")+(people.length>8?" и ещё "+(people.length-8):"")
-    :"Сотрудник появится здесь после привязки MAX к активному помещению.";
-  $("notification-text-count").textContent=$("notification-text").value.length+" / 2000";
-  $("notification-send").disabled=!allowed||people.length===0||people.length>250||notificationSending;
-  if(!allowed)$("notification-send-feedback").textContent="Сначала настройте токен на вкладке «Бот MAX».";
+  show("notification-building-wrap",mode==="building");
+  show("notification-selected-wrap",mode==="selected");
+  const people=notificationTargets(), count=people.length, ready=recipientState==="ready";
+  const draft=$("notification-text").value;
+  let summary="Загружаем получателей…", state="working";
+  if(recipientState==="error"){
+    summary="Не удалось загрузить получателей. "+recipientFailure;
+    state="error";
+  }else if(ready){
+    state=count===0||count>250?"warning":"ready";
+    if(count>250)summary="Получателей: "+count+". Максимум за отправку — 250.";
+    else if(count)summary="Получателей: "+count;
+    else if(mode==="building"&&!$("notification-building").value)summary="Выберите корпус.";
+    else if(mode==="selected")summary="Отметьте сотрудников в списке.";
+    else summary="В этой группе нет получателей.";
+  }
+  setFeedback("notification-recipient-summary",summary,state);
+  setFeedback("notification-recipient-names",ready&&count
+    ?people.slice(0,8).map(person=>person.name).join(", ")+(count>8?" и ещё "+(count-8):"")
+    :"");
+  setFeedback("notification-text-count",draft.length+" / 2000");
+  $("notification-draft").disabled=notificationSending;
+  $("notification-refresh-recipients").disabled=notificationSending;
+  $("notification-send").disabled=!settingsCache?.max_token_configured||!ready||
+    count===0||count>250||!draft.trim()||notificationSending;
+  show("notification-token-hint",settingsCache?.max_token_configured===false);
 }
 function renderNotificationPeople(){
-  const buildings=[...new Set(notificationPeople.flatMap(p=>p.rooms.map(r=>r.building)))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const buildings=[...new Set(notificationPeople.flatMap(person=>person.rooms.map(room=>room.building)))];
+  buildings.sort((a,b)=>a.localeCompare(b,"ru"));
   const building=$("notification-building"),previous=building.value;
-  building.replaceChildren(...buildings.map(value=>{
-    const option=el("option","",value);option.value=value;return option;
-  }));
-  if(buildings.includes(previous))building.value=previous;
+  building.replaceChildren();
+  option(building,"","Выберите корпус");
+  for(const name of buildings)option(building,name,name);
+  building.value=buildings.includes(previous)?previous:"";
   const list=$("notification-selected-users");
   list.replaceChildren();
   for(const person of notificationPeople){
@@ -1488,101 +1669,135 @@ function renderNotificationPeople(){
     checkbox.addEventListener("change",()=>{
       if(checkbox.checked)notificationSelected.add(person.user_id);
       else notificationSelected.delete(person.user_id);
-      notificationRequestId=null;
       updateNotificationPreview();
     });
     const info=el("span","notification-user-info");
     info.append(el("strong","",person.name),
-      el("small","",person.rooms.map(r=>r.building+" / "+r.name).join(" · ")));
+      el("small","",person.rooms.map(room=>room.building+" / "+room.name).join(" · ")));
     if(person.missing)info.append(el("small","notification-missing","Есть кабинеты без показаний за сегодня"));
     label.append(checkbox,info);
     list.append(label);
   }
-  updateNotificationPreview();
 }
+let recipientsLoading=false;
 async function loadNotificationRecipients(){
+  if(recipientsLoading||notificationSending)return;
+  recipientsLoading=true;
+  recipientState="loading";
+  updateNotificationPreview();
   try{
     notificationPeople=await api("/api/notifications/recipients");
-    notificationSelected=new Set([...notificationSelected].filter(uid=>notificationPeople.some(p=>p.user_id===uid)));
+    const ids=new Set(notificationPeople.map(person=>person.user_id));
+    notificationSelected=new Set([...notificationSelected].filter(uid=>ids.has(uid)));
     renderNotificationPeople();
+    recipientState="ready";
   }catch(error){
-    $("notification-recipient-summary").textContent="Не удалось получить список сотрудников: "+error.message;
-    $("notification-send").disabled=true;
+    recipientFailure=error.message;
+    recipientState="error";
+  }finally{
+    recipientsLoading=false;
+    updateNotificationPreview();
   }
 }
+function renderNotificationHistory(batches){
+  const target=$("notification-history");
+  const entries=batches.map(item=>{
+    const entry=el("div","notification-history-item");
+    const top=el("div","notification-history-top");
+    top.append(el("strong","",when(item.created_at)),
+      el("span","",item.silent?"Тихое уведомление":"Обычное уведомление"));
+    const delivery=el("div","notification-delivery");
+    if(item.delivered>0)delivery.append(el("span","notification-badge accepted","Принято MAX: "+item.delivered+" из "+item.recipients));
+    const waiting=item.recipients-item.delivered-item.retrying;
+    if(waiting>0)delivery.append(el("span","notification-badge queued","В очереди: "+waiting));
+    if(item.retrying>0)delivery.append(el("span","notification-badge retrying","Повторная отправка: "+item.retrying));
+    entry.append(top,el("p","notification-history-message",item.text),delivery);
+    return entry;
+  });
+  target.replaceChildren(...entries);
+}
 async function loadNotificationHistory(){
+  if(notificationHistoryBusy)return;
+  notificationHistoryBusy=true;
   try{
     const batches=await api("/api/notifications/history");
-    const target=$("notification-history");target.replaceChildren();
-    if(!batches.length){
-      target.append(el("p","hint","Сообщений пока нет."));
-      return;
+    const snapshot=JSON.stringify(batches);
+    if(snapshot!==renderedNotificationHistory){
+      renderNotificationHistory(batches);
+      renderedNotificationHistory=snapshot;
     }
-    for(const item of batches){
-      const entry=el("div","notification-history-item");
-      const top=el("div","notification-history-top");
-      top.append(el("strong","",when(item.created_at)),
-        el("span","",item.silent?"Тихое уведомление":"Обычное уведомление"));
-      const remaining=item.recipients-item.delivered;
-      entry.append(top,el("p","notification-history-message",item.text),
-        el("small","", "Доставлено: "+item.delivered+" из "+item.recipients+
-          (remaining?" · в очереди: "+remaining:"")+
-          (item.retrying?" · повторяем доставку: "+item.retrying:"")));
-      target.append(entry);
-    }
-  }catch(error){$("notification-history").textContent="Ошибка загрузки истории: "+error.message;}
+    setFeedback("notification-history-status",batches.length?"":"Сообщений пока нет.");
+  }catch(error){
+    setFeedback("notification-history-status","Не удалось обновить историю отправок. "+error.message,"error");
+  }finally{notificationHistoryBusy=false;}
 }
 async function loadNotificationCenter(){
   await Promise.all([loadNotificationRecipients(),loadNotificationHistory()]);
 }
-$("notification-audience").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
-$("notification-building").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
-for(const id of ["notification-text","notification-silent"])
-  $(id).addEventListener("input",()=>{notificationRequestId=null;updateNotificationPreview();});
-$("notification-refresh-recipients").addEventListener("click",loadNotificationRecipients);
-$("notification-refresh-history").addEventListener("click",loadNotificationHistory);
-$("notification-compose-form").addEventListener("submit",async event=>{
-  event.preventDefault();
-  if(notificationSending)return;
-  const user_ids=notificationTargetIds();
-  const text=$("notification-text").value.trim();
-  if(!text){toast("Введите текст уведомления",true);return;}
-  if(!user_ids.length||user_ids.length>250){toast("Выберите от 1 до 250 получателей",true);return;}
+for(const id of ["notification-audience","notification-building","notification-text","notification-silent"]){
+  $(id).addEventListener("input",()=>{
+    if($("notification-send-feedback").dataset.state==="saved")setFeedback("notification-send-feedback","");
+    updateNotificationPreview();
+  });
+}
+onOperation($("notification-refresh-recipients"),"Обновляем список получателей…",loadNotificationRecipients);
+onOperation($("notification-refresh-history"),"Обновляем историю отправок…",loadNotificationHistory);
+onOperation($("notification-compose-form"),"Ставим сообщение в очередь MAX…",async()=>{
+  if(notificationSending||recipientState!=="ready"||!settingsCache?.max_token_configured)return;
+  const user_ids=notificationTargets().map(person=>person.user_id).sort();
+  const text=$("notification-text").value.trim(), silent=$("notification-silent").checked;
+  if(!text||!user_ids.length||user_ids.length>250)return;
   if(!confirm("Отправить сообщение через MAX для "+user_ids.length+" сотрудников?\n\n"+text.slice(0,240)))return;
-  const request_id=notificationRequestId||("notify-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,12));
-  notificationRequestId=request_id;
-  notificationSending=true;updateNotificationPreview();
-  const feedback=$("notification-send-feedback");
-  feedback.textContent="Сохраняем рассылку в очередь…";
+  const signature=JSON.stringify([text,user_ids,silent]);
+  if(lastNotificationDraft?.signature!==signature){
+    const id=crypto.randomUUID?.()||("notify-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,12));
+    lastNotificationDraft={signature,id};
+  }
+  notificationSending=true;
+  updateNotificationPreview();
+  setFeedback("notification-send-feedback","Сохраняем сообщение в очереди MAX…","working");
+  let refreshRecipients=false;
   try{
     const result=await api("/api/notifications/send","POST",{
-      request_id,text,user_ids,silent:$("notification-silent").checked
+      request_id:lastNotificationDraft.id,text,user_ids,silent
     });
-    feedback.textContent=result.already_queued
-      ?"Сообщение уже в очереди."
-      :"Поставлено в очередь: "+result.queued+". Ожидается отправка через MAX.";
+    setFeedback("notification-send-feedback",result.already_queued
+      ?"Сервер уже принял эту рассылку. Статусы доступны в истории."
+      :"Добавлено в очередь MAX. Получателей: "+result.queued+".","saved");
     $("notification-text").value="";
-    notificationRequestId=null;
-    toast("Сообщение поставлено в очередь для "+result.queued+" сотрудников");
+    lastNotificationDraft=null;
     await loadNotificationHistory();
-  }catch(error){feedback.textContent="Ошибка: "+error.message;toast(error.message,true);}
-  finally{notificationSending=false;updateNotificationPreview();}
+  }catch(error){
+    setFeedback("notification-send-feedback","Не удалось подтвердить постановку в очередь. "+error.message,"error");
+    if(error.status===409){
+      settingsCache.max_token_configured=false;
+      renderSettingsSummary();
+    }
+    refreshRecipients=error.status===422;
+  }finally{
+    notificationSending=false;
+    updateNotificationPreview();
+  }
+  if(refreshRecipients)await loadNotificationRecipients();
 });
+setInterval(()=>{
+  if(selectedTab==="settings"&&selectedSettingsCategory==="notifications"&&
+      !$("app-root").hidden&&!document.hidden)void loadNotificationHistory();
+},5000);
 
-
-$("max-settings-form").addEventListener("submit",async event=>{
+onOperation($("max-settings-form"),"Сохраняем токен MAX…",async event=>{
   event.preventDefault();
   const value=$("setting-max-token").value.trim();
   if(!value){toast("Введите токен",true);return;}
   try{await api("/api/settings/max-token","PUT",{value});$("setting-max-token").value="";await loadSettings();toast("Токен сохранён");}
   catch(error){toast(error.message,true);}
 });
-$("clear-max-token").addEventListener("click",async()=>{
+onOperation($("clear-max-token"),"Отключаем MAX…",async()=>{
   if(!confirm("Отключить MAX-бота? Привязки кабинетов останутся."))return;
   try{await api("/api/settings/max-token","PUT",{value:null});await loadSettings();toast("MAX отключён");}
   catch(error){toast(error.message,true);}
 });
-$("rotate-ingest").addEventListener("click",async()=>{
+onOperation($("rotate-ingest"),"Создаём ключ приёма показаний…",async()=>{
   if(!confirm("Заменить ключ? Старый перестанет работать во всех датчиках."))return;
   try{
     const r=await api("/api/settings/ingest-key","POST");
@@ -1626,7 +1841,7 @@ function passwordFeedback(){
 }
 $("new-password").addEventListener("input",passwordFeedback);
 $("confirm-password").addEventListener("input",passwordFeedback);
-$("password-settings-form").addEventListener("submit",async event=>{
+onOperation($("password-settings-form"),"Меняем пароль…",async event=>{
   event.preventDefault();
   const old=$("old-password").value,pass=$("new-password").value;
   if(pass!==$("confirm-password").value){toast("Новые пароли не совпадают",true);return;}
@@ -1672,7 +1887,7 @@ $("bulk-rooms").addEventListener("click",()=>{
 $("close-bulk").addEventListener("click",()=>$("bulk-dialog").close());
 $("cancel-bulk").addEventListener("click",()=>$("bulk-dialog").close());
 for(const id of ["bulk-list","bulk-prefix"])$(id).addEventListener("input",previewBulk);
-$("bulk-form").addEventListener("submit",async event=>{
+onOperation($("bulk-form"),"Добавляем кабинеты…",async event=>{
   event.preventDefault();
   try{
     const names=bulkNames();
@@ -1693,6 +1908,7 @@ $("bulk-form").addEventListener("submit",async event=>{
 let updateAvailable=false, updateLatestRevision=null, updateLatestVersion=null;
 let updateInstalledRevision=null, updateState="idle", updateChecking=false;
 let updateRequesting=false, updatePolling=false, updateStartedHere=false;
+let updateSupported=false,updateActionRevision=0;
 const updatePhases=[
   ["preparing","Подготовка"],["downloading","Загрузка исходного кода"],
   ["dependencies","Установка зависимостей"],["backup","Резервная копия"],
@@ -1712,12 +1928,13 @@ const updateStateLabels={
 function renderUpdateStatus(r){
   const state=r.state||"idle", active=state==="queued"||state==="installing";
   updateState=state;
+  updateSupported=r.supported;
   if(!updateInstalledRevision&&r.installed_revision)updateInstalledRevision=r.installed_revision;
   if(Object.prototype.hasOwnProperty.call(r,"available")){
     updateAvailable=r.available===true;
+    updateLatestRevision=r.latest_revision||null;
+    updateLatestVersion=r.latest_version||null;
   }
-  if(r.latest_revision)updateLatestRevision=r.latest_revision;
-  if(r.latest_version)updateLatestVersion=r.latest_version;
   if(updateLatestRevision&&r.installed_revision===updateLatestRevision)updateAvailable=false;
   const version=r.installed_version||r.version;
   $("update-current-version").textContent=version?"v"+version:"Версия неизвестна";
@@ -1728,11 +1945,14 @@ function renderUpdateStatus(r){
     $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Сборка GitHub";
     $("update-latest-build").textContent=updateLatestRevision.slice(0,12)+
       (updateAvailable?" · доступна новая сборка":" · установлена");
+  }else{
+    $("update-latest-version").textContent="Не проверено";
+    $("update-latest-build").textContent="Проверьте наличие обновлений";
   }
   $("update-state").dataset.state=state;
   $("update-state-label").textContent=updateStateLabels[state]||"Состояние обновления";
   $("update-state-symbol").textContent=({idle:"○",queued:"◷",installing:"↻",success:"✓",failed:"!"})[state]||"○";
-  $("update-status-text").textContent=r.message||"Ожидаем сведения о системе.";
+  setFeedback("update-status-text",r.message||"Проверьте наличие обновлений на GitHub.");
   $("update-status-time").textContent=r.updated_at?"Последнее событие: "+when(r.updated_at):"";
   const stepIndex=updatePhases.findIndex(([phase])=>phase===r.phase);
   const step=state==="queued"?0:Math.max(1,stepIndex+1);
@@ -1773,79 +1993,88 @@ function renderUpdateStatus(r){
     historyList.append(row);
   }
   if(state==="failed")historyPanel.open=true;
-  const busy=active||updateRequesting;
-  $("check-update").disabled=!r.supported||busy||updateChecking;
-  $("install-update").disabled=!r.supported||!updateAvailable||busy||updateChecking;
-  $("check-update").classList.toggle("busy",updateChecking);
-  $("install-update").classList.toggle("busy",updateRequesting);
-  $("check-update").textContent=updateChecking?"Проверяем…":"Проверить обновления";
-  $("install-update").textContent=updateRequesting?"Отправляем запрос…":active?"Выполняется обновление…":"Установить обновление";
+  renderUpdateControls();
   show("reload-after-update",state==="success"&&(
     updateStartedHere||!!(updateInstalledRevision&&r.installed_revision&&
       updateInstalledRevision!==r.installed_revision)
   ));
 }
+function renderUpdateControls(){
+  const active=updateState==="queued"||updateState==="installing";
+  const busy=active||updateRequesting||updateChecking;
+  $("check-update").disabled=!updateSupported||busy;
+  $("install-update").disabled=!updateSupported||!updateAvailable||busy;
+}
 async function loadUpdateStatus(){
-  if(updatePolling||updateChecking)return;
+  if(updatePolling||updateChecking||updateRequesting)return;
+  const revision=updateActionRevision;
   updatePolling=true;
   try{
     const r=await api("/api/update/status");
+    if(revision!==updateActionRevision)return;
     if(r.state==="success"&&updateInstalledRevision&&r.installed_revision!==updateInstalledRevision){
       updateAvailable=false;
     }
+    if(r.state!=="idle"&&$("update-action-feedback").dataset.state==="queued"){
+      setFeedback("update-action-feedback","");
+    }
     renderUpdateStatus(r);
   }catch(error){
+    if(revision!==updateActionRevision)return;
     $("update-status-text").textContent=
       ["queued","installing"].includes(updateState)
         ?"Нет связи с сервером. Ожидаем подключения…"
         :"Не удалось получить состояние обновления: "+error.message;
   }finally{updatePolling=false;}
 }
-$("check-update").addEventListener("click",async()=>{
+onOperation($("check-update"),"Проверяем обновления на GitHub…",async()=>{
   if(updateChecking||updateRequesting||["queued","installing"].includes(updateState))return;
   updateChecking=true;
-  updateAvailable=false;
-  $("update-state-label").textContent="Проверяем GitHub";
-  $("update-status-text").textContent="Получаем сведения о последней сборке…";
-  $("check-update").disabled=true;
-  $("install-update").disabled=true;
-  $("check-update").classList.add("busy");
-  $("check-update").textContent="Проверяем…";
+  updateActionRevision++;
+  renderUpdateControls();
+  setFeedback("update-action-feedback","Проверяем GitHub…","working");
   try{
     const r=await api("/api/update/check");
-    renderUpdateStatus(r);
+    const active=["queued","installing"].includes(r.state);
+    renderUpdateStatus(active?r:{...r,message:""});
+    setFeedback("update-action-feedback",active?"":r.message,r.available===null?"error":"saved");
   }catch(error){
-    $("update-state-label").textContent="Проверка не удалась";
-    $("update-status-text").textContent=error.message;
-    toast(error.message,true);
+    updateAvailable=false;
+    updateLatestRevision=null;
+    updateLatestVersion=null;
+    $("update-latest-version").textContent="Не проверено";
+    $("update-latest-build").textContent="Проверьте наличие обновлений";
+    setFeedback("update-action-feedback","Проверка не удалась. "+error.message,"error");
   }finally{
     updateChecking=false;
-    await loadUpdateStatus();
+    renderUpdateControls();
   }
 });
-$("install-update").addEventListener("click",async()=>{
+onOperation($("install-update"),"Отправляем запрос на обновление…",async()=>{
   if(!updateAvailable||updateRequesting||["queued","installing"].includes(updateState))return;
   if(!confirm("Установить обновление с GitHub? Панель временно перезапустится; данные будут сохранены."))return;
   updateRequesting=true;
-  updateStartedHere=true;
-  updateAvailable=false;
-  renderUpdateStatus({supported:true,installed_version:$("update-current-version").textContent.replace(/^v/,""),
-    installed_revision:updateInstalledRevision,state:"queued",phase:"preparing",
-    message:"Отправляем запрос системной службе обновления…"});
+  updateActionRevision++;
+  renderUpdateControls();
+  setFeedback("update-action-feedback","Отправляем запрос на установку…","working");
   try{
-    await api("/api/update/request","POST",{});
-    await loadUpdateStatus();
+    const result=await api("/api/update/request","POST",{});
+    updateStartedHere=true;
+    updateState=result.state;
+    setFeedback("update-action-feedback",result.message,"queued");
   }catch(error){
     // Server restart can interrupt the POST after the request was accepted.
-    $("update-status-text").textContent="Не удалось подтвердить запрос. Проверяем сервер: "+error.message;
+    setFeedback("update-action-feedback","Не удалось подтвердить запрос. "+error.message,"error");
   }finally{
     updateRequesting=false;
+    renderUpdateControls();
     await loadUpdateStatus();
   }
 });
 $("reload-after-update").addEventListener("click",()=>window.location.reload());
 setInterval(()=>{
-  if(!$("app-root").hidden&&(selectedTab==="settings"||
+  if(!$("app-root").hidden&&!document.hidden&&((selectedTab==="settings"&&
+      ["summary","updates"].includes(selectedSettingsCategory))||
       updateState==="queued"||updateState==="installing"||updateRequesting)){
     void loadUpdateStatus();
   }
@@ -1907,7 +2136,7 @@ function renderActiveMaxCodes(){
     details.append(el("strong","",item.building+" / "+item.name));
     details.append(el("small","","Действует до "+when(item.expires_at)+" · значение не сохраняется"));
     const revoke=el("button","btn secondary","Отозвать");revoke.type="button";
-    revoke.addEventListener("click",async()=>{
+    onOperation(revoke,"Отзываем код MAX…",async()=>{
       if(!confirm("Отозвать код для «"+item.name+"»? Сотрудник больше не сможет использовать этот код."))return;
       revoke.disabled=true;
       try{
@@ -1973,7 +2202,7 @@ async function loadMaxCodes(){
     toast(error.message,true);
   }
 }
-$("bulk-max-codes").addEventListener("click",async()=>{
+onOperation($("bulk-max-codes"),"Загружаем коды MAX…",async()=>{
   selectedMaxRooms.clear();issuedMaxCodes=[];activeMaxCodes=[];
   $("max-codes-search").value="";
   $("max-codes-unbound").checked=true;$("max-codes-no-code").checked=true;
@@ -1993,7 +2222,7 @@ $("cancel-max-codes").addEventListener("click",()=>$("max-codes-dialog").close()
 for(const id of ["max-codes-building","max-codes-unbound","max-codes-no-code"])
   $(id).addEventListener("change",renderMaxCodes);
 $("max-codes-search").addEventListener("input",renderMaxCodes);
-$("max-codes-reload").addEventListener("click",loadMaxCodes);
+onOperation($("max-codes-reload"),"Обновляем коды MAX…",loadMaxCodes);
 $("max-codes-clear").addEventListener("click",()=>{selectedMaxRooms.clear();renderMaxCodes();});
 $("max-codes-select-all").addEventListener("change",event=>{
   const visible=maxCodeVisibleRooms();
@@ -2006,7 +2235,7 @@ $("max-codes-select-all").addEventListener("change",event=>{
   }else for(const room of visible)selectedMaxRooms.delete(room.id);
   renderMaxCodes();
 });
-$("max-codes-form").addEventListener("submit",async event=>{
+onOperation($("max-codes-form"),"Создаём коды MAX…",async event=>{
   event.preventDefault();
   if(!selectedMaxRooms.size){toast("Выберите кабинеты",true);return;}
   const replacing=activeMaxCodes.filter(c=>selectedMaxRooms.has(c.room_id));
@@ -2090,16 +2319,15 @@ async function loadMaxDiagnostics() {
     target.textContent=lines.join(" ");
   }catch(error) { target.textContent="Ошибка диагностики MAX: "+error.message; }
 }
-$("check-max-diagnostics").addEventListener("click",loadMaxDiagnostics);
+onOperation($("check-max-diagnostics"),"Проверяем связь с MAX…",loadMaxDiagnostics);
 
 /* Keep live room status reasonably current without reloading the page. */
 setInterval(()=>{
   if(!$("app-root").hidden && !document.hidden && !document.querySelector("dialog[open]"))
-    refresh();
+    refresh({background:true});
 },30000);
 
-$("maintenance-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("maintenance-form"),"Сохраняем настройки обслуживания…",async event=>{
   await saveSettingsPatch(event.currentTarget,{
     backup_interval_days:Number($("setting-backup-interval").value),
     backup_keep:Number($("setting-backup-keep").value),
@@ -2130,7 +2358,7 @@ async function loadBackups(){
         $("restore-dialog").showModal();
       });
       const remove=el("button","btn secondary","Удалить");
-      remove.addEventListener("click",async()=>{
+      onOperation(remove,"Удаляем резервную копию…",async()=>{
         if(!confirm("Безвозвратно удалить резервную копию "+item.name+"?"))return;
         try{await api("/api/backups/"+encodeURIComponent(item.name),"DELETE");await loadBackups();toast("Копия удалена");}
         catch(error){toast(error.message,true);}
@@ -2139,7 +2367,7 @@ async function loadBackups(){
     }
   }catch(error){$("backup-list").textContent=error.message;}
 }
-$("backup-create").addEventListener("click",async()=>{
+onOperation($("backup-create"),"Создаём резервную копию…",async()=>{
   $("backup-create").disabled=true;
   try{
     const r=await api("/api/backups","POST",{});
@@ -2149,28 +2377,20 @@ $("backup-create").addEventListener("click",async()=>{
   finally{$("backup-create").disabled=false;}
 });
 $("backup-import").addEventListener("click",()=>$("backup-upload-file").click());
-$("backup-upload-file").addEventListener("change",async()=>{
+$("backup-upload-file").addEventListener("change",()=>{
   const file=$("backup-upload-file").files[0];
+  $("backup-upload-file").value="";
   if(!file)return;
   if(!confirm("Импортировать SQLite-файл "+file.name+" как резервную копию?"))return;
-  try{
-    const response=await fetch("/api/backups/import",{
-      method:"POST",credentials:"same-origin",
-      headers:{"Content-Type":"application/octet-stream"},
-      body:file
-    });
-    if(!response.ok){
-      const error=await response.json();
-      throw Error(typeof error.detail==="string"?error.detail:"Ошибка импорта");
-    }
-    const result=await response.json();await loadBackups();
+  void runOperation($("backup-import"),"Импортируем резервную копию…",async()=>{
+    const result=await api("/api/backups/import","POST",file);
+    await loadBackups();
     toast("Копия импортирована: "+result.name);
-  }catch(error){toast(error.message,true);}
-  finally{$("backup-upload-file").value="";}
+  });
 });
 $("restore-close").addEventListener("click",()=>$("restore-dialog").close());
 $("restore-cancel").addEventListener("click",()=>$("restore-dialog").close());
-$("restore-form").addEventListener("submit",async event=>{
+onOperation($("restore-form"),"Восстанавливаем базу…",async event=>{
   event.preventDefault();
   if(!$("restore-confirm").checked){toast("Подтвердите восстановление",true);return;}
   try{

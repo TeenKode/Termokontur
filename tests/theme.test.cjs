@@ -63,7 +63,10 @@ test("theme bootstraps before stylesheet, includes dialogs and canvas colors",()
   assert.match(css,/html\[data-theme="dark"\] dialog/);
   assert.match(css,/html\[data-theme="dark"\] \.status\.below/);
   assert.match(css,/html\[data-theme="dark"\] \.heatmap-table/);
-  assert.match(js,/const chartGrid=dark\?/);
-  assert.match(js,/const historyGrid=dark\?/);
+  assert.match(js,/function renderTrend\(/);
+  assert.match(js,/const ink=dark\?/);
+  assert.match(js,/grid=dark\?/);
+  assert.match(js,/darkBuildingPalette/);
+  assert.match(js,/document\.addEventListener\("termokontur:themechange",redrawPanelTrends\)/);
   assert.match(py, /_ASSET_FINGERPRINT\s*=\s*hashlib\.sha256\([\s\S]+?"theme\.js"/);
 });

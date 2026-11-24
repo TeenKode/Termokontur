@@ -44,12 +44,12 @@ def test_start_and_bind_with_buttons(client):
                             "user": {"user_id": 7}, "timestamp": 1000})
     assert "код" in start[1].lower()
     assert "tk:send" in _payloads(7)
-    assert "tk:change" in _payloads(7)
+    assert "tk:change" not in _payloads(7)
     room = _room()
     code = db.issue_code(room["id"])
     assert "привязан" in process_update(_message(7, code))[1]
     assert "tk:send" in _payloads(7)
-    assert "tk:change" in _payloads(7)
+    assert "tk:change" not in _payloads(7)
 
 
 def test_single_room_submit_and_correct_without_duplicate_reading(client):
@@ -63,9 +63,9 @@ def test_single_room_submit_and_correct_without_duplicate_reading(client):
     assert len(db.recent_readings()) == 1
     assert db.recent_readings()[0]["value"] == 21.5
     assert "tk:send" in _payloads(7)
-    assert "tk:change" in _payloads(7)
+    assert "tk:change" not in _payloads(7)
 
-    assert "21.5" in process_update(_callback(7, "tk:change", "c3"))[1]
+    assert "21.5" in process_update(_callback(7, "tk:send", "c3"))[1]
     changed = process_update(_callback(7, f"tk:value:c:{room['id']}:{day}:23", "c4"))
     assert "Исправлено" in changed[1]
     assert len(db.recent_readings()) == 1
@@ -98,7 +98,7 @@ def test_multiple_rooms_choose_one_then_manual_input(client):
     assert db.recent_readings()[0]["room_id"] == second["id"]
     assert db.recent_readings()[0]["value"] == 20.7
     assert "tk:send" in _payloads(7)
-    assert "tk:change" in _payloads(7)
+    assert "tk:change" not in _payloads(7)
 
 
 def test_manual_correction_of_today(client):
@@ -150,7 +150,7 @@ def test_max_delivery_callbacks_edit_message_and_regular_replies_have_menu(clien
     assert queued[0]["callback_id"] == "cb-ack"
     assert queued[0]["origin_mid"] == "botmsg1"
     buttons = json.loads(queued[0]["buttons_json"])[0]["payload"]["buttons"]
-    assert buttons[0][0]["text"] == "🌡️ Отправить за сегодня"
+    assert buttons[0][0]["text"] == "Отправить"
 
     class Client:
         def __init__(self):
@@ -478,11 +478,10 @@ def test_bot_emoji_cues_preserve_callback_payloads_and_warnings(client):
     room = _room()
     _bind(7, room)
     buttons = max_ui.menu_buttons("7")
-    assert [buttons[i][0]["payload"] for i in range(2)] == ["tk:send", "tk:change"]
-    assert buttons[0][0]["text"] == "🌡️ Отправить за сегодня"
-    assert buttons[1][0]["text"] == "✏️ Изменить за сегодня"
-    assert buttons[2][0]["text"].startswith("📊 ")
-    assert buttons[2][1]["text"].startswith("🏫 ")
+    assert buttons[0] == [{"type": "callback", "text": "Отправить", "payload": "tk:send"}]
+    assert len(buttons) == 2
+    assert buttons[1][0]["text"].startswith("📊 ")
+    assert buttons[1][1]["text"].startswith("🏫 ")
 
     selection = process_update(_callback(7, "tk:send", "emoji-select"))[1]
     assert selection.startswith("🌡️ ")

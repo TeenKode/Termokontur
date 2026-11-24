@@ -67,11 +67,12 @@
       <div class="sensor-firmware-heading">
         <h2>Журнал USB</h2>
         <div class="heading-actions">
+          <button type="button" id="debug-log-end" class="btn secondary" disabled>К последней строке</button>
           <button type="button" id="debug-clear" class="btn secondary" disabled>Очистить</button>
           <button type="button" id="debug-save" class="btn secondary" disabled>Скачать .txt</button>
         </div>
       </div>
-      <pre id="debug-log" tabindex="0" aria-label="Журнал платы"></pre>
+      <pre id="debug-log" class="serial-log" tabindex="0" role="region" aria-label="Журнал платы"></pre>
     </section>
   </main>
 </body>
