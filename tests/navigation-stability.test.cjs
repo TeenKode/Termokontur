@@ -133,11 +133,39 @@ test("settings navigation leaves space above its picker for the mobile header",(
 });
 test("global feedback and busy indicators never change layout size",()=>{
   assert.match(styles,/html\{scrollbar-gutter:stable\}/);
-  assert.match(styles,/\.operation-status\{position:fixed;/);
+  assert.match(styles,/\.panel-feedback\{position:fixed;/);
   assert.match(styles,/button\.operation-busy::before\{content:"";position:absolute;/);
   assert.doesNotMatch(styles,/scroll-snap-type:x proximity/);
   assert.doesNotMatch(styles,/transform:translateY\(4px\)/);
-  assert.match(source,/button\.matches\("\[data-tab\], \[data-settings-target\]"\)/);
+});
+
+test("operation feedback follows the full action and preserves the button's disabled state",async()=>{
+  const button=node(), operations=new Map();
+  button.classList.add=name=>button.classes.add(name);
+  button.classList.remove=name=>button.classes.delete(name);
+  let calls=0, timer, finish;
+  const work=new Promise(resolve=>{finish=resolve;});
+  const context=vm.createContext({
+    activeOperations:operations,
+    setTimeout:callback=>{timer=callback;},clearTimeout:()=>{timer=undefined;},
+    syncFeedbackContainer:()=>{},renderOperationStatus:()=>{},
+    toast:message=>assert.fail(message)
+  });
+  const run=vm.runInContext("(async "+extractFunction("runOperation")+")",context);
+  const action=()=>{calls++;return work;};
+  const pending=run(button,"Сохраняем…",action);
+  await run(button,"Сохраняем…",action);
+  assert.equal(calls,1);
+  assert.equal(button.attributes.get("aria-busy"),"true");
+  assert.equal(operations.get(button).visible,false);
+  timer();
+  assert.equal(operations.get(button).visible,true);
+  button.disabled=true;
+  finish();
+  await pending;
+  assert.equal(operations.size,0);
+  assert.equal(button.disabled,true);
+  assert.equal(button.attributes.has("aria-disabled"),false);
 });
 
 test("refresh keeps the selected room in the manual reading form",()=>{

@@ -188,6 +188,8 @@ def test_sensor_alerts_use_building_recipient_and_rearm(admin):
     auth.save_building_account("viewer", room["building"], "local-viewer-test-password", "77")
     settings.set_secret("max_token", "test-only-max-token-for-sensor-alerts")
     assert sync(admin, device, headers, batch(battery_mv=3720)).status_code == 200
+    assert sensor_monitor.queue_alerts() == 0
+    assert sync(admin, device, headers, batch([], battery_mv=3420)).status_code == 200
     assert sensor_monitor.queue_alerts() == 1
     assert sensor_monitor.queue_alerts() == 0
     assert sync(admin, device, headers, batch([], battery_mv=3910)).status_code == 200
@@ -453,9 +455,14 @@ def test_relaxed_intervals_and_voltage_limits():
     config = sensors.Config(measure_s=60, send_s=1, cool_s=0, wifi_budget_s=300,
                             cutoff_mv=3000, wifi_min_mv=0, ota_min_mv=3300)
     assert config.send_s == 1 and config.wifi_min_mv == 0
+    assert sensors.Config().wifi_min_mv == 0
+    assert sensors.Config().ota_min_mv == 3600
+    below_cutoff = sensors.Config(cutoff_mv=3400, wifi_min_mv=3200, ota_min_mv=0)
+    assert below_cutoff.wifi_min_mv == below_cutoff.ota_min_mv == 3400
+    assert sensors.Config(cutoff_mv=3000, ota_min_mv=0).ota_min_mv == 3300
     assert sensors.Record.model_validate(record(interval_s=1)).interval_s == 1
     assert sensors.Record.model_validate(record(interval_s=604800)).interval_s == 604800
     for kwargs in ({"measure_s":0}, {"send_s":0}, {"cutoff_mv":2999},
-                   {"cutoff_mv":3300,"wifi_min_mv":3200}, {"ota_min_mv":3299}):
+                   {"wifi_min_mv":4201}, {"ota_min_mv":-1}):
         with pytest.raises(ValueError):
             sensors.Config(**kwargs)

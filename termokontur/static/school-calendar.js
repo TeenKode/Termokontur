@@ -78,7 +78,7 @@ $("calendar-add").addEventListener("click", () => {
   markSettingsDirty($("calendar-form"));
 });
 
-$("calendar-form").addEventListener("submit", async event => {
+onOperation($("calendar-form"),"Сохраняем календарь замеров…", async event => {
   event.preventDefault();
   if (!schoolCalendar) return;
   const form = event.currentTarget;

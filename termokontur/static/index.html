@@ -207,7 +207,7 @@
           <details>
             <summary>Загрузить комплект ZIP для ESP32-C3</summary>
             <p id="sensor-installer-status"></p>
-            <form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form>
+            <form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" name="file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form>
           </details>
         </div>
         <article class="panel sensor-claims-panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
@@ -225,8 +225,8 @@
             </ul>
             <p class="chart-note">Измерения без точной даты есть в таблице.</p>
           </div>
-          <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
-          <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
+          <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Минимумы для Wi-Fi и OTA учитывают порог отключения. Для OTA требуется минимум 3300 мВ.</p><form id="sensor-config-form" class="sensor-form"></form></details>
+          <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" name="file" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
           <details open><summary>Последние измерения</summary><div class="table-scroll sensor-record-scroll" tabindex="0" role="region" aria-label="Измерения датчика"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
         </div>
@@ -470,45 +470,49 @@
               <article class="panel settings-panel">
                 <div class="notification-title-row"><div><h3>Написать сотрудникам</h3><p class="hint">Каждый сотрудник получит одно сообщение, независимо от числа кабинетов.</p></div></div>
                 <form id="notification-compose-form" class="settings-form">
-                  <div class="field-grid">
-                    <label for="notification-audience">Получатели
-                      <select id="notification-audience">
-                        <option value="all">Все подключённые сотрудники</option>
-                        <option value="missing">Без показаний за сегодня</option>
-                        <option value="building">По корпусу</option>
-                        <option value="selected">Выбрать сотрудников</option>
-                      </select>
+                  <fieldset id="notification-draft" class="notification-draft" aria-label="Параметры сообщения">
+                    <div class="field-grid">
+                      <label for="notification-audience">Получатели
+                        <select id="notification-audience">
+                          <option value="all">Все подключённые сотрудники</option>
+                          <option value="missing">Без показаний за сегодня</option>
+                          <option value="building">По корпусу</option>
+                          <option value="selected">Выбрать сотрудников</option>
+                        </select>
+                      </label>
+                      <label for="notification-building" id="notification-building-wrap" hidden>Корпус
+                        <select id="notification-building"></select>
+                      </label>
+                    </div>
+                    <div id="notification-selected-wrap" hidden>
+                      <p class="hint">Отметьте сотрудников, которым нужно отправить уведомление:</p>
+                      <div id="notification-selected-users" class="notification-user-list"></div>
+                    </div>
+                    <label for="notification-text">Текст сообщения
+                      <textarea id="notification-text" rows="5" maxlength="2000" required placeholder="Например: Отправьте температуру до 10:00."></textarea>
                     </label>
-                    <label for="notification-building" id="notification-building-wrap" hidden>Корпус
-                      <select id="notification-building"></select>
-                    </label>
-                  </div>
-                  <div id="notification-selected-wrap" hidden>
-                    <p class="hint">Отметьте сотрудников, которым нужно отправить уведомление:</p>
-                    <div id="notification-selected-users" class="notification-user-list"></div>
-                  </div>
-                  <label for="notification-text">Текст сообщения
-                    <textarea id="notification-text" rows="5" maxlength="2000" required placeholder="Например: Отправьте температуру до 10:00."></textarea>
-                  </label>
-                  <div class="notification-compose-footer">
-                    <label class="settings-toggle"><input id="notification-silent" type="checkbox">Без звукового уведомления (push)</label>
-                    <span id="notification-text-count" class="hint">0 / 2000</span>
-                  </div>
+                    <div class="notification-compose-footer">
+                      <label class="settings-toggle"><input id="notification-silent" type="checkbox">Без звукового уведомления (push)</label>
+                      <span id="notification-text-count" class="hint">0 / 2000</span>
+                    </div>
+                  </fieldset>
                   <div id="notification-recipient-summary" class="notification-recipient-summary" role="status" aria-live="polite">Загружаем получателей…</div>
                   <p id="notification-recipient-names" class="hint"></p>
+                  <p id="notification-token-hint" class="hint" hidden>Сначала настройте токен на вкладке «Бот MAX».</p>
                   <div class="settings-save">
                     <span id="notification-send-feedback" class="settings-save-feedback" role="status" aria-live="polite"></span>
                     <button type="button" id="notification-refresh-recipients" class="btn secondary">Обновить список</button>
-                    <button type="submit" id="notification-send" class="btn primary">Отправить уведомление</button>
+                    <button type="submit" id="notification-send" class="btn primary" disabled>Отправить уведомление</button>
                   </div>
                 </form>
               </article>
               <article class="panel settings-panel">
                 <div class="notification-title-row">
-                  <div><h3>История отправок</h3><p class="hint">Статус «Доставлено» означает, что MAX принял сообщение. Ошибки отправки повторяются автоматически.</p></div>
+                  <div><h3>История отправок</h3><p class="hint">MAX подтверждает приём сообщения. При ошибке сервер повторяет отправку.</p></div>
                   <button type="button" id="notification-refresh-history" class="btn secondary">Обновить</button>
                 </div>
-                <div id="notification-history" class="notification-history" aria-live="polite"><p class="hint">Загружаем историю…</p></div>
+                <p id="notification-history-status" class="settings-save-feedback" role="status">Загружаем историю…</p>
+                <div id="notification-history" class="notification-history"></div>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="max" hidden>
@@ -658,7 +662,7 @@
                     <input id="sensor-ca-files" name="certificates" type="file" accept=".pem,.cer,.crt,.der" multiple required>
                   </label>
                   <p class="hint">Выберите сразу всю нужную цепочку. Новая загрузка заменяет предыдущую. Лимит после преобразования в PEM — 8000 байт.</p>
-                  <div class="settings-save"><span class="settings-save-feedback" role="status" aria-live="polite"></span><button class="btn primary" type="submit">Загрузить и проверить CA</button></div>
+                  <div class="settings-save"><span id="sensor-ca-feedback" class="settings-save-feedback" role="status"></span><button class="btn primary" type="submit">Загрузить и проверить CA</button></div>
                 </form>
                 <button class="btn secondary" id="sensor-ca-remove" type="button" disabled>Удалить загруженные CA</button>
                 <p class="hint">Новые платы получат CA при прошивке. Уже настроенные платы, которые не доверяют серверу, настройте по USB без стирания памяти.</p>
@@ -710,6 +714,7 @@
               <button type="button" id="install-update" class="btn primary" disabled>Установить обновление</button>
               <button type="button" id="reload-after-update" class="btn secondary" hidden>Перезагрузить панель</button>
             </div>
+            <p id="update-action-feedback" class="settings-save-feedback" role="status"></p>
             <p class="hint">Автообновление доступно для Debian LXC. В Docker обновляйте контейнеры через Docker Compose.</p>
           </article>
             </div>
@@ -852,7 +857,13 @@
       <button type="button" id="copy-pairing" class="btn primary full">Скопировать команду</button>
     </div>
   </dialog>
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="panel-feedback" class="panel-feedback">
+    <div id="operation-status" class="operation-status" role="status" hidden></div>
+    <div id="toast" class="toast" hidden>
+      <span id="toast-message" role="status"></span>
+      <button id="toast-close" type="button" aria-label="Закрыть уведомление">×</button>
+    </div>
+  </div>
 <dialog id="sensor-add-dialog" aria-labelledby="sensor-add-title">
   <form id="sensor-add-form" class="dialog-form">
     <div class="dialog-head"><div><h2 id="sensor-add-title">Подключить датчик ESP32-C3</h2><p>Одноразовый код для одной платы, действует 7 дней.</p></div></div>
@@ -882,9 +893,9 @@
 <p class="hint">Панель должна быть доступна из сети датчика. Перед подключением USB SuperMini разомкните SW1 и отключите USB зарядки TP4056.</p>
 <details><summary>Дополнительные параметры</summary><p class="hint">Время и сертификат передаются с выбранного сервера автоматически.</p>
 <label>Пароль сети настройки (необязательно)<input id="usb-setup-password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите пароль сети настройки<input id="usb-setup-confirm" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
-<label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Случайный пароль сети настройки</label><div id="usb-config-fields" class="field-grid"></div><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
+<label class="archive-toggle"><input id="usb-setup-random" type="checkbox"> Случайный пароль сети настройки</label><div id="usb-config-fields" class="field-grid"></div><p class="hint">Минимумы для Wi-Fi и OTA учитывают порог отключения. Для OTA требуется минимум 3300 мВ.</p><label class="archive-toggle"><input id="usb-measure-enabled" type="checkbox" checked> Собирать показания</label></details>
 <label class="archive-toggle"><input id="usb-new-board" type="checkbox"> Подтверждаю удаление всех данных платы: настроек, ключа и журнала. Для обновления работающего датчика используйте его карточку.</label>
-<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" role="status" aria-live="polite"></p>
+<p id="usb-identity" class="hint"></p><progress id="usb-progress" max="100" value="0" hidden></progress><p id="usb-status" class="settings-save-feedback" role="status" aria-live="polite"></p>
 <div class="heading-actions"><button id="usb-flash" class="btn primary" type="submit">Прошить и настроить</button><button id="usb-configure" class="btn secondary" type="button">Настроить без прошивки</button><button id="usb-close" class="btn secondary" type="button">Закрыть</button></div>
 <section id="usb-log-panel" hidden>
   <div class="sensor-firmware-heading"><h3>Журнал прошивки</h3><button id="usb-log-end" class="btn secondary" type="button" disabled>К последней строке</button></div>

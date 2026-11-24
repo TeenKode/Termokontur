@@ -66,7 +66,7 @@ static std::string last_error;
 struct Config {
   uint32_t version = 1, measure_s = 1800, send_s = 86400, cool_s = 1800,
            wifi_budget_s = 45;
-  uint32_t wifi_min_mv = 3600, cutoff_mv = 3300, ota_min_mv = 3900,
+  uint32_t wifi_min_mv = 0, cutoff_mv = 3300, ota_min_mv = 3600,
            tx_qdbm = 34, adc_scale_ppm = 2000000;
   bool enabled = true;
 };
