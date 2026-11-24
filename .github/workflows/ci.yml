@@ -1,7 +1,14 @@
 name: Test
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+# Cancel superseded PR runs, but keep each main/release run independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -21,6 +28,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q termokontur
       - name: Check installers and browser script
+        if: matrix.python-version == '3.11'
         run: |
           bash -n scripts/install-debian.sh scripts/termokontur-apply-update
           node --check termokontur/static/app.js
