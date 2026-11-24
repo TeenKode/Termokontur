@@ -61,5 +61,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Native Debian 13 installer, update and rollback smoke
-        run: docker run --rm -v "$PWD:/src:ro" -w /src debian:trixie-slim bash tests/native-debian-smoke.sh
+      - uses: actions/checkout@v4
+        with:
+          ref: 8b8a754ff4f5892a579df4160876cd34db8551fe
+          path: .legacy-ci
+      - name: Prepare 1.2.4 upgrade baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/termokontur-legacy"
+          git -C .legacy-ci archive HEAD | tar -x -C "$RUNNER_TEMP/termokontur-legacy"
+          rm -rf .legacy-ci
+      - name: Native Debian 13 upgrade from 1.2.4, update and rollback smoke
+        run: docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/termokontur-legacy:/legacy:ro" -w /src debian:trixie-slim bash tests/native-debian-smoke.sh

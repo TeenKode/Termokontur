@@ -59,3 +59,47 @@ def test_schema_rolls_back_if_version_cannot_be_written(tmp_path):
     with db.connect(path) as conn:
         assert migrations.read_version(conn) == migrations.SCHEMA_VERSION
         assert conn.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 0
+
+
+def test_upgrade_from_v4_preserves_existing_data(tmp_path, monkeypatch):
+    from termokontur import maintenance, sensors
+    path = tmp_path / "legacy.sqlite3"
+    monkeypatch.setenv("TERMOKONTUR_DB", str(path))
+    monkeypatch.setenv("TERMOKONTUR_ADMIN_PASSWORD", "legacy-test-password")
+    monkeypatch.setenv("TERMOKONTUR_SECRET", "legacy-test-secret-which-is-long-enough")
+    # 1.2.4 used the first four migrations. Construct that schema before
+    # creating any records, then open it using the complete current chain.
+    with monkeypatch.context() as old:
+        old.setattr(migrations, "_MIGRATIONS", migrations._MIGRATIONS[:4])
+        old.setattr(migrations, "SCHEMA_VERSION", 4)
+        db.initialize()
+        settings.bootstrap()
+        auth.bootstrap()
+        room = db.create_room("Школа", "1", "101", "Кабинет", 18, 24)
+        db.add_reading(room["id"], 21.5, "manual")
+        assert db.bind_code("123456", db.issue_code(room["id"]))
+        settings.update({"organization_name": "Старая школа"})
+        with db.connect() as conn:
+            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_until,
+                token_hash,config,created_at,ack_seq) VALUES(?,?,?,?,?,?,?,?)""",
+                ("legacy-device", "Старый датчик", room["id"], 0, "old-token-hash",
+                 sensors.Config().model_dump_json(), db.utc_now(), 2))
+            conn.execute("""INSERT INTO sensor_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("legacy-device",1,room["id"],1700000000,1700000001,
+                 "boot",1,"rtc",21.5,45.0,3900,1800,"","old-fingerprint"))
+            assert migrations.read_version(conn) == 4
+    db.initialize()
+    db.initialize()
+    assert auth.check_password("legacy-test-password")
+    assert settings.get("organization_name") == "Старая школа"
+    with db.connect() as conn:
+        assert migrations.read_version(conn) == migrations.SCHEMA_VERSION == 8
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("SELECT value FROM readings").fetchone()[0] == 21.5
+        assert conn.execute("SELECT user_id FROM max_bindings").fetchone()[0] == "123456"
+        assert conn.execute("SELECT ack_seq FROM sensor_devices").fetchone()[0] == 2
+        assert conn.execute("SELECT fingerprint FROM sensor_records").fetchone()[0] == "old-fingerprint"
+        assert tuple(conn.execute("SELECT device_id,room_id FROM sensor_room_history").fetchone()) == ("legacy-device",room["id"])
+        for name in ("sensor_record_receipts", "session_revocations", "max_delivery_failures", "admin_audit"):
+            assert conn.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
+    maintenance.inspect(path)

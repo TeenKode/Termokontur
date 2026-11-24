@@ -72,8 +72,13 @@ export PATH="/usr/local/bin:$PATH"
 # Trust only the read-only CI checkout, never every repository.
 git config --global --add safe.directory /src
 
-cd /src
+if [[ -f /legacy/scripts/install-debian.sh ]]; then
+  cd /legacy
+else
+  cd /src
+fi
 bash scripts/install-debian.sh
+cd /src
 test -e /etc/systemd/system/termokontur-update.service
 grep -q 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/termokontur.service
 test -x /usr/local/sbin/termokontur-apply-update
@@ -94,6 +99,17 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   -H 'Content-Type: application/json' \
   -d '{"building":"CI Test","name":"101","min_temp":18,"max_temp":24}' \
   http://127.0.0.1:8092/api/rooms >/dev/null
+
+if [[ -f /legacy/scripts/install-debian.sh ]]; then
+  echo "Testing actual upgrade from 1.2.4"
+  runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); assert c.execute("PRAGMA user_version").fetchone()[0] == 4; c.execute("INSERT INTO readings(room_id,value,source,observed_at) SELECT id,21.7,\x27manual\x27,\x272026-01-01T00:00:00+00:00\x27 FROM rooms WHERE name=\x27101\x27"); c.commit()'
+  printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
+  runuser -u termokontur -- touch /var/lib/termokontur/update-request
+  /usr/local/sbin/termokontur-apply-update
+  grep -q '"state": "success"' /var/lib/termokontur/update-status.json
+  runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); assert c.execute("PRAGMA user_version").fetchone()[0] >= 8; assert c.execute("SELECT value FROM readings").fetchone()[0] == 21.7'
+  curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
+fi
 
 echo "Begin native updater smoke assertions"
 # Force a change to exercise the actual stage/swap path of the updater.
