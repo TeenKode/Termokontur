@@ -17,6 +17,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
+#include "esp_tls.h"
 #include "esp_http_server.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -483,6 +484,26 @@ static int timeout_ms() {
   return std::max(
       1, std::min(3000, (int)((deadline - esp_timer_get_time()) / 1000)));
 }
+// ESP-IDF 5.3 supplies the transport TLS error handle through these
+// synchronous callbacks, including on failure of esp_http_client_open().
+static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
+  if ((event->event_id == HTTP_EVENT_ERROR ||
+       event->event_id == HTTP_EVENT_DISCONNECTED) && event->data) {
+    int tls_code = 0, tls_flags = 0;
+    const auto error = esp_tls_get_and_clear_last_error(
+        static_cast<esp_tls_error_handle_t>(event->data), &tls_code, &tls_flags);
+    if (error != ESP_OK || tls_code || tls_flags) {
+      printf("TLS: transport=%s error=0x%x verify_flags=0x%x\n",
+             esp_err_to_name(error), (unsigned)tls_code, (unsigned)tls_flags);
+      if (tls_flags) {
+        char info[512]{};
+        mbedtls_x509_crt_verify_info(info, sizeof info, "TLS: ", (uint32_t)tls_flags);
+        printf("%s", info);
+      }
+    }
+  }
+  return ESP_OK;
+}
 static esp_http_client_handle_t http(const std::string &path) {
   esp_http_client_config_t h{};
   std::string url = server + path;
@@ -490,6 +511,7 @@ static esp_http_client_handle_t http(const std::string &path) {
   h.timeout_ms = timeout_ms();
   h.disable_auto_redirect = true;
   h.buffer_size = 2048;
+  h.event_handler = http_diagnostic;
   if (ca.empty())
     h.crt_bundle_attach = esp_crt_bundle_attach;
   else
@@ -513,18 +535,6 @@ static std::string post(const std::string &path, const std::string &body,
     printf("TLS: clock epoch=%lld; trust=%s (%u bytes)\n", (long long)time(nullptr),
            ca.empty() ? "public CA bundle" : "provisioned CA", (unsigned)ca.size());
   esp_err_t err = esp_http_client_open(h, body.size());
-  if (err != ESP_OK) {
-    int tls_code = 0, tls_flags = 0;
-    esp_http_client_get_and_clear_last_tls_error(h, &tls_code, &tls_flags);
-    if (tls_code || tls_flags) {
-      printf("TLS: error=0x%x verify_flags=0x%x\n", (unsigned)tls_code, (unsigned)tls_flags);
-      if (tls_flags) {
-        char info[512]{};
-        mbedtls_x509_crt_verify_info(info, sizeof info, "TLS: ", (uint32_t)tls_flags);
-        printf("%s", info);
-      }
-    }
-  }
   if (err == ESP_OK) {
     size_t sent = 0;
     while (sent < body.size() && available()) {
