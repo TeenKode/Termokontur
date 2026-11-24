@@ -22,7 +22,7 @@ logger = logging.getLogger("termokontur.maintenance")
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
     b"".join((ROOT / "static" / name).read_bytes() for name in (
-        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+        "app.js", "charts.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
         "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
         "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
     ))
