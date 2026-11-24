@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <mutex>
-#include "driver/i2c.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -59,6 +58,7 @@ static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
 static bool net_started = false;
+static bool debug_radio = false;
 static EventGroupHandle_t events;
 static esp_netif_t *ap_netif = nullptr, *sta_netif = nullptr;
 static int64_t deadline = 0;
@@ -467,6 +467,8 @@ static bool wifi_up() {
   if (esp_wifi_start() != ESP_OK)
     return false;
   esp_wifi_set_max_tx_power(cfg.tx_qdbm);
+  if (debug_radio && esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK)
+    puts("WIFI: could not disable modem sleep for debug");
   for (int tries = 0; tries < 3 && available(); tries++) {
     esp_wifi_connect();
     int64_t attempt = esp_timer_get_time() + 10000000;
@@ -480,17 +482,19 @@ static bool wifi_up() {
   return false;
 }
 static int timeout_ms() {
-  return std::max(
-      1, std::min(3000, (int)((deadline - esp_timer_get_time()) / 1000)));
+  return sensor::http_timeout_ms(deadline - esp_timer_get_time());
 }
 // ESP-IDF 5.3 supplies the transport TLS error handle through these
 // synchronous callbacks, including on failure of esp_http_client_open().
+struct HttpDiagnostic { int verify_flags = 0; };
 static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
   if ((event->event_id == HTTP_EVENT_ERROR ||
        event->event_id == HTTP_EVENT_DISCONNECTED) && event->data) {
     int tls_code = 0, tls_flags = 0;
     const auto error = esp_tls_get_and_clear_last_error(
         static_cast<esp_tls_error_handle_t>(event->data), &tls_code, &tls_flags);
+    if (event->user_data)
+      static_cast<HttpDiagnostic *>(event->user_data)->verify_flags |= tls_flags;
     if (error != ESP_OK || tls_code || tls_flags) {
       printf("TLS: transport=%s error=0x%x verify_flags=0x%x\n",
              esp_err_to_name(error), (unsigned)tls_code, (unsigned)tls_flags);
@@ -503,7 +507,7 @@ static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
   }
   return ESP_OK;
 }
-static esp_http_client_handle_t http(const std::string &path) {
+static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *diagnostic = nullptr) {
   esp_http_client_config_t h{};
   std::string url = server + path;
   h.url = url.c_str();
@@ -511,19 +515,21 @@ static esp_http_client_handle_t http(const std::string &path) {
   h.disable_auto_redirect = true;
   h.buffer_size = 2048;
   h.event_handler = http_diagnostic;
+  h.user_data = diagnostic;
   if (ca.empty())
     h.crt_bundle_attach = esp_crt_bundle_attach;
   else
     h.cert_pem = ca.c_str();
   return esp_http_client_init(&h);
 }
-static std::string post(const std::string &path, const std::string &body,
-                        bool auth = true) {
+static std::string post_once(const std::string &path, const std::string &body,
+                             bool auth, bool &retryable, bool replay_safe) {
+  retryable = false;
+  HttpDiagnostic diagnostic;
   if (!available())
     return "";
-  auto h = http(path);
-  if (!h)
-    return "";
+  auto h = http(path, &diagnostic);
+  if (!h) { last_error = "https_client_init_failed"; return ""; }
   esp_http_client_set_method(h, HTTP_METHOD_POST);
   esp_http_client_set_header(h, "Content-Type", "application/json");
   std::string bearer = "Bearer " + token;
@@ -570,11 +576,16 @@ static std::string post(const std::string &path, const std::string &body,
     }
   }
   int status = esp_http_client_get_status_code(h);
+  // A partial HTTP body must never be interpreted as an ACK.
+  if (!esp_http_client_is_complete_data_received(h)) result.clear();
   esp_http_client_close(h);
   esp_http_client_cleanup(h);
   if (auth && status == 401) { token.clear(); save_provision(); }
   if (result.empty()) {
-    if (status > 0) {
+    retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, diagnostic.verify_flags != 0);
+    if (diagnostic.verify_flags) {
+      last_error = "tls_certificate_failed";
+    } else if (status > 0) {
       printf("HTTPS: %s HTTP %d\n", path.c_str(), status);
       last_error = "http_" + std::to_string(status);
     } else {
@@ -583,6 +594,33 @@ static std::string post(const std::string &path, const std::string &body,
     }
   }
   return result;
+}
+static std::string post(const std::string &path, const std::string &body,
+                        bool auth = true) {
+  // Bootstrap is read-only; sync deduplicates immutable records by device+seq.
+  // Never replay an ambiguous enrollment/proof after the body could be sent.
+  const bool replay_safe = path == "/api/sensors/bootstrap" ||
+      (path.rfind("/api/sensors/devices/", 0) == 0 &&
+       path.size() >= 5 && path.compare(path.size()-5, 5, "/sync") == 0);
+  for (unsigned attempt = 1; attempt <= 3 && available(); ++attempt) {
+    bool retryable = false;
+    auto response = post_once(path, body, auth, retryable, replay_safe);
+    if (!response.empty() || !retryable || attempt == 3) return response;
+    const int64_t remaining = deadline - esp_timer_get_time();
+    if (remaining < 2000000 || charging()) break;
+    printf("HTTPS: retry %u/3 for %s, remaining=%lld ms\n", attempt+1,
+           path.c_str(), (long long)(remaining/1000));
+    vTaskDelay(pdMS_TO_TICKS(attempt * 250));
+    if (!available()) break;
+    // Reconnect after losing the IP or after repeated connection failure,
+    // without resetting the shared radio deadline or the journal cursor.
+    if (!(xEventGroupGetBits(events) & 1) ||
+        (attempt == 2 && deadline - esp_timer_get_time() >= 10000000)) {
+      stop_network();
+      if (!wifi_up()) break;
+    }
+  }
+  return "";
 }
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
@@ -734,6 +772,7 @@ static bool identity_authenticate() {
   if (!factory_ticket.empty()) add(j, "setup_ticket", factory_ticket);
   body = stringify(j); cJSON_Delete(j);
   response = post("/api/sensors/auth/prove", body, false);
+  if (response.empty()) return false;
   j = cJSON_Parse(response.c_str());
   auto status = text(j, "status"), id = text(j, "device_id"), credential = text(j, "token");
   cJSON_Delete(j);
@@ -925,6 +964,11 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
           cJSON_Delete(j);
           return false;
         }
+        if (r.battery == 0 && !server_supports_usb_sync) {
+          cJSON_Delete(j);
+          last_error = "usb_sync_unsupported";
+          return false;
+        }
         cJSON *x = cJSON_CreateObject();
         num(x, "seq", r.seq);
         add(x, "boot_id", hex64(r.boot));
@@ -1057,6 +1101,8 @@ static void usb_test_measurement(cJSON *out) {
   add(out, "sensor_error", sensor_error_name(sample.error));
   num(out, "battery_mv", sample.battery);
   num(out, "attempts", attempts);
+  if (sample.error && sensor::is_i2c(sensor_type.c_str()) && !charging())
+    sensor::scan_i2c([] { return charging(); });
 }
 
 static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = false) {
@@ -1427,18 +1473,15 @@ extern "C" void app_main() {
     physical = gpio_get_level(BOOT_PIN) == 0;
   }
   const bool usb_host = usb_host_for_setup(after_reset);
-  if (provisioned && !factory_ticket.empty() && !physical) {
+  // USB factory enrollment alone does not sample. On battery, enrollment
+  // follows the same radio-off measurement path as ordinary operation.
+  if (provisioned && !factory_ticket.empty() && !physical && usb_host) {
     if (!time_quality && state.saved_time >= 1700000000) {
       timeval tv{(time_t)state.saved_time, 0};
       settimeofday(&tv, nullptr);
     }
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
-    uint16_t mv = battery_mv();
-    if (!usb_host && !sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv)) {
-      printf("FACTORY: battery %u mV below threshold or unavailable\n", (unsigned)mv);
-      sleep_for(cfg.measure_s);
-    }
     deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
     const bool registered = wifi_up() && sync_time() && enroll();
     stop_network();
@@ -1447,7 +1490,7 @@ extern "C" void app_main() {
       sleep_for(300);
     }
     puts("FACTORY: server authorized device");
-    if (usb_host) sleep_for(cfg.measure_s);
+    sleep_for(cfg.measure_s);
   }
   const bool setup_requested = !provisioned || physical || usb_host;
   if (charging()) sleep_for(cfg.measure_s);
@@ -1459,6 +1502,7 @@ extern "C" void app_main() {
       sleep_for(cfg.measure_s);
     }
     boot_debug = true;
+    debug_radio = true;
     last_error.clear();
     puts("BOOT: нажатие принято, выполняем пробную отправку.");
   }
@@ -1529,34 +1573,23 @@ extern "C" void app_main() {
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
       boot_debug || (cfg.enabled && rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
-  // Hardware RESET and power loss invalidate RTC time. Obtain a validated
-  // HTTPS server timestamp before sampling so the first reading has a date.
-  // If offline or below the Wi-Fi threshold, preserve the untimed reading.
   const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
-  const bool clock_preflight = usb_without_battery || sensor::needs_clock_preflight(
-      time_quality != 0, measurement_due, wifi_allowed);
-  bool time_prepared = false;
-  if (clock_preflight) {
-    deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
-    if (wifi_up()) {
-      time_prepared = sync_time();
-    } else {
-      stop_network();
-    }
-  }
-  // Check compatibility before placing a USB-powered reading in the journal.
-  if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
-    boot_debug_result(time_prepared ? "Обновите сервер для отправки по USB без аккумулятора."
-                                    : "Не удалось связаться с сервером. Проверьте Wi-Fi и адрес панели.");
-    sleep_for(cfg.measure_s);
-  }
+  // Measure before any station connection, even after a cold boot. The
+  // setup AP is already stopped by setup_ap() before the BOOT test.
   Record measurement{};
   measurement.boot = rt.boot;
-  measurement.uptime = rt.uptime + esp_timer_get_time() / 1000000;
   measurement.battery = mv;
   measurement.interval = cfg.measure_s;
+  if (measurement_due) {
+    stop_network();
+    puts("SENSOR: measurement before Wi-Fi");
+  }
   bool measured = measurement_due && sensor_read(measurement);
+  const int64_t sampled_us = esp_timer_get_time();
+  measurement.uptime = rt.uptime + sampled_us / 1000000;
+  measurement.timestamp = time_quality ? time(nullptr) : 0;
+  measurement.quality = time_quality;
   if (charging()) {
     rt.charging = true;
     sleep_for(cfg.measure_s);
@@ -1570,11 +1603,29 @@ extern "C" void app_main() {
       save_state();
     }
   }
+  // A newly sampled record with no trusted RTC can receive UTC once, before
+  // its first journal commit. Derive it from monotonic elapsed time, never
+  // rewrite an existing sequence (even if it has unknown time).
+  const bool clock_after_sample = sensor::needs_clock_after_sample(
+      measurement.quality != 0, measured, wifi_allowed);
+  bool time_prepared = false;
+  if (clock_after_sample && !charging()) {
+    deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
+    if (wifi_up()) time_prepared = sync_time();
+    if (time_prepared) {
+      const auto restored = sensor::sample_epoch(time(nullptr), sampled_us, esp_timer_get_time());
+      if (restored) {
+        measurement.timestamp = restored;
+        measurement.quality = 2;
+        printf("SENSOR: timestamp restored after measurement (%lld)\n", (long long)restored);
+      }
+    } else {
+      stop_network();
+      puts("SENSOR: no trusted time; preserving measurement with unknown UTC");
+    }
+  }
   if (measured) {
-    rt.next_measure =
-        rt.uptime + esp_timer_get_time() / 1000000 + cfg.measure_s;
-    measurement.timestamp = time_quality ? time(nullptr) : 0;
-    measurement.quality = time_quality;
+    rt.next_measure = measurement.uptime + cfg.measure_s;
     measurement.seq = state.next;
     state.next++;
     if (!save_state())
@@ -1588,11 +1639,12 @@ extern "C" void app_main() {
     rt.pending = false;
   }
   auto now = time(nullptr);
-  if ((boot_debug || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed) {
-    if (!clock_preflight)
+  const bool factory_pending = !factory_ticket.empty();
+  if ((boot_debug || factory_pending || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed && !charging()) {
+    if (!clock_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
-    // Do not start another full Wi-Fi session if the time preflight failed.
-    bool ok = (!clock_preflight || time_prepared) &&
+    // Reuse the time connection; if it failed, retry at the next wake.
+    bool ok = (!clock_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
     now = time(nullptr);
@@ -1602,11 +1654,11 @@ extern "C" void app_main() {
           now + (state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s)
                                         : cfg.send_s);
     } else {
-      uint32_t backoff = last_error == "authorization_pending" ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
+      uint32_t backoff = (last_error == "authorization_pending" || !factory_ticket.empty()) ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
       rt.failures++;
       rt.next_send = now + backoff;
     }
-  } else if (clock_preflight) {
+  } else if (clock_after_sample) {
     stop_network();
   }
   if (boot_debug) {
@@ -1629,5 +1681,5 @@ extern "C" void app_main() {
   // for its independent radio deadline, without forcing another sample.
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
       wifi_allowed && time_quality != 0, rt.next_send, time(nullptr));
-  sleep_for(last_error == "authorization_pending" ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
+  sleep_for((last_error == "authorization_pending" || !factory_ticket.empty()) ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
 }

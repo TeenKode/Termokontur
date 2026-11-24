@@ -1,6 +1,6 @@
 #pragma once
 #include "driver/gpio.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -49,12 +49,13 @@ inline bool values(Record &r, double t, double h) {
 }
 inline void wait_ms(unsigned ms) { vTaskDelay(pdMS_TO_TICKS(ms) + 1); }
 // Release open-drain lines and clock a stuck slave out of a partial transfer.
-inline bool recover_i2c() {
+inline bool recover_i2c(bool pullup = false) {
   constexpr auto sda = GPIO_NUM_6, scl = GPIO_NUM_7;
   for (auto pin : {sda, scl}) {
+    gpio_reset_pin(pin); // Restore GPIO mux after the peripheral releases it.
     gpio_set_level(pin, 1);
     gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT_OD);
-    gpio_set_pull_mode(pin, GPIO_FLOATING);
+    gpio_set_pull_mode(pin, pullup ? GPIO_PULLUP_ONLY : GPIO_FLOATING);
   }
   auto high = [](gpio_num_t pin) {
     for (int i = 0; i < 100; ++i) {
@@ -63,7 +64,10 @@ inline bool recover_i2c() {
     }
     return false;
   };
+  printf("I2C: idle SDA(GPIO6)=%d SCL(GPIO7)=%d internal_pullup=%d\n",
+         gpio_get_level(sda), gpio_get_level(scl), int(pullup));
   if (!high(scl)) return false;
+  if (gpio_get_level(sda)) return true; // An idle bus needs no recovery pulses.
   for (int i = 0; i < 9 && !gpio_get_level(sda); ++i) {
     gpio_set_level(scl, 0); esp_rom_delay_us(5);
     gpio_set_level(scl, 1);
@@ -76,43 +80,103 @@ inline bool recover_i2c() {
   esp_rom_delay_us(5); gpio_set_level(sda, 1); esp_rom_delay_us(5);
   return gpio_get_level(sda) != 0;
 }
+inline bool is_i2c(const char *type) {
+  return !strcmp(type,"sht4x") || !strcmp(type,"sht3x") || !strcmp(type,"aht20") ||
+         !strcmp(type,"bme280") || !strcmp(type,"bmp280");
+}
 struct I2C {
+  i2c_master_bus_handle_t bus = nullptr;
+  i2c_master_dev_handle_t dev = nullptr;
+  uint8_t address = 0;
+  uint32_t speed;
   bool ready = false;
   int last_status = ESP_OK;
-  I2C() {
-    i2c_config_t c{};
-    c.mode = I2C_MODE_MASTER;
+  explicit I2C(uint32_t hz = 100000, bool pullup = false) : speed(hz) {
+    i2c_master_bus_config_t c{};
+    c.i2c_port = I2C_NUM_0;
     c.sda_io_num = GPIO_NUM_6; c.scl_io_num = GPIO_NUM_7;
-    c.master.clk_speed = 100000;
-    last_status = i2c_param_config(I2C_NUM_0, &c);
-    if (last_status == ESP_OK) last_status = i2c_driver_install(I2C_NUM_0, c.mode, 0, 0, 0);
+    c.clk_source = I2C_CLK_SRC_DEFAULT;
+    c.glitch_ignore_cnt = 7;
+    c.flags.enable_internal_pullup = pullup;
+    last_status = i2c_new_master_bus(&c, &bus);
     ready = last_status == ESP_OK;
   }
-  ~I2C() { if (ready) i2c_driver_delete(I2C_NUM_0); }
-  bool write(uint8_t a, const uint8_t *b, size_t n) {
+  I2C(const I2C &) = delete;
+  I2C &operator=(const I2C &) = delete;
+  ~I2C() {
+    if (dev) i2c_master_bus_rm_device(dev);
+    if (bus) i2c_del_master_bus(bus);
+  }
+  bool select(uint8_t a) {
     if (!ready) return false;
-    last_status = i2c_master_write_to_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100));
+    if (dev && address == a) return true;
+    if (dev) {
+      last_status = i2c_master_bus_rm_device(dev);
+      if (last_status != ESP_OK) return false;
+      dev = nullptr;
+    }
+    i2c_device_config_t config{};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = a;
+    config.scl_speed_hz = speed;
+    last_status = i2c_master_bus_add_device(bus, &config, &dev);
+    if (last_status == ESP_OK) address = a;
+    return last_status == ESP_OK;
+  }
+  bool probe(uint8_t a) {
+    if (!ready) return false;
+    last_status = i2c_master_probe(bus, a, 40);
+    return last_status == ESP_OK;
+  }
+  bool write(uint8_t a, const uint8_t *b, size_t n) {
+    if (!select(a)) return false;
+    last_status = i2c_master_transmit(dev, b, n, 150);
     return last_status == ESP_OK;
   }
   bool read(uint8_t a, uint8_t *b, size_t n) {
-    if (!ready) return false;
-    last_status = i2c_master_read_from_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100));
+    if (!select(a)) return false;
+    last_status = i2c_master_receive(dev, b, n, 150);
     return last_status == ESP_OK;
   }
   bool reg(uint8_t a, uint8_t reg, uint8_t *b, size_t n) {
-    if (!ready) return false;
-    last_status = i2c_master_write_read_device(I2C_NUM_0, a, &reg, 1, b, n, pdMS_TO_TICKS(100));
+    if (!select(a)) return false;
+    last_status = i2c_master_transmit_receive(dev, &reg, 1, b, n, 150);
     return last_status == ESP_OK;
   }
 };
-inline bool sht(I2C &bus, bool sht3, Record &r) {
+template<class Cancel>
+inline void scan_i2c(Cancel cancelled) {
+  if (cancelled()) return;
+  if (!recover_i2c(true)) { puts("I2C scan: bus held low"); return; }
+  I2C bus(50000, true);
+  if (!bus.ready) { printf("I2C scan: init error=%d\n", bus.last_status); return; }
+  unsigned found = 0;
+  for (unsigned a = 8; a <= 0x77 && !cancelled(); ++a) {
+    if (bus.probe(a)) { printf("I2C scan: ACK 0x%02x\n", a); ++found; }
+    else if (bus.last_status == ESP_ERR_TIMEOUT) {
+      printf("I2C scan: timeout at 0x%02x\n", a); break;
+    }
+  }
+  printf("I2C scan: %u address(es) found\n", found);
+}
+inline bool sht(I2C &bus, bool sht3, Record &r, bool reset = false) {
   uint8_t b[6], cmd[] = {0x24, 0x00}, cmd4 = 0xfd;
   bool ok = false;
   for (uint8_t a : {0x44, 0x45, 0x46}) {
     if (sht3 && a == 0x46) continue;
-    if (!bus.write(a, sht3 ? cmd : &cmd4, sht3 ? 2 : 1)) continue;
+    if (!bus.probe(a)) {
+      if (bus.last_status == ESP_ERR_TIMEOUT) return false;
+      continue;
+    }
+    if (reset) {
+      const uint8_t rst3[] = {0x30, 0xa2}, rst4 = 0x94;
+      if (!bus.write(a, sht3 ? rst3 : &rst4, sht3 ? 2 : 1)) return false;
+      wait_ms(10);
+    }
+    if (!bus.write(a, sht3 ? cmd : &cmd4, sht3 ? 2 : 1)) return false;
     wait_ms(20);
-    if (bus.read(a, b, sizeof b)) { ok = true; break; }
+    if (!bus.read(a, b, sizeof b)) return false;
+    ok = true; break;
   }
   if (!ok) return false;
   if (crc8(b, 2) != b[2] || crc8(b + 3, 2) != b[5]) { r.error = 1; return false; }
@@ -321,15 +385,16 @@ inline bool ds18b20(Record &r) {
   return decode_ds18b20(b, r);
 }
 
-inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr) {
+inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr, unsigned attempt = 1) {
   if (io_status) *io_status = ESP_OK;
   r.error = 0;
   bool ok;
   if (!strcmp(type, "dht11") || !strcmp(type, "dht22")) ok = dht(!strcmp(type, "dht22"), r);
   else if (!strcmp(type, "ds18b20")) ok = ds18b20(r);
   else {
-    I2C bus;
-    if (!strcmp(type, "sht4x") || !strcmp(type, "sht3x")) ok = sht(bus, !strcmp(type, "sht3x"), r);
+    const bool fallback = attempt > 1;
+    I2C bus(fallback ? 50000 : 100000, fallback);
+    if (!strcmp(type, "sht4x") || !strcmp(type, "sht3x")) ok = sht(bus, !strcmp(type, "sht3x"), r, fallback);
     else if (!strcmp(type, "aht20")) ok = aht20(bus, r);
     else if (!strcmp(type, "bme280")) ok = bme280(bus, r);
     else if (!strcmp(type, "bmp280")) ok = bmp280(bus, r);
@@ -343,19 +408,19 @@ inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr) {
 template<class Cancel>
 inline bool read_sensor_retry(const char *type, Record &r, Cancel cancelled,
                               unsigned *attempts = nullptr) {
-  const bool i2c = strcmp(type, "dht11") && strcmp(type, "dht22") && strcmp(type, "ds18b20");
+  const bool i2c = is_i2c(type);
   if (attempts) *attempts = 0;
   for (unsigned i = 1; i <= 3; ++i) {
     if (cancelled()) return false;
     if (attempts) *attempts = i;
     int status = ESP_OK;
-    if (read_sensor(type, r, &status)) return !cancelled();
+    if (read_sensor(type, r, &status, i)) return !cancelled();
     printf("SENSOR: %s attempt %u/3 failed: error=%u io_status=%d\n",
            type, i, unsigned(r.error), status);
     if (i < 3 && !cancelled()) {
       if (i2c && r.error == 2) {
-        bool recovered = recover_i2c();
-        printf("SENSOR: I2C recovery %s\n", recovered ? "OK" : "line stuck");
+        bool recovered = recover_i2c(true);
+        printf("SENSOR: I2C recovery %s; SDA=%d SCL=%d; next=50kHz\n", recovered ? "OK" : "line stuck", gpio_get_level(GPIO_NUM_6), gpio_get_level(GPIO_NUM_7));
       }
       wait_ms(50);
     }

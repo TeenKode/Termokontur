@@ -34,6 +34,15 @@ int main() {
   unsigned attempts = 0;
   assert(read_sensor_retry("sht4x", retry, [] { return false; }, &attempts));
   assert(retry.error == 0 && attempts == 2);
+  assert(mock::speeds.front() == 100000 && mock::speeds.back() == 50000);
+  assert(!mock::pullups.front() && mock::pullups.back());
+  assert(mock::writes[mock::writes.size()-2] == std::vector<uint8_t>({0x94}));
+  assert(mock::live_bus == 0 && mock::live_dev == 0);
+  mock::stuck_pin = GPIO_NUM_7; assert(!recover_i2c(true));
+  mock::stuck_pin = GPIO_NUM_6; assert(!recover_i2c(true));
+  mock::stuck_pin = -1; assert(recover_i2c(true));
+  scan_i2c([] { return false; });
+  assert(mock::live_bus == 0 && mock::live_dev == 0);
   mock::clear();
   assert(read_sensor_retry("sht4x", retry, [] { return false; }, &attempts));
   assert(retry.error == 2 && attempts == 3);
