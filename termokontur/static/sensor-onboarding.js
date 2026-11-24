@@ -1,5 +1,6 @@
 "use strict";
 let usbInstallers=[],usbDefaults=null,usbBusy=false,usbExpectedHardware=null,usbRegistrationTimer=null;
+let usbPrefilledPassword=false;
 function stopUsbRegistrationWatch(){if(usbRegistrationTimer!==null)clearTimeout(usbRegistrationTimer);usbRegistrationTimer=null;}
 function watchUsbRegistration(hardware,remaining=45){
   stopUsbRegistrationWatch();
@@ -21,7 +22,10 @@ function usbServerBootstrapVersion(version){const m=/^(\d+)\.(\d+)\.(\d+)$/.exec
 function usbFactoryVersion(version){const [a,b,c]=String(version).split(".").map(Number);return a>1||(a===1&&(b>1||(b===1&&c>=5)));}
 const usbSupported=()=>Boolean(window.isSecureContext&&navigator.serial);
 const usbStatus=text=>{$("usb-status").textContent=text;};
-function usbClearSecrets(){for(const id of ["usb-wifi-password","usb-setup-password","usb-setup-confirm"])$(id).value="";}
+function usbClearSecrets(){
+  usbPrefilledPassword=false;
+  for(const id of ["usb-wifi-password","usb-setup-password","usb-setup-confirm"])$(id).value="";
+}
 function usbSetBusy(value){usbBusy=value;for(const field of $("sensor-usb-form").querySelectorAll("input,select,textarea"))field.disabled=value||(["usb-setup-password","usb-setup-confirm"].includes(field.id)&&$("usb-setup-random").checked);for(const id of ["usb-flash","usb-configure","usb-close"])$(id).disabled=value||(!usbSupported()&&id!=="usb-close")||(id==="usb-flash"&&!usbInstallers.length);}
 async function refreshInstaller(){
   const [bundle, uploaded]=await Promise.all([api(sensorFirmwareBase),api("/api/sensors/installer")]);
@@ -82,24 +86,83 @@ function renderSensorClaims(claims){
     reject.addEventListener("click",async()=>{try{await api("/api/sensors/claims/"+claim.fingerprint+"/reject","POST");await refreshSensors();sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;toast("Заявка отклонена");}catch(error){toast(error.message,true);}});
   }
 }
+const sensorDefaultsPath="/api/sensors/defaults";
+const sensorDefaultsDialog=$("sensor-defaults-dialog");
+const sensorDefaultsForm=$("sensor-defaults-form");
+
+$("sensor-defaults-open").addEventListener("click",async event=>{
+  const button=event.currentTarget;
+  button.disabled=true;
+  try{
+    const defaults=await api(sensorDefaultsPath);
+    const fields=sensorDefaultsForm.elements;
+    fields.sensor_type.replaceChildren(...Array.from($("usb-type").options,option=>option.cloneNode(true)));
+    fields.sensor_type.value=defaults.sensor_type;
+    fields.ssid.value=defaults.ssid;
+    fields.dns_primary.value=defaults.dns_primary;
+    fields.dns_secondary.value=defaults.dns_secondary;
+    fields.password.value="";
+    fields.password.disabled=false;
+    fields.password.placeholder=defaults.password_configured?"Сохранён. Введите новый для замены":"";
+    fields.clear_password.checked=false;
+    $("sensor-defaults-password-action").hidden=!defaults.password_configured;
+    fields.enabled.checked=defaults.config.enabled;
+    renderSensorConfigFields($("sensor-defaults-config"),defaults.config);
+    sensorDefaultsDialog.showModal();
+  }catch(error){toast(error.message,true);}
+  finally{button.disabled=false;}
+});
+sensorDefaultsForm.elements.clear_password.addEventListener("change",event=>{
+  const password=sensorDefaultsForm.elements.password;
+  password.disabled=event.target.checked;
+  if(password.disabled)password.value="";
+});
+$("sensor-defaults-close").addEventListener("click",()=>sensorDefaultsDialog.close());
+sensorDefaultsDialog.addEventListener("close",()=>{sensorDefaultsForm.elements.password.value="";});
+sensorDefaultsForm.addEventListener("submit",async event=>{
+  event.preventDefault();
+  const fields=sensorDefaultsForm.elements,button=sensorDefaultsForm.querySelector('button[type="submit"]');
+  if(button.disabled)return;
+  button.disabled=true;
+  try{
+    const network=readSensorWifi(sensorDefaultsForm);
+    await api(sensorDefaultsPath,"PUT",{
+      ...network,password:fields.clear_password.checked?"":network.password||null,
+      sensor_type:fields.sensor_type.value,config:readSensorConfig(sensorDefaultsForm,{version:1},fields.enabled.checked),
+    });
+    sensorDefaultsDialog.close();
+    toast("Настройки по умолчанию сохранены");
+  }catch(error){toast(error.message,true);}
+  finally{button.disabled=false;}
+});
+
 $("sensor-usb-open").addEventListener("click",async()=>{
   try{
-    await refreshInstaller();usbDefaults=(await api("/api/sensors/usb/options")).config;
+    const [defaults]=await Promise.all([api("/api/sensors/usb/options"),refreshInstaller()]);
+    usbDefaults=defaults.config;
     sensorRoomOptions($("usb-room"));$("usb-server").value=location.origin;
-    const fields=$("usb-config-fields");fields.replaceChildren();
-    for(const [key,label,min,max] of sensorConfigFields){const wrap=el("label","",label),input=el("input");input.name=key;input.type="number";input.required=true;input.min=min;input.max=max;input.value=usbDefaults[key];wrap.append(input);fields.append(wrap);}
+    $("usb-type").value=defaults.sensor_type;
+    $("usb-ssid").value=defaults.ssid;
+    $("usb-wifi-password").value=defaults.password;
+    usbPrefilledPassword=Boolean(defaults.password);
+    $("usb-dns-primary").value=defaults.dns_primary;
+    $("usb-dns-secondary").value=defaults.dns_secondary;
+    $("usb-measure-enabled").checked=usbDefaults.enabled;
+    renderSensorConfigFields($("usb-config-fields"),usbDefaults);
     $("sensor-usb-support").textContent=usbSupported()?"Настройки передаются подключённой плате по USB.":"Откройте панель по HTTPS в Chrome или Edge на компьютере. Для локальной разработки доступен localhost.";
     $("usb-identity").textContent="";$("usb-progress").hidden=true;$("usb-log").hidden=true;usbExpectedHardware=null;usbStatus("");usbSetBusy(false);$("sensor-usb-dialog").showModal();
   }catch(error){toast(error.message,true);}
 });
-function usbSettings(){
-  const form=$("sensor-usb-form");if(!form.reportValidity())return null;
-  const url=new URL($("usb-server").value);
-  if(url.protocol!=="https:"||url.username||url.password||url.pathname!=="/"||url.search||url.hash)throw Error("Укажите HTTPS-адрес панели без пути и параметров: https://example.org");
-  if(url.origin!==location.origin)throw Error("Для настройки откройте панель на указанном HTTPS-сервере");
-  if(!$("usb-name").value.trim())throw Error("Укажите название датчика");
-  const encoder=new TextEncoder(),password=$("usb-wifi-password").value;
-  const dnsPrimary=$("usb-dns-primary").value.trim(),dnsSecondary=$("usb-dns-secondary").value.trim();
+$("usb-ssid").addEventListener("input",()=>{
+  if(!usbPrefilledPassword)return;
+  $("usb-wifi-password").value="";
+  usbPrefilledPassword=false;
+});
+$("usb-wifi-password").addEventListener("input",()=>{usbPrefilledPassword=false;});
+
+function readSensorWifi(form){
+  const fields=form.elements,encoder=new TextEncoder(),ssid=fields.ssid.value,password=fields.password.value;
+  const dnsPrimary=fields.dns_primary.value.trim(),dnsSecondary=fields.dns_secondary.value.trim();
   const validDNS=value=>{
     if(!value)return true;
     const parts=value.split(".");
@@ -109,13 +172,21 @@ function usbSettings(){
   if(!validDNS(dnsPrimary)||!validDNS(dnsSecondary))throw Error("DNS: укажите корректный IPv4-адрес или оставьте поле пустым.");
   const length=encoder.encode(password).length;
   if(password&&(length<8||length>63))throw Error("Проверьте длину пароля Wi-Fi: 8–63 байта");
-  if(encoder.encode($("usb-ssid").value).length>32)throw Error("Название Wi-Fi превышает 32 байта");
+  if(encoder.encode(ssid).length>32)throw Error("Название Wi-Fi превышает 32 байта");
+  if(password&&!ssid)throw Error("Укажите сеть Wi-Fi для пароля");
+  return {ssid,password,dns_primary:dnsPrimary,dns_secondary:dnsSecondary};
+}
+function usbSettings(){
+  const form=$("sensor-usb-form");if(!form.reportValidity())return null;
+  const url=new URL($("usb-server").value);
+  if(url.protocol!=="https:"||url.username||url.password||url.pathname!=="/"||url.search||url.hash)throw Error("Укажите HTTPS-адрес панели без пути и параметров: https://example.org");
+  if(url.origin!==location.origin)throw Error("Для настройки откройте панель на указанном HTTPS-сервере");
+  if(!$("usb-name").value.trim())throw Error("Укажите название датчика");
+  const network=readSensorWifi(form);
   if(!$("usb-setup-random").checked&&$("usb-setup-password").value!==$("usb-setup-confirm").value)throw Error("Пароли сети настройки не совпадают");
-  const config={...usbDefaults,enabled:$("usb-measure-enabled").checked};
-  for(const [key] of sensorConfigFields)config[key]=Number(form.elements[key].value);
-  if((config.wifi_min_mv!==0&&config.cutoff_mv>config.wifi_min_mv)||config.cutoff_mv>config.ota_min_mv)throw Error("Пороги Wi-Fi и OTA должны быть не ниже отключения. Для Wi-Fi можно указать 0.");
+  const config=readSensorConfig(form,usbDefaults,$("usb-measure-enabled").checked);
   return {name:$("usb-name").value.trim(),room_id:Number($("usb-room").value),sensor_type:$("usb-type").value,config,
-    settings:{ssid:$("usb-ssid").value,password,server:url.origin,dns_primary:dnsPrimary,dns_secondary:dnsSecondary,
+    settings:{...network,server:url.origin,
       setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked}};
 }
 async function usbRun(flash){

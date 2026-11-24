@@ -112,13 +112,31 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert download.value.suggested_filename == f'termokontur-esp32-c3-{version}.bin'
                 # Import the actual vendored SDK under the application's CSP.
                 assert page.evaluate("async()=>typeof (await import('/static/vendor/esptool.bundle.js')).ESPLoader")=='function'
+                page.click('#sensor-defaults-open')
+                defaults = page.locator('#sensor-defaults-dialog')
+                expect(defaults).to_be_visible()
+                defaults.locator('[name="sensor_type"]').select_option('ds18b20')
+                defaults.locator('[name="ssid"]').fill('School-IoT-2.4G')
+                defaults.locator('[name="password"]').fill('SchoolPassDemo2026')
+                defaults.locator('[name="dns_primary"]').fill('10.1.1.10')
+                defaults.locator('[name="dns_secondary"]').fill('10.1.1.11')
+                defaults.locator('[name="measure_s"]').fill('75')
+                defaults.locator('[name="send_s"]').fill('600')
+                defaults.locator('[name="cool_s"]').fill('300')
+                defaults.get_by_role('button',name='Сохранить').click()
+                expect(defaults).to_be_hidden()
                 page.click('#sensor-usb-open');page.wait_for_selector('#sensor-usb-dialog',state='visible')
                 expect(page.locator('#usb-firmware')).to_have_value(f'{firmware_url}/esp32-c3-factory.bin')
                 expect(page.locator('#usb-firmware option')).to_have_count(2)
-                page.fill('#usb-name','Демо: USB-датчик');page.select_option('#usb-type','ds18b20');page.fill('#usb-ssid','School-IoT-2.4G');page.fill('#usb-wifi-password','SchoolPassDemo2026')
-                page.fill('#usb-dns-primary','10.1.1.10');page.fill('#usb-dns-secondary','10.1.1.11')
+                page.fill('#usb-name','Демо: USB-датчик')
+                expect(page.locator('#usb-type')).to_have_value('ds18b20')
+                expect(page.locator('#usb-ssid')).to_have_value('School-IoT-2.4G')
+                expect(page.locator('#usb-wifi-password')).to_have_value('SchoolPassDemo2026')
+                expect(page.locator('#usb-dns-primary')).to_have_value('10.1.1.10')
+                expect(page.locator('#usb-dns-secondary')).to_have_value('10.1.1.11')
                 page.locator('#sensor-usb-form details summary').click()
-                page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
+                expect(page.locator('#sensor-usb-form [name="measure_s"]')).to_have_value('75')
+                page.fill('#sensor-usb-form input[name="measure_s"]','60')
                 page.locator('#sensor-usb-form details summary').click()
                 page.check('#usb-new-board')
                 # The chooser is asynchronous: prevent a second setup before it closes.
@@ -159,6 +177,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert saved['dns_primary']=='10.1.1.10' and saved['dns_secondary']=='10.1.1.11'
                 page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
+                assert api.get('/api/sensors/defaults').json()['config']['measure_s']==75
                 assert page.input_value('#usb-wifi-password')==''
                 onboard=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/onboard')]
                 assert not onboard
@@ -184,6 +203,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     page.select_option('#usb-room',str(other_room['id']))
                     page.select_option('#usb-type','ds18b20')
                     page.fill('#usb-ssid','Other-Network')
+                    expect(page.locator('#usb-wifi-password')).to_be_empty()
                     page.click('#usb-configure')
                     expect(page.locator('#usb-status')).to_contain_text('Смените помещение в карточке датчика')
                     assert page.evaluate('window.savedUSB')==saved
@@ -202,7 +222,14 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.locator('#sensor-claims input').fill('Демо: заявка по сети');page.locator('#sensor-claims button').first.click()
                 expect(page.locator('#sensor-claims-panel')).to_be_hidden()
                 for width,height in [(1440,1100),(390,844)]:
-                    page.set_viewport_size({'width':width,'height':height});page.click('#sensor-usb-open')
+                    page.set_viewport_size({'width':width,'height':height})
+                    page.click('#sensor-defaults-open')
+                    expect(defaults).to_be_visible()
+                    expect(defaults.locator('[name="password"]')).to_be_empty()
+                    expect(defaults.locator('[name="clear_password"]')).to_be_visible()
+                    assert defaults.evaluate('el=>el.scrollWidth<=el.clientWidth+1')
+                    page.click('#sensor-defaults-close')
+                    page.click('#sensor-usb-open')
                     expect(page.locator('#sensor-usb-dialog')).to_be_visible();assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                     assert page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollWidth<=el.clientWidth+1')
                     page.screenshot(path=f'/tmp/termokontur-usb-{width}.png');page.click('#usb-close')
