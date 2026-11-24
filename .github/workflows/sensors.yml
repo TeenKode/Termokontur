@@ -73,9 +73,43 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: termokontur-panel-firmware
+      - name: Publish the same archive over Git
+        env:
+          VERSION: ${{ needs.firmware.outputs.version }}
+        run: |
+          asset="termokontur-firmware.zip"
+          ref="refs/tags/firmware-bundle-v$VERSION"
+          # Reuse the first validated build on a rerun. Do not replace a
+          # versioned archive with another build of the same sources.
+          snapshot_needed=1
+          if git ls-remote --exit-code origin "$ref" >/dev/null; then
+            git fetch --quiet --depth 1 --no-tags origin "$ref"
+            git show "FETCH_HEAD:$asset" > "$asset"
+            snapshot_needed=0
+          else
+            test "$?" -eq 2
+          fi
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from termokontur import sensor_firmware
+
+          bundle = sensor_firmware.read_release(Path(sensor_firmware.RELEASE_FILE).read_bytes())
+          if bundle.factory.source_commit != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Git bundle version is already used by another revision")
+          PY
+          if (( snapshot_needed )); then
+            blob=$(git hash-object -w "$asset")
+            tree=$(printf '100644 blob %s\t%s\n' "$blob" "$asset" | git mktree)
+            snapshot=$(git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit-tree "$tree" -m "Firmware $VERSION for $GITHUB_SHA")
+            git push origin "$snapshot:$ref"
+          fi
       - name: Publish versioned firmware bundle
         env:
           GH_TOKEN: ${{ github.token }}

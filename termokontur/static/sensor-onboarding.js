@@ -8,8 +8,9 @@ function usbSetBusy(value){usbBusy=value;for(const field of $("sensor-usb-form")
 async function refreshInstaller(){
   const [bundle, uploaded]=await Promise.all([api(sensorFirmwareBase),api("/api/sensors/installer")]);
   const manual=uploaded&&usbServerBootstrapVersion(uploaded.version)?uploaded:null;
-  $("sensor-bundled-status").textContent=bundle?"Версия "+bundle.version+" из комплекта панели.":"Комплект текущей версии пока недоступен.";
+  $("sensor-bundled-status").textContent=bundle?"Доступна прошивка "+bundle.version+".":"Ожидаем комплект текущей версии.";
   $("sensor-firmware-downloads").hidden=!bundle;
+  $("sensor-firmware-recovery").hidden=!!bundle;
   $("sensor-installer-status").textContent=manual?"Загружена версия "+manual.version+".":"Загрузите ZIP прошивки версии 0.1.5 или новее.";
   const select=$("usb-firmware"),previous=select.value;
   select.replaceChildren();
@@ -22,7 +23,7 @@ async function refreshInstaller(){
     usbInstallers.push({...bundle.factory,url});
     option(select,url,bundle.version+" · из комплекта панели");
   }
-  if(manual){
+  if(manual&&!(bundle?.version===manual.version&&bundle.factory.sha256===manual.sha256)){
     const url="/api/sensors/installer/"+manual.id+"/factory.bin";
     usbInstallers.push({...manual,url});
     option(select,url,manual.version+" · загружена вручную");
@@ -30,6 +31,23 @@ async function refreshInstaller(){
   if($("sensor-usb-dialog").open&&usbInstallers.some(item=>item.url===previous))select.value=previous;
   $("usb-firmware-choice").hidden=!usbInstallers.length;
 }
+$("sensor-firmware-retry").addEventListener("click",async()=>{
+  const button=$("sensor-firmware-retry");
+  button.disabled=true;
+  $("sensor-bundled-status").textContent="Загружаем комплект прошивки…";
+  try {
+    const result=await api(sensorFirmwareBase+"/retry","POST");
+    if(result.status==="ready"){
+      await refreshInstaller();
+      if(sensorSelected)await openSensor(sensorSelected);
+    }
+  }catch(error){
+    $("sensor-bundled-status").textContent=error.message;
+    toast(error.message,true);
+  }finally{
+    button.disabled=false;
+  }
+});
 function renderSensorClaims(claims){
   const target=$("sensor-claims");if(!target)return;target.replaceChildren();$("sensor-claims-panel").hidden=!claims.length;
   for(const claim of claims){
@@ -123,7 +141,7 @@ $("usb-close").addEventListener("click",()=>{if(!usbBusy){usbClearSecrets();$("s
 $("sensor-usb-dialog").addEventListener("cancel",e=>{if(usbBusy)e.preventDefault();else usbClearSecrets();});
 $("sensor-installer-form").addEventListener("submit",async e=>{
   e.preventDefault();const button=e.target.querySelector("button");button.disabled=true;
-  try{const data=new FormData();data.append("file",$("sensor-installer-file").files[0]);const r=await fetch("/api/sensors/installer",{method:"POST",credentials:"same-origin",body:data});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Комплект не принят");}await refreshInstaller();toast("Комплект USB-прошивки загружен");}catch(error){toast(error.message,true);}finally{button.disabled=false;}
+  try{const data=new FormData();data.append("file",$("sensor-installer-file").files[0]);const r=await fetch("/api/sensors/installer",{method:"POST",credentials:"same-origin",body:data});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Комплект не принят");}await refreshInstaller();if(sensorSelected)await openSensor(sensorSelected);toast("Комплект прошивки загружен");}catch(error){toast(error.message,true);}finally{button.disabled=false;}
 });
 setInterval(()=>{
   if($("view-sensors").hidden||usbBusy||$("sensor-usb-dialog").open)return;

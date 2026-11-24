@@ -3,6 +3,7 @@ import copy
 import hashlib
 import io
 import json
+import subprocess
 import struct
 import time
 import zipfile
@@ -205,6 +206,7 @@ def test_fetch_cache_and_download_current_firmware(admin, monkeypatch, tmp_path)
         return client_class(transport=httpx.MockTransport(respond), **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
+    monkeypatch.setattr(sensor_firmware, "_download_git_bundle", lambda: stale)
     assert admin.get(BUNDLED).json() is None
     for _ in range(2):
         assert not asyncio.run(sensor_firmware.fetch_current())
@@ -222,6 +224,39 @@ def test_fetch_cache_and_download_current_firmware(admin, monkeypatch, tmp_path)
         assert downloaded.content == image
         assert f"termokontur-{target}-{__version__}.bin" in downloaded.headers["content-disposition"]
     assert admin.get(f"{BUNDLED}/0.8.0/esp32-c3.bin").status_code == 404
+
+
+def test_retry_downloads_exact_release_from_git_when_http_fails(admin, monkeypatch, tmp_path):
+    data = kit(__version__)
+    remote = tmp_path / "firmware.git"
+    subprocess.run(["git", "init", "--quiet", str(remote)], check=True)
+    (remote / sensor_firmware.RELEASE_FILE).write_bytes(data)
+    subprocess.run(["git", "-C", str(remote), "add", sensor_firmware.RELEASE_FILE], check=True)
+    subprocess.run(["git", "-C", str(remote), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                    "commit", "--quiet", "-m", "Test firmware"], check=True)
+    subprocess.run(["git", "-C", str(remote), "tag", sensor_firmware.BUNDLE_TAG], check=True)
+    monkeypatch.setattr(sensor_firmware, "REPOSITORY", (tmp_path / "firmware").as_uri())
+
+    def unavailable_client(**_):
+        raise ImportError("Proxy transport cannot start")
+
+    monkeypatch.setattr(httpx, "AsyncClient", unavailable_client)
+    assert admin.post(BUNDLED + "/retry").json() == {"status": "ready"}
+    cached = tmp_path / "firmware" / f"{__version__}.zip"
+    assert cached.read_bytes() == data
+    assert admin.get(BUNDLED).json()["version"] == __version__
+
+
+def test_manually_uploaded_current_zip_enables_both_binary_downloads(admin, tmp_path):
+    assert admin.post("/api/sensors/installer", files={"file": ("old.zip", kit("1.0.0"))}).status_code == 200
+    assert admin.get(BUNDLED).json() is None
+    data = kit(__version__)
+    assert admin.post("/api/sensors/installer", files={"file": ("current.zip", data)}).status_code == 200
+    assert admin.get(BUNDLED).json()["version"] == __version__
+    assert not (tmp_path / "firmware").exists()
+    bundle = sensor_firmware.read_release(data)
+    assert admin.get(f"{BUNDLED}/{__version__}/esp32-c3-factory.bin").content == bundle.factory.image
+    assert admin.get(f"{BUNDLED}/{__version__}/esp32-c3.bin").content == bundle.esp32
 
 
 def test_assign_bundled_firmware_without_manual_upload(admin, tmp_path):

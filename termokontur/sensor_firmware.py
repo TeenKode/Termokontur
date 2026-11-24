@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import struct
+import subprocess
 import tempfile
 import zipfile
 import zlib
@@ -25,7 +26,9 @@ APP_OFFSET = 0x20000
 MAX_FACTORY = APP_OFFSET + MAX_FIRMWARE
 MAX_RELEASE = MAX_FACTORY + 65536
 RELEASE_FILE = "termokontur-firmware.zip"
-RELEASE_URL = f"https://github.com/TeenKode/Termokontur/releases/download/firmware-v{__version__}/{RELEASE_FILE}"
+REPOSITORY = "https://github.com/TeenKode/Termokontur"
+RELEASE_URL = f"{REPOSITORY}/releases/download/firmware-v{__version__}/{RELEASE_FILE}"
+BUNDLE_TAG = f"firmware-bundle-v{__version__}"
 logger = logging.getLogger(__name__)
 
 
@@ -117,14 +120,18 @@ def read_kit(data: bytes) -> FactoryImage:
         return _read_factory(archive, manifest)
 
 
+def _bundle(factory: FactoryImage) -> FirmwareBundle:
+    esp32 = factory.image[APP_OFFSET:]
+    return FirmwareBundle(factory, esp32, hashlib.sha256(esp32).hexdigest())
+
+
 def read_release(data: bytes) -> FirmwareBundle:
     if len(data) > MAX_RELEASE:
         raise ValueError("Архив прошивок превышает допустимый размер")
     factory = read_kit(data)
     if factory.version != __version__:
         raise ValueError("Версия архива прошивок не совпадает с версией панели")
-    esp32 = factory.image[APP_OFFSET:]
-    return FirmwareBundle(factory, esp32, hashlib.sha256(esp32).hexdigest())
+    return _bundle(factory)
 
 
 def _release_path() -> Path:
@@ -147,12 +154,25 @@ def current() -> FirmwareBundle | None:
     try:
         stat = path.stat()
     except OSError:
+        pass
+    else:
+        cached = _load_release(path, stat.st_mtime_ns, stat.st_ino)
+        if cached is not None:
+            return cached
+
+    # A manually imported ZIP goes through the same factory image checks.
+    # Only the matching version may replace the missing official package.
+    if not db.db_path().is_file():
         return None
-    return _load_release(path, stat.st_mtime_ns, stat.st_ino)
+    with db.connect() as conn:
+        uploaded = conn.execute(
+            "SELECT version,sha256,source_commit,image FROM sensor_installers WHERE version=?",
+            (__version__,),
+        ).fetchone()
+    return _bundle(FactoryImage(*uploaded)) if uploaded else None
 
 
 def _store_release(data: bytes) -> None:
-    read_release(data)
     path = _release_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as file:
@@ -165,30 +185,66 @@ def _store_release(data: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+async def _download_release() -> bytes:
+    import httpx
+
+    async with asyncio.timeout(18), httpx.AsyncClient(follow_redirects=True) as client:
+        async with client.stream("GET", RELEASE_URL) as response:
+            response.raise_for_status()
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > MAX_RELEASE:
+                    raise ValueError("Архив прошивок превышает допустимый размер")
+                data.extend(chunk)
+    return bytes(data)
+
+
+def _download_git_bundle() -> bytes:
+    # Use the same Git transport as the native updater if the asset CDN is unreachable.
+    with tempfile.TemporaryDirectory(prefix="termokontur-firmware-") as checkout:
+        subprocess.run(
+            ["git", "clone", "--quiet", "--no-checkout", "--depth=1", "--single-branch",
+             "--branch", BUNDLE_TAG, REPOSITORY + ".git", checkout],
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=20,
+        )
+        return subprocess.check_output(
+            ["git", "-C", checkout, "show", f"HEAD:{RELEASE_FILE}"],
+            stderr=subprocess.PIPE, timeout=5,
+        )
+
+
 async def fetch_current() -> bool:
-    """Load the public release asset once, with a deadline for app startup."""
+    """Load and validate one copy of the firmware for the installed panel."""
     import httpx
 
     if await asyncio.to_thread(current) is not None:
         return True
     try:
-        async with asyncio.timeout(12), httpx.AsyncClient(follow_redirects=True, max_redirects=3) as client:
-            async with client.stream("GET", RELEASE_URL) as response:
-                response.raise_for_status()
-                data = bytearray()
-                async for chunk in response.aiter_bytes():
-                    if len(data) + len(chunk) > MAX_RELEASE:
-                        raise ValueError("Архив прошивок превышает допустимый размер")
-                    data.extend(chunk)
-        await asyncio.to_thread(_store_release, bytes(data))
+        data = await _download_release()
+        read_release(data)
+    except (httpx.HTTPError, TimeoutError, OSError, ValueError, ImportError) as exc:
+        logger.warning("Cannot download firmware %s from the GitHub release: %s", __version__, exc)
+        try:
+            data = await asyncio.to_thread(_download_git_bundle)
+            read_release(data)
+        except (subprocess.SubprocessError, OSError, ValueError) as fallback_exc:
+            logger.warning("Cannot download firmware %s via Git: %s", __version__, fallback_exc)
+            return False
+    # An administrator may have uploaded the package while the download ran.
+    if await asyncio.to_thread(current) is not None:
         return True
-    except (httpx.HTTPError, TimeoutError, OSError, ValueError) as exc:
-        logger.warning("Cannot download firmware for %s: %s", __version__, exc)
+    try:
+        await asyncio.to_thread(_store_release, data)
+    except OSError as exc:
+        logger.warning("Cannot save firmware bundle %s: %s", __version__, exc)
         return False
+    return True
 
 
-async def retry_fetch() -> None:
+async def retry_fetch(lock: asyncio.Lock) -> None:
     while True:
+        async with lock:
+            if await fetch_current():
+                return
         await asyncio.sleep(60)
-        if await fetch_current():
-            return

@@ -47,7 +47,7 @@
 #include <vector>
 
 using sensor::Record;
-static constexpr gpio_num_t USB_PIN = GPIO_NUM_4;
+static constexpr gpio_num_t CHARGE_PIN = GPIO_NUM_4;
 static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
@@ -91,7 +91,7 @@ static int64_t wall_time_us() {
   gettimeofday(&tv, nullptr);
   return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 }
-static bool charging() { return gpio_get_level(USB_PIN) == 0; }
+static bool charging() { return gpio_get_level(CHARGE_PIN) == 0; }
 static bool available() {
   return !charging() && esp_timer_get_time() < deadline;
 }
@@ -289,17 +289,17 @@ static void stop_network() {
 [[noreturn]] static void sleep_for(uint32_t seconds) {
   stop_network();
   seconds = std::max<uint32_t>(1, seconds);
+  const bool charger_present = charging();
+  rt.charging = rt.charging || charger_present;
   rt.uptime += esp_timer_get_time() / 1000000;
   rt.sleep_started_us = wall_time_us();
   rt.crc = sensor::crc32(&rt, offsetof(Runtime, crc));
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000);
   // Wake on the opposite level, avoiding an immediate wake loop while charging.
-  gpio_wakeup_disable(USB_PIN);
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << USB_PIN,
-                                    charging() ? ESP_GPIO_WAKEUP_GPIO_HIGH
-                                               : ESP_GPIO_WAKEUP_GPIO_LOW);
-  gpio_pullup_dis(USB_PIN);
-  gpio_pulldown_dis(USB_PIN);
+  gpio_wakeup_disable(CHARGE_PIN);
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << CHARGE_PIN,
+                                    charger_present ? ESP_GPIO_WAKEUP_GPIO_HIGH
+                                                    : ESP_GPIO_WAKEUP_GPIO_LOW);
   esp_deep_sleep_start();
   __builtin_unreachable();
 }
@@ -974,8 +974,10 @@ static void usb_setup_task(void *) {
   vTaskDelete(nullptr);
 }
 static void setup_ap() {
-  if (!start_wifi(true))
+  if (!start_wifi(true)) {
+    puts("SETUP: Wi-Fi initialization failed or charging is active.");
     return;
+  }
   auto rnd = hex64(((uint64_t)esp_random() << 32) | esp_random());
   std::string apname = "Termokontur-" + rnd.substr(12),
               pass = setup_password.empty() ? rnd.substr(0, 12) : setup_password;
@@ -987,8 +989,11 @@ static void setup_ap() {
   w.ap.authmode = WIFI_AUTH_WPA2_PSK;
   w.ap.max_connection = 1;
   esp_wifi_set_config(WIFI_IF_AP, &w);
-  if (esp_wifi_start() != ESP_OK)
+  const esp_err_t wifi_status = esp_wifi_start();
+  if (wifi_status != ESP_OK) {
+    printf("SETUP: Wi-Fi start failed: %s\n", esp_err_to_name(wifi_status));
     return;
+  }
   xTaskCreate(usb_setup_task, "usb_setup", 16384, nullptr, 4, nullptr);
   printf("\nSETUP Wi-Fi: %s\nSETUP password: %s\nOpen http://192.168.4.1\n",
          apname.c_str(), pass.c_str());
@@ -996,8 +1001,11 @@ static void setup_ap() {
   httpd_config_t hc = HTTPD_DEFAULT_CONFIG();
   hc.stack_size = 8192;
   hc.max_uri_handlers = 2;
-  if (httpd_start(&h, &hc) != ESP_OK)
+  const esp_err_t http_status = httpd_start(&h, &hc);
+  if (http_status != ESP_OK) {
+    printf("SETUP: HTTP server start failed: %s\n", esp_err_to_name(http_status));
     return;
+  }
   httpd_uri_t root{};
   root.uri = "/";
   root.method = HTTP_GET;
@@ -1009,8 +1017,15 @@ static void setup_ap() {
   save.handler = setup_save;
   httpd_register_uri_handler(h, &save);
   int64_t end = esp_timer_get_time() + 600000000;
-  while (!configured && !charging() && esp_timer_get_time() < end)
+  while (!configured && esp_timer_get_time() < end) {
+    if (charging()) {
+      rt.charging = true;
+      puts("SETUP stopped: charger input GPIO4 is LOW.");
+      break;
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  if (!configured && !rt.charging) puts("SETUP stopped: timeout.");
   if (configured)
     vTaskDelay(pdMS_TO_TICKS(500));
   httpd_stop(h);
@@ -1022,8 +1037,11 @@ static void setup_ap() {
 }
 extern "C" void app_main() {
   gpio_config_t g{};
-  g.pin_bit_mask = 1ULL << USB_PIN;
+  g.pin_bit_mask = 1ULL << CHARGE_PIN;
   g.mode = GPIO_MODE_INPUT;
+  // An unplugged/open-collector detector must read high, including on a
+  // bare SuperMini connected for USB setup.
+  g.pull_up_en = GPIO_PULLUP_ENABLE;
   gpio_config(&g);
   gpio_set_direction(GPIO_NUM_8, GPIO_MODE_OUTPUT);
   gpio_set_level(GPIO_NUM_8, 1);
@@ -1041,6 +1059,7 @@ extern "C" void app_main() {
   // Charging takes priority over provisioning, measurements, diagnostics and
   // OTA.
   if (charging()) {
+    puts("SLEEP: charger input GPIO4 is LOW.");
     rt.charging = true;
     sleep_for(1800);
   }
