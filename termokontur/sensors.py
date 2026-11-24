@@ -11,11 +11,12 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
+from ipaddress import IPv4Address
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import __version__, db, sensor_firmware, sensor_monitor, settings
 
@@ -50,6 +51,44 @@ class Config(Strict):
             self.wifi_min_mv = max(self.wifi_min_mv, self.cutoff_mv)
         self.ota_min_mv = max(self.ota_min_mv, self.cutoff_mv, 3300)
         return self
+
+
+DEFAULT_SETUP_KEY = "sensor_setup_defaults"
+
+
+class SetupDefaults(Strict):
+    sensor_type: SensorType = "sht4x"
+    ssid: str = ""
+    password: str | None = Field(default=None, repr=False)
+    dns_primary: str = ""
+    dns_secondary: str = ""
+    config: Config = Field(default_factory=Config)
+
+    @field_validator("ssid")
+    @classmethod
+    def valid_ssid(cls, value: str) -> str:
+        if "\0" in value or len(value.encode("utf-8")) > 32:
+            raise ValueError("Название Wi-Fi должно занимать не более 32 байт")
+        return value
+
+    @field_validator("dns_primary", "dns_secondary")
+    @classmethod
+    def valid_dns(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        try:
+            address = IPv4Address(value)
+            if address.is_unspecified or address.is_loopback or address.packed[0] >= 224:
+                raise ValueError()
+        except ValueError:
+            raise ValueError("DNS должен быть корректным IPv4-адресом") from None
+        return str(address)
+
+
+def setup_defaults(conn: sqlite3.Connection) -> SetupDefaults:
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (DEFAULT_SETUP_KEY,)).fetchone()
+    return SetupDefaults.model_validate_json(row["value"]) if row else SetupDefaults()
 
 
 class DeviceIn(Strict):
@@ -216,9 +255,10 @@ def router(require_admin):
         device = "tk-" + secrets.token_hex(8)
         with db.connect() as conn:
             check_room(conn, payload.room_id)
-            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model)
-                            VALUES(?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
-                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now(), payload.model))
+            defaults = setup_defaults(conn)
+            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model,sensor_type)
+                            VALUES(?,?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
+                            int(time.time()) + 7 * 86400, defaults.config.model_dump_json(), db.utc_now(), payload.model, defaults.sensor_type))
             event(conn, device, "created", "Регистрация разрешена администратором")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
