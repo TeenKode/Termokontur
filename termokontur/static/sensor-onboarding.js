@@ -49,15 +49,19 @@ $("sensor-firmware-retry").addEventListener("click",async()=>{
   }
 });
 function renderSensorClaims(claims){
-  const target=$("sensor-claims");if(!target)return;target.replaceChildren();$("sensor-claims-panel").hidden=!claims.length;
+  const target=$("sensor-claims"),rejected=$("sensor-rejected-claims");if(!target)return;target.replaceChildren();rejected.replaceChildren();
+  const denied=claims.filter(c=>c.state==="rejected");
+  $("sensor-claims-panel").hidden=!claims.some(c=>c.state==="pending");
+  $("sensor-rejected-panel").hidden=!denied.length;
+  $("sensor-rejected-title").textContent="Отклонённые заявки ("+denied.length+")";
   for(const claim of claims){
     const article=el("div","sensor-claim");
     article.append(el("strong","",claim.hardware_id+" · "+claim.sensor_type.toUpperCase()),el("p","hint","Ключ "+claim.fingerprint.slice(0,16).match(/.{4}/g).join("–")+" · "+(claim.state==="rejected"?"Отклонён":"Ожидает разрешения")+" · "+sensorWhen(claim.last_seen)));
     const form=el("form","sensor-form"),name=el("input"),room=el("select"),approve=el("button","btn primary","Разрешить"),reject=el("button","btn secondary","Отклонить");
     name.required=true;name.maxLength=100;name.value=claim.name||"";name.placeholder="Название датчика";name.setAttribute("aria-label","Название нового датчика");room.setAttribute("aria-label","Помещение нового датчика");sensorRoomOptions(room,claim.room_id);reject.type="button";
-    form.append(name,room,approve,reject);article.append(form);target.append(article);
+    form.append(name,room,approve);if(claim.state!=="rejected")form.append(reject);article.append(form);(claim.state==="rejected"?rejected:target).append(article);
     form.addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/claims/"+claim.fingerprint+"/approve","POST",{name:name.value.trim(),room_id:Number(room.value)});await refreshSensors();toast("Доступ разрешён. Ожидаем подключения датчика.");}catch(error){toast(error.message,true);}});
-    reject.addEventListener("click",async()=>{try{await api("/api/sensors/claims/"+claim.fingerprint+"/reject","POST");await refreshSensors();}catch(error){toast(error.message,true);}});
+    reject.addEventListener("click",async()=>{try{await api("/api/sensors/claims/"+claim.fingerprint+"/reject","POST");await refreshSensors();sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;toast("Заявка отклонена");}catch(error){toast(error.message,true);}});
   }
 }
 $("sensor-usb-open").addEventListener("click",async()=>{
@@ -169,7 +173,7 @@ $("sensor-installer-form").addEventListener("submit",async e=>{
 });
 setInterval(()=>{
   if($("view-sensors").hidden||usbBusy||$("sensor-usb-dialog").open)return;
-  if(!$("sensor-claims-panel").contains(document.activeElement))api("/api/sensors/claims").then(renderSensorClaims).catch(()=>{});
+  if(!$("sensor-claims-panel").contains(document.activeElement)&&!$("sensor-rejected-panel").contains(document.activeElement))api("/api/sensors/claims").then(renderSensorClaims).catch(()=>{});
   if($("sensor-firmware-downloads").hidden)refreshInstaller().catch(()=>{});
 },20000);
 

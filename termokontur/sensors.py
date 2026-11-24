@@ -186,6 +186,8 @@ def public_device(d):
     d["config"] = json.loads(d["config"])
     if d["model"] != MODEL:
         return {**d, "enabled": 0, "next_sync_at": None, "status": "retired"}
+    if d.get("identity_state") in ("pending", "rejected"):
+        return {**d, "next_sync_at": None, "status": "rejected" if d["identity_state"] == "rejected" else "authorization_pending"}
     scheduled, deadline = sensor_monitor.upload_times(d)
     d["next_sync_at"] = scheduled if d["enabled"] and d["config"]["enabled"] and d["hardware_id"] else None
     d["status"] = ("disabled" if not d["enabled"] or not d["config"]["enabled"]
@@ -202,7 +204,7 @@ def router(require_admin):
     @r.get("/devices", dependencies=admin)
     def devices():
         with db.connect() as conn:
-            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building,i.fingerprint identity_fingerprint "
+            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building,i.fingerprint identity_fingerprint,i.state identity_state "
                     "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id LEFT JOIN sensor_identities i ON i.device_id=d.id ORDER BY r.building,r.name,d.name")]
 
     @r.post("/devices", dependencies=admin)

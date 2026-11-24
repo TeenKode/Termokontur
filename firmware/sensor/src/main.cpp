@@ -254,9 +254,16 @@ static bool verify_saved_configuration() {
   return load_blob("provision", stored.data(), stored.size()) == 1 &&
          memcmp(stored.data(), expected.c_str(), stored.size()) == 0 &&
          load_blob("config", &actual_cfg, sizeof actual_cfg) == 1 &&
-         memcmp(&actual_cfg, &cfg, sizeof cfg) == 0 &&
+         actual_cfg.version == cfg.version && actual_cfg.measure_s == cfg.measure_s &&
+         actual_cfg.send_s == cfg.send_s && actual_cfg.cool_s == cfg.cool_s &&
+         actual_cfg.wifi_budget_s == cfg.wifi_budget_s && actual_cfg.wifi_min_mv == cfg.wifi_min_mv &&
+         actual_cfg.cutoff_mv == cfg.cutoff_mv && actual_cfg.ota_min_mv == cfg.ota_min_mv &&
+         actual_cfg.tx_qdbm == cfg.tx_qdbm && actual_cfg.adc_scale_ppm == cfg.adc_scale_ppm && actual_cfg.enabled == cfg.enabled &&
          load_blob("state", &actual_state, sizeof actual_state) == 1 &&
-         memcmp(&actual_state, &state, sizeof state) == 0;
+         actual_state.next == state.next && actual_state.ack == state.ack &&
+         actual_state.lost_base == state.lost_base && actual_state.boots == state.boots &&
+         actual_state.ota_failures == state.ota_failures && actual_state.ota_generation == state.ota_generation &&
+         actual_state.saved_time == state.saved_time;
 }
 static bool load_provision() {
   size_t n = 0;
