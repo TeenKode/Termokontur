@@ -1,6 +1,7 @@
 "use strict";
 let sensorDevices=[],sensorSelected=null,sensorRecords=[],sensorConfig=null,sensorLoadId=0;
-const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено"};
+const sensorFirmwareBase="/api/sensors/firmware/bundled";
+const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив"};
 const sensorTime={unknown:"Дата неизвестна",sntp:"Сервер времени",server:"Сервер",rtc:"Часы устройства"};
 const sensorConfigFields=[
   ["measure_s","Интервал измерений, с",60,86400],["send_s","Интервал передачи, с",600,604800],
@@ -22,7 +23,7 @@ async function refreshSensors(){
     const cards=$("sensor-cards");cards.replaceChildren();
     for(const d of devices){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
-      card.append(name,el("p","muted",d.building+" · "+d.room_name+" · "+(d.model==="esp01-sht40-v1"?"ESP-01S 1 МБ":"ESP32-C3")),el("strong","",sensorStatus[d.status]||d.status),
+      card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatus[d.status]||d.status),
         el("p","",(d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно")+" · "+sensorWhen(d.last_seen)),
         sensorButton("Открыть",()=>openSensor(d.id)));cards.append(card);
       if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
@@ -39,26 +40,32 @@ async function refreshSensors(){
 async function openSensor(id){
   const request=++sensorLoadId;
   try{
-    const [records,events,firmwares]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit=5000"),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware")]);
+    const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit=5000"),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
     if(request!==sensorLoadId)return;
     const d=sensorDevices.find(x=>x.id===id);if(!d)return;
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
     $("sensor-detail").hidden=false;$("sensor-title").textContent=d.name;
-    const isEsp01=d.model==="esp01-sht40-v1";
-    $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(isEsp01?"ESP-01S (1 МБ)":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    const retired=d.status==="retired";
+    $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(retired?"Поддержка модели завершена":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    for(const id of ["sensor-device-form","sensor-config-details","sensor-ota-details"])$(id).hidden=retired;
     $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");configForm.replaceChildren();
-    for(const [key,label,min,max] of sensorConfigFields){if(isEsp01&&!["measure_s","send_s"].includes(key))continue;const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=isEsp01&&key==="measure_s"?3600:max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
+    for(const [key,label,min,max] of sensorConfigFields){const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
     const enabled=el("label","archive-toggle",["ds18b20","bmp280"].includes(d.sensor_type)?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
     const save=el("button","btn primary","Отправить настройки");configForm.append(save);
     const body=$("sensor-records");body.replaceChildren();
     for(const r of records.slice(0,100)){const tr=el("tr");cell(tr,r.seq);cell(tr,sensorWhen(r.measured_at));cell(tr,r.temperature===null?"—":r.temperature.toFixed(2));cell(tr,r.humidity===null?"—":r.humidity.toFixed(1));cell(tr,r.battery_mv?Number(r.battery_mv/1000).toFixed(2)+" В":"—");cell(tr,(sensorTime[r.time_quality]||r.time_quality)+(r.error?" · "+r.error:""));body.append(tr);}
     $("sensor-events").replaceChildren(...events.map(x=>el("li","",sensorWhen(x.at)+" · "+x.kind+": "+x.detail)));
-    const select=$("sensor-firmware");select.replaceChildren();option(select,"","Выберите версию");for(const fw of firmwares.filter(f=>f.model===(d.model||"c3-sht40-v1")))option(select,String(fw.id),fw.version+" · "+Math.round(fw.size/1024)+" КиБ");select.value=String(d.target_firmware||"");
-    $("sensor-ota-form").hidden=isEsp01;$("sensor-upload-form").hidden=isEsp01;$("sensor-ota-cancel").hidden=isEsp01;
-    $("sensor-ota-state").textContent=isEsp01?"ESP-01S 1 МБ: OTA пока недоступно; перепрошивка USB–UART 3,3 В. Нужна доработка GPIO16 → RST для Deep Sleep.":"Установлено: "+(d.firmware||"неизвестно")+" · неудачных попыток: "+d.ota_failures+". Обновление начнётся после передачи данных при достаточном заряде.";
-    if(isEsp01){const info=el("p","muted","SHT40: GPIO0/GPIO2. Напряжение BL-5C не измеряется, при зарядке отключите устройство аппаратным выключателем.");configForm.prepend(info);}
+    const select=$("sensor-firmware");
+    select.replaceChildren();option(select,"","Выберите версию");
+    const available=firmwares.filter(f=>f.model===(d.model||"c3-sht40-v1"));
+    const fromBundle=fw=>bundle&&fw.version===bundle.version&&fw.sha256===bundle.esp32.sha256;
+    const bundledLabel=bundle?bundle.version+" · из комплекта панели":"";
+    if(!retired&&bundle&&!available.some(fromBundle))option(select,"bundled:"+bundle.version,bundledLabel);
+    for(const fw of available)option(select,String(fw.id),fromBundle(fw)?bundledLabel:fw.version+" · "+Math.round(fw.size/1024)+" КиБ");
+    select.value=String(d.target_firmware||"");
+    $("sensor-ota-state").textContent="Установлено: "+(d.firmware||"неизвестно")+" · неудачных попыток: "+d.ota_failures+". Обновление начнётся после передачи данных при достаточном заряде.";
     drawSensorChart();
   }catch(e){toast(e.message,true);}
 }
@@ -84,17 +91,23 @@ function drawSensorChart(){
     }ctx.stroke();
   }
 }
-function revealSensorCode(reply){const d=sensorDevices.find(x=>x.id===reply.device_id);$("sensor-code-help").textContent=d?.model==="esp01-sht40-v1"?"ESP-01S 1 МБ: сохраните код и настройте новую плату по USB–UART 3,3 В скриптом firmware/esp01s/provision.py. Веб-настройка 192.168.4.1 для неё не поддерживается.":"Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.";$("sensor-code-id").value=reply.device_id;$("sensor-code-value").value=reply.code;$("sensor-code-dialog").showModal();}
+function revealSensorCode(reply){$("sensor-code-help").textContent="Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.";$("sensor-code-id").value=reply.device_id;$("sensor-code-value").value=reply.code;$("sensor-code-dialog").showModal();}
 $("sensor-add").addEventListener("click",()=>{sensorRoomOptions($("sensor-new-room"));$("sensor-add-dialog").showModal();});
 $("sensor-add-close").addEventListener("click",()=>$("sensor-add-dialog").close());
 $("sensor-code-close").addEventListener("click",()=>{$("sensor-code-dialog").close();$("sensor-code-value").value="";});
 $("sensor-code-copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("sensor-code-id").value+"\n"+$("sensor-code-value").value);toast("Данные скопированы");}catch{toast("Выделите и скопируйте поля вручную",true);}});
-$("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value),model:$("sensor-new-model").value});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
+$("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-refresh").addEventListener("click",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
 $("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled:$("sensor-enabled").checked});await refreshSensors();await openSensor(sensorSelected);toast("Изменения сохранены");}catch(e){toast(e.message,true);}});
 $("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-config-form").addEventListener("submit",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
-$("sensor-ota-form").addEventListener("submit",async e=>{e.preventDefault();if(!$("sensor-firmware").value)return;try{await api("/api/sensors/devices/"+sensorSelected+"/ota?firmware_id="+encodeURIComponent($("sensor-firmware").value),"PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление назначено");}catch(e){toast(e.message,true);}});
+$("sensor-ota-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const choice=$("sensor-firmware").value;
+  if(!choice)return;
+  const query=choice.startsWith("bundled:")?{bundled_version:choice.slice("bundled:".length)}:{firmware_id:choice};
+  try{await api("/api/sensors/devices/"+sensorSelected+"/ota?"+new URLSearchParams(query),"PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление назначено");}catch(e){toast(e.message,true);}
+});
 $("sensor-ota-cancel").addEventListener("click",async()=>{try{await api("/api/sensors/devices/"+sensorSelected+"/ota","PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление отменено");}catch(e){toast(e.message,true);}});
 $("sensor-upload-form").addEventListener("submit",async e=>{e.preventDefault();const finish=beginRequest("/api/sensors/firmware","POST");try{const form=new FormData();form.append("file",$("sensor-image").files[0]);const r=await fetch("/api/sensors/firmware",{method:"POST",credentials:"same-origin",body:form});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Не удалось загрузить образ");}await openSensor(sensorSelected);toast("Прошивка загружена");}catch(e){toast(e.message,true);}finally{finish();}});
 $("sensor-mqtt-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/mqtt","PUT",{enabled:$("sensor-mqtt-enabled").checked,host:$("sensor-mqtt-host").value.trim(),port:Number($("sensor-mqtt-port").value),tls:$("sensor-mqtt-tls").checked,username:$("sensor-mqtt-user").value,password:$("sensor-mqtt-pass").value||null,discovery_prefix:$("sensor-mqtt-prefix").value.trim()});$("sensor-mqtt-pass").value="";await refreshSensors();toast("Настройки MQTT сохранены");}catch(e){toast(e.message,true);}});

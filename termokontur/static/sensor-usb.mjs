@@ -1,11 +1,17 @@
 /* Physical transport is isolated for browser tests. No Wi-Fi secrets are logged. */
 export class SensorSerial {
-  constructor(port, timeout=12000) {this.port=port;this.timeout=timeout;this.buffer="";this.pending=new Map();this.closed=false;}
+  constructor(port, timeout=12000, onLine=null) {this.port=port;this.timeout=timeout;this.onLine=onLine;this.buffer="";this.pending=new Map();this.closed=false;}
   async open() {
     await this.port.open({baudRate:115200});
-    await this.port.setSignals({dataTerminalReady:false,requestToSend:false});
-    this.reader=this.port.readable.getReader();
-    this.reading=this.readLoop();
+    this.opened=true;
+    try {
+      await this.port.setSignals({dataTerminalReady:false,requestToSend:false});
+      this.reader=this.port.readable.getReader();
+      this.reading=this.readLoop();
+    } catch(error) {
+      await this.close();
+      throw error;
+    }
   }
   async readLoop() {
     const decoder=new TextDecoder();
@@ -16,9 +22,10 @@ export class SensorSerial {
         if(this.buffer.length>32768)this.buffer=this.buffer.slice(-16384);
         let end;
         while((end=this.buffer.indexOf("\n"))>=0) {
-          const line=this.buffer.slice(0,end).trim();this.buffer=this.buffer.slice(end+1);
-          if(!line.startsWith("TKRPC "))continue;
-          try {const reply=JSON.parse(line.slice(6));const pending=this.pending.get(reply.id);if(!pending)continue;
+          const line=this.buffer.slice(0,end).trimEnd();this.buffer=this.buffer.slice(end+1);
+          const frame=line.trimStart();
+          if(!frame.startsWith("TKRPC ")){this.onLine?.(line);continue;}
+          try {const reply=JSON.parse(frame.slice(6));const pending=this.pending.get(reply.id);if(!pending)continue;
             this.pending.delete(reply.id);clearTimeout(pending.timer);
             if(reply.error)pending.reject(Error(reply.error));else pending.resolve(reply);
           }catch{/* Ignore unrelated firmware logs. */}
@@ -31,20 +38,21 @@ export class SensorSerial {
   async request(cmd,data={}) {
     if(this.closed||this.failure)throw this.failure||Error("USB-соединение закрыто");
     const id=crypto.randomUUID();
+    const writer=this.port.writable.getWriter();
     const response=new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{this.pending.delete(id);reject(Error("Нет ответа датчика. Проверьте порт, режим настройки и версию прошивки — нужна 0.1.4 или новее."));},this.timeout);
       this.pending.set(id,{resolve,reject,timer});
     });
-    const writer=this.port.writable.getWriter();
-    try {await writer.write(new TextEncoder().encode("TKRPC "+JSON.stringify({...data,id,cmd})+"\n"));}
-    catch(error){this.failAll(error);}
-    finally {writer.releaseLock();}
-    return response;
+    const writing=writer.write(new TextEncoder().encode("TKRPC "+JSON.stringify({...data,id,cmd})+"\n"))
+      .catch(error=>this.failAll(error)).finally(()=>writer.releaseLock());
+    const [reply]=await Promise.all([response,writing]);
+    return reply;
   }
   async close() {
+    if(this.closed)return;
     this.closed=true;this.failAll(Error("USB-соединение закрыто"));
     try{await this.reader?.cancel();await this.reading;}catch{}
-    try{await this.port.close();}catch{}
+    try{if(this.opened)await this.port.close();}catch{}
   }
 }
 

@@ -63,7 +63,12 @@ def _add_sensor_model(conn: sqlite3.Connection, _: str) -> None:
     _add_columns(conn, "sensor_devices", {"model": "TEXT NOT NULL DEFAULT 'c3-sht40-v1'"})
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model)
+def _retire_unsupported_sensors(conn: sqlite3.Connection, _: str) -> None:
+    # Keep device IDs and their history for reports and archived cards.
+    conn.execute("UPDATE sensor_devices SET enabled=0 WHERE model<>'c3-sht40-v1'")
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

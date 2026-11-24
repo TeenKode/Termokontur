@@ -175,15 +175,29 @@
       <section id="view-sensors" class="view" hidden>
         <div class="heading"><div><h1>Автономные датчики</h1><p>По умолчанию: измерения каждые 30 минут, передача раз в сутки.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
         <p id="sensor-state" role="status" aria-live="polite"></p>
-        <details class="panel"><summary>Комплект USB-прошивки</summary><p id="sensor-installer-status">Загружаем сведения о комплекте…</p><p>Загрузите ZIP версии 0.1.4 или новее. Один комплект подходит для всех новых плат.</p><form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form></details>
+        <div class="panel sensor-firmware-panel">
+          <div class="sensor-firmware-heading">
+            <h2>Прошивки</h2><a class="btn secondary" href="/sensors/firmware-debug">Отладка прошивки</a>
+          </div>
+          <p id="sensor-bundled-status" role="status">Проверяем наличие прошивок…</p>
+          <ul id="sensor-firmware-downloads" hidden>
+            <li><a id="sensor-c3-ota-file" class="btn secondary" download>ESP32-C3 · образ для OTA (.bin)</a></li>
+            <li><a id="sensor-c3-factory-file" class="btn secondary" download>ESP32-C3 · полный образ для USB (.bin)</a></li>
+          </ul>
+          <details>
+            <summary>Загрузить свой комплект USB для ESP32-C3</summary>
+            <p id="sensor-installer-status"></p>
+            <form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form>
+          </details>
+        </div>
         <article class="panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="sensor-detail" class="panel" hidden>
           <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
           <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Измерения без точной даты есть только в таблице.</p></div>
-          <details><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
-          <details><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
+          <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
+          <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
           <details open><summary>Последние измерения</summary><div class="table-scroll"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
         </div>
@@ -795,11 +809,12 @@
     </div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик</h2><p>Код для одной платы. Действует 7 дней, используется один раз.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Модель платы<select id="sensor-new-model"><option value="c3-sht40-v1">ESP32-C3 SuperMini</option><option value="esp01-sht40-v1">ESP-01S · Flash 1 МБ (экспериментально)</option></select></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
+<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик ESP32-C3</h2><p>Код для одной платы. Действует 7 дней, используется один раз.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
 <dialog id="sensor-code-dialog"><h2>Подключение датчика</h2><p id="sensor-code-help">Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
 <dialog id="sensor-usb-dialog" class="sensor-usb-dialog"><form id="sensor-usb-form" class="dialog-form">
 <h2>Прошивка и подключение по USB</h2><p>Укажите параметры и подключите плату. Доступ будет выдан автоматически.</p>
 <p id="sensor-usb-support" class="hint"></p>
+<label id="usb-firmware-choice" hidden>Прошивка ESP32-C3<select id="usb-firmware"></select></label>
 <div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
 <label>Тип датчика<select id="usb-type"><option value="sht4x">SHT40 / SHT41 / SHT45</option><option value="sht3x">SHT30 / SHT31 / SHT35</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20</option></select></label>
 <label>Wi-Fi 2,4 ГГц<input id="usb-ssid" maxlength="32" required autocomplete="off"></label><label>Пароль Wi-Fi<input id="usb-wifi-password" type="password" maxlength="63" autocomplete="new-password"></label>

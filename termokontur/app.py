@@ -8,11 +8,11 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, db, maintenance, sensor_mqtt, sensor_onboarding, sensors, settings
+from . import __version__, auth, db, maintenance, sensor_firmware, sensor_mqtt, sensor_onboarding, sensors, settings
 from .web import access, max_api, operations, reporting, rooms
 
 ROOT = Path(__file__).resolve().parent
@@ -22,7 +22,8 @@ logger = logging.getLogger("termokontur.maintenance")
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
     b"".join((ROOT / "static" / name).read_bytes() for name in (
-        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs",
+        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+        "sensor-usb.mjs", "firmware-debug.mjs",
         "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
     ))
 ).hexdigest()[:16]
@@ -50,14 +51,18 @@ async def scheduled_maintenance() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await asyncio.to_thread(bootstrap)
+    retry_firmware = os.getenv("TERMOKONTUR_FETCH_FIRMWARE") == "1" and not await sensor_firmware.fetch_current()
     async with asyncio.TaskGroup() as tasks:
         maintenance_task = tasks.create_task(scheduled_maintenance())
         mqtt_task = tasks.create_task(sensor_mqtt.worker())
+        firmware_task = tasks.create_task(sensor_firmware.retry_fetch()) if retry_firmware else None
         try:
             yield
         finally:
             maintenance_task.cancel()
             mqtt_task.cancel()
+            if firmware_task is not None:
+                firmware_task.cancel()
 
 
 async def security_headers(request: Request, call_next):
@@ -76,12 +81,20 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-def index():
+def html_page(path: Path) -> HTMLResponse:
     # Never cache the HTML shell: each request must fetch the correct assets.
-    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    html = path.read_text(encoding="utf-8")
     html = html.replace("__ASSET_FINGERPRINT__", _ASSET_FINGERPRINT)
     html = html.replace("__APP_VERSION__", __version__)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+def index():
+    return html_page(ROOT / "static" / "index.html")
+
+
+def firmware_debug():
+    return html_page(ROOT / "firmware-debug.html")
 
 
 def health():
@@ -96,6 +109,8 @@ def create_app() -> FastAPI:
     application.state.failed_logins = {}
     application.middleware("http")(security_headers)
     application.add_api_route("/", index, methods=["GET"])
+    application.add_api_route("/sensors/firmware-debug", firmware_debug, methods=["GET"],
+                              dependencies=[Depends(access.require_admin)])
     application.add_api_route("/health", health, methods=["GET"])
     application.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     application.include_router(access.router)

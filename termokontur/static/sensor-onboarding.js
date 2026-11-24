@@ -1,14 +1,34 @@
 "use strict";
-let usbInstaller=null,usbDefaults=null,usbBusy=false,usbExpectedHardware=null;
+let usbInstallers=[],usbDefaults=null,usbBusy=false,usbExpectedHardware=null;
 function usbServerBootstrapVersion(version){const m=/^(\d+)\.(\d+)\.(\d+)$/.exec(version||"");return Boolean(m&&(Number(m[1])>0||Number(m[2])>1||(Number(m[2])===1&&Number(m[3])>=5)));}
 const usbSupported=()=>Boolean(window.isSecureContext&&navigator.serial);
 const usbStatus=text=>{$("usb-status").textContent=text;};
 function usbClearSecrets(){for(const id of ["usb-wifi-password","usb-setup-password","usb-setup-confirm"])$(id).value="";}
-function usbSetBusy(value){usbBusy=value;for(const field of $("sensor-usb-form").querySelectorAll("input,select,textarea"))field.disabled=value||(["usb-setup-password","usb-setup-confirm"].includes(field.id)&&$("usb-setup-random").checked);for(const id of ["usb-flash","usb-configure","usb-close"])$(id).disabled=value||(!usbSupported()&&id!=="usb-close")||(id==="usb-flash"&&!usbInstaller);}
+function usbSetBusy(value){usbBusy=value;for(const field of $("sensor-usb-form").querySelectorAll("input,select,textarea"))field.disabled=value||(["usb-setup-password","usb-setup-confirm"].includes(field.id)&&$("usb-setup-random").checked);for(const id of ["usb-flash","usb-configure","usb-close"])$(id).disabled=value||(!usbSupported()&&id!=="usb-close")||(id==="usb-flash"&&!usbInstallers.length);}
 async function refreshInstaller(){
-  usbInstaller=await api("/api/sensors/installer");
-  if(usbInstaller&&!usbServerBootstrapVersion(usbInstaller.version))usbInstaller=null;
-  $("sensor-installer-status").textContent=usbInstaller?"Доступна версия "+usbInstaller.version+" · "+Math.round(usbInstaller.size/1024)+" КиБ":"Загрузите ZIP прошивки версии 0.1.5 или новее.";
+  const [bundle, uploaded]=await Promise.all([api(sensorFirmwareBase),api("/api/sensors/installer")]);
+  const manual=uploaded&&usbServerBootstrapVersion(uploaded.version)?uploaded:null;
+  $("sensor-bundled-status").textContent=bundle?"Версия "+bundle.version+" из комплекта панели.":"Комплект текущей версии пока недоступен.";
+  $("sensor-firmware-downloads").hidden=!bundle;
+  $("sensor-installer-status").textContent=manual?"Загружена версия "+manual.version+".":"Загрузите ZIP прошивки версии 0.1.5 или новее.";
+  const select=$("usb-firmware"),previous=select.value;
+  select.replaceChildren();
+  usbInstallers=[];
+  if(bundle){
+    const base=sensorFirmwareBase+"/"+bundle.version;
+    $("sensor-c3-ota-file").href=base+"/esp32-c3.bin";
+    $("sensor-c3-factory-file").href=base+"/esp32-c3-factory.bin";
+    const url=$("sensor-c3-factory-file").getAttribute("href");
+    usbInstallers.push({...bundle.factory,url});
+    option(select,url,bundle.version+" · из комплекта панели");
+  }
+  if(manual){
+    const url="/api/sensors/installer/"+manual.id+"/factory.bin";
+    usbInstallers.push({...manual,url});
+    option(select,url,manual.version+" · загружена вручную");
+  }
+  if($("sensor-usb-dialog").open&&usbInstallers.some(item=>item.url===previous))select.value=previous;
+  $("usb-firmware-choice").hidden=!usbInstallers.length;
 }
 function renderSensorClaims(claims){
   const target=$("sensor-claims");if(!target)return;target.replaceChildren();$("sensor-claims-panel").hidden=!claims.length;
@@ -57,16 +77,17 @@ async function usbRun(flash){
     const data=usbSettings();if(!data)return;
     if(!usbSupported())throw Error("USB недоступен. Откройте панель по HTTPS в Chrome или Edge на компьютере.");
     if(flash&&!$("usb-new-board").checked)throw Error("Подтвердите удаление данных платы или нажмите «Настроить без прошивки».");
-    if(flash&&!usbInstaller)throw Error("Сначала загрузите комплект USB-прошивки");
+    const installer=usbInstallers.find(item=>item.url===$("usb-firmware").value);
+    if(flash&&!installer)throw Error("Дождитесь загрузки комплекта панели или загрузите свой комплект USB");
     // Request permission while the click still has browser user activation.
     usbSetBusy(true);
     const port=await navigator.serial.requestPort({filters:[{usbVendorId:0x303a}]});
     const usb=await import("./sensor-usb.mjs");
     if(flash){
       usbStatus("Проверяем комплект и записываем прошивку. Не отключайте USB.");$("usb-progress").hidden=false;$("usb-progress").value=0;
-      const response=await fetch("/api/sensors/installer/"+usbInstaller.id+"/factory.bin",{credentials:"same-origin"});
+      const response=await fetch(installer.url,{credentials:"same-origin"});
       if(!response.ok)throw Error("Не удалось получить комплект с сервера");
-      usbExpectedHardware=await usb.flashFactory(port,await response.arrayBuffer(),usbInstaller,{
+      usbExpectedHardware=await usb.flashFactory(port,await response.arrayBuffer(),installer,{
         checkBoard:hardware=>api("/api/sensors/usb/check/"+hardware),progress:value=>{$("usb-progress").value=value;},
         log:line=>{$("usb-log").hidden=false;$("usb-log").textContent=($("usb-log").textContent+String(line)+"\n").slice(-4000);}});
       flashed=true;usbStatus("Прошивка записана. Ожидаем запуска датчика…");
@@ -104,7 +125,10 @@ $("sensor-installer-form").addEventListener("submit",async e=>{
   e.preventDefault();const button=e.target.querySelector("button");button.disabled=true;
   try{const data=new FormData();data.append("file",$("sensor-installer-file").files[0]);const r=await fetch("/api/sensors/installer",{method:"POST",credentials:"same-origin",body:data});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Комплект не принят");}await refreshInstaller();toast("Комплект USB-прошивки загружен");}catch(error){toast(error.message,true);}finally{button.disabled=false;}
 });
-setInterval(()=>{if(!$("view-sensors").hidden&&!usbBusy&&!$("sensor-usb-dialog").open&&!$("sensor-claims-panel").contains(document.activeElement))api("/api/sensors/claims").then(renderSensorClaims).catch(()=>{});},20000);
-refreshInstaller().catch(()=>{});
+setInterval(()=>{
+  if($("view-sensors").hidden||usbBusy||$("sensor-usb-dialog").open)return;
+  if(!$("sensor-claims-panel").contains(document.activeElement))api("/api/sensors/claims").then(renderSensorClaims).catch(()=>{});
+  if($("sensor-firmware-downloads").hidden)refreshInstaller().catch(()=>{});
+},20000);
 
 $("usb-setup-random").addEventListener("change",()=>{for(const id of ["usb-setup-password","usb-setup-confirm"])$(id).disabled=$("usb-setup-random").checked;});

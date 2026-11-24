@@ -566,6 +566,21 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 
 /* Autonomous sensor management reuses the existing light/dark panel palette. */
 @media(max-width:700px){.navigation{overflow-x:auto}.navigation .nav-button{flex:0 0 auto;width:auto}}
+.sensor-firmware-panel{margin-bottom:16px;padding:20px}
+.sensor-firmware-panel p{margin:8px 0}
+.sensor-firmware-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.sensor-firmware-heading a{text-decoration:none}
+#sensor-firmware-downloads{display:flex;flex-wrap:wrap;gap:8px;list-style:none;margin:12px 0 16px;padding:0}
+#sensor-firmware-downloads a{text-decoration:none;white-space:normal}
+.firmware-debug-page{width:min(960px,calc(100% - 32px));margin:24px auto 48px}
+.firmware-debug-page h1{margin-top:8px}
+.firmware-debug-panel{padding:20px;margin-bottom:16px}
+.firmware-debug-panel p{margin:10px 0}
+.firmware-debug-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px}
+.firmware-debug-values dt{font-size:13px;color:var(--muted,#60718a)}
+.firmware-debug-values dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
+#debug-log{font:13px/1.55 ui-monospace,monospace;height:min(42vh,360px);padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
+html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
 .sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
 .sensor-form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:16px 0}

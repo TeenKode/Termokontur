@@ -7,7 +7,6 @@ import json
 import re
 import secrets
 import sqlite3
-import struct
 import time
 from datetime import datetime, timezone
 from typing import Literal
@@ -16,13 +15,11 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import db, sensor_monitor
+from . import __version__, db, sensor_firmware, sensor_monitor
 
 MODEL = "c3-sht40-v1"
-ESP01_MODEL = "esp01-sht40-v1"
-SensorModel = Literal["c3-sht40-v1", "esp01-sht40-v1"]
+SensorModel = Literal["c3-sht40-v1"]
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
-MAX_FIRMWARE = 0x1C0000
 
 
 class Strict(BaseModel):
@@ -71,11 +68,6 @@ class Enrollment(Strict):
     sensor_type: SensorType = "sht4x"
 
 
-def valid_battery_mv(mv: int) -> bool:
-    """0 is an explicit 'not measurable' value for ESP-01 without an ADC."""
-    return mv == 0 or 2000 <= mv <= 5000
-
-
 class Record(Strict):
     seq: int = Field(ge=1, le=9007199254740991)
     boot_id: str = Field(pattern=r"^[a-f0-9]{16}$")
@@ -84,14 +76,12 @@ class Record(Strict):
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
     temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
-    battery_mv: int = Field(ge=0, le=5000)
+    battery_mv: int = Field(ge=2000, le=5000)
     interval_s: int = Field(ge=60, le=86400)
     error: Literal["", "sensor_crc", "sensor_io"] = ""
 
     @model_validator(mode="after")
     def coherent(self):
-        if not valid_battery_mv(self.battery_mv):
-            raise ValueError("Недопустимое напряжение аккумулятора")
         if (self.time_quality == "unknown") != (self.measured_at is None):
             raise ValueError("Качество времени не соответствует временной метке")
         if not self.error and self.temperature is None:
@@ -109,7 +99,7 @@ class Sync(Strict):
     next_seq: int = Field(ge=1, le=9007199254740991)
     lost: int = Field(ge=0, le=9007199254740991)
     rssi: int = Field(ge=-127, le=0)
-    battery_mv: int = Field(ge=0, le=5000)
+    battery_mv: int = Field(ge=2000, le=5000)
     config_version: int = Field(ge=0)
     boots: int = Field(ge=0)
     ota_failures: int = Field(default=0, ge=0)
@@ -121,11 +111,6 @@ class Sync(Strict):
 
     @model_validator(mode="after")
     def sequence(self):
-        voltages = [self.battery_mv, *(record.battery_mv for record in self.records)]
-        if self.model == ESP01_MODEL and (self.sensor_type != "sht4x" or any(voltages)):
-            raise ValueError("ESP-01S поддерживает SHT4x и передаёт неизвестное напряжение")
-        if self.model == MODEL and not all(2000 <= mv <= 5000 for mv in voltages):
-            raise ValueError("Недопустимое напряжение аккумулятора")
         if self.device_ack is None:
             if self.replay or self.device_lost_base is not None:
                 raise ValueError("Не указан подтверждённый номер журнала")
@@ -163,12 +148,19 @@ def get_device(conn, device):
     return dict(row)
 
 
+def get_supported_device(conn, device):
+    d = get_device(conn, device)
+    if d["model"] != MODEL:
+        raise HTTPException(410, "Поддержка модели завершена. История показаний доступна в карточке.")
+    return d
+
+
 def authenticate(conn, device, authorization):
     d = get_device(conn, device)
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if not d["token_hash"] or not hmac.compare_digest(d["token_hash"], digest(token)):
         raise HTTPException(401, "Неверный ключ датчика")
-    if not d["enabled"]:
+    if not d["enabled"] or d["model"] != MODEL:
         raise HTTPException(403, "Датчик отключён администратором")
     room = conn.execute("SELECT active FROM rooms WHERE id=?", (d["room_id"],)).fetchone()
     if not room or not room["active"]:
@@ -190,6 +182,8 @@ def public_device(d):
     for key in ("token_hash", "enrollment_hash", "restore_pending"):
         d.pop(key, None)
     d["config"] = json.loads(d["config"])
+    if d["model"] != MODEL:
+        return {**d, "enabled": 0, "next_sync_at": None, "status": "retired"}
     scheduled, deadline = sensor_monitor.upload_times(d)
     d["next_sync_at"] = scheduled if d["enabled"] and d["config"]["enabled"] and d["hardware_id"] else None
     d["status"] = ("disabled" if not d["enabled"] or not d["config"]["enabled"]
@@ -224,7 +218,7 @@ def router(require_admin):
     @r.patch("/devices/{device}", dependencies=admin)
     def update_device(device: str, payload: DevicePatch):
         with db.connect() as conn:
-            get_device(conn, device)
+            get_supported_device(conn, device)
             check_room(conn, payload.room_id)
             conn.execute("UPDATE sensor_devices SET name=?,room_id=?,enabled=? WHERE id=?",
                          (payload.name.strip(), payload.room_id, payload.enabled, device))
@@ -235,7 +229,7 @@ def router(require_admin):
     def rekey(device: str):
         code = secrets.token_urlsafe(32)
         with db.connect() as conn:
-            get_device(conn, device)
+            get_supported_device(conn, device)
             identity = conn.execute("SELECT fingerprint FROM sensor_identities WHERE device_id=?", (device,)).fetchone()
             if identity:
                 conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
@@ -252,9 +246,7 @@ def router(require_admin):
     def configure(device: str, payload: Config):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            d = get_device(conn, device)
-            if d["model"] == ESP01_MODEL and payload.measure_s > 3600:
-                raise HTTPException(422, "Интервал измерений ESP-01S не должен превышать одного часа")
+            d = get_supported_device(conn, device)
             payload.version = json.loads(d["config"])["version"] + 1
             conn.execute("UPDATE sensor_devices SET config=? WHERE id=?", (payload.model_dump_json(), device))
             event(conn, device, "config", f"Ожидает доставки: версия {payload.version}")
@@ -264,12 +256,10 @@ def router(require_admin):
     def enroll(payload: Enrollment):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            d = get_device(conn, payload.device_id)
+            d = get_supported_device(conn, payload.device_id)
             if (not d["enabled"] or not d["enrollment_hash"] or d["enrollment_until"] < time.time()
                     or not hmac.compare_digest(d["enrollment_hash"], digest(payload.code))):
                 raise HTTPException(403, "Код недействителен; обратитесь к администратору")
-            if d["model"] != payload.model or (payload.model == ESP01_MODEL and payload.sensor_type != "sht4x"):
-                raise HTTPException(409, "Выберите код для этой модели датчика")
             if not conn.execute("SELECT 1 FROM rooms WHERE id=? AND active=1", (d["room_id"],)).fetchone():
                 raise HTTPException(403, "Помещение отключено")
             if d["hardware_id"] and d["hardware_id"] != payload.hardware_id:
@@ -391,33 +381,70 @@ def router(require_admin):
         with db.connect() as conn:
             return [dict(x) for x in conn.execute("SELECT id,version,model,sha256,length(image) size,created_at FROM sensor_firmware ORDER BY id DESC")]
 
+    @r.get("/firmware/bundled", dependencies=admin)
+    def bundled_firmware():
+        bundle = sensor_firmware.current()
+        if bundle is None:
+            return None
+        return {
+            "version": bundle.factory.version,
+            "factory": {"sha256": bundle.factory.sha256, "size": len(bundle.factory.image)},
+            "esp32": {"sha256": bundle.esp32_sha256, "size": len(bundle.esp32)},
+        }
+
+    @r.get("/firmware/bundled/{version}/{target}.bin", dependencies=admin)
+    def bundled_image(version: str, target: Literal["esp32-c3", "esp32-c3-factory"]):
+        bundle = sensor_firmware.current()
+        if bundle is None or version != bundle.factory.version:
+            raise HTTPException(404, "Прошивка этой версии недоступна")
+        image = bundle.factory.image if target == "esp32-c3-factory" else bundle.esp32
+        return Response(image, media_type="application/octet-stream", headers={
+            "Content-Disposition": f'attachment; filename="termokontur-{target}-{version}.bin"',
+        })
+
     @r.post("/firmware", dependencies=admin)
     async def upload(file: UploadFile = File(...)):
-        image = await file.read(MAX_FIRMWARE + 1)
-        if len(image) < 256 or len(image) > MAX_FIRMWARE or image[0] != 0xE9:
-            raise HTTPException(422, "Неверный формат или размер прошивки")
-        if struct.unpack_from("<H", image, 12)[0] != 5 or struct.unpack_from("<I", image, 32)[0] != 0xABCD5432:
-            raise HTTPException(422, "Выберите прошивку для ESP32-C3")
-        version = image[48:80].split(b"\0", 1)[0].decode("ascii", errors="replace")
-        project = image[80:112].split(b"\0", 1)[0]
-        if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}", version) or project != b"termokontur-sensor":
-            raise HTTPException(422, "Прошивка не подходит: проверьте проект и версию")
+        image = await file.read(sensor_firmware.MAX_FIRMWARE + 1)
+        try:
+            version = sensor_firmware.app_version(image)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        sha = hashlib.sha256(image).hexdigest()
+        if version == __version__:
+            bundle = sensor_firmware.current()
+            if bundle and bundle.esp32_sha256 != sha:
+                raise HTTPException(409, "Этот номер уже использует прошивка из комплекта панели")
         with db.connect() as conn:
             try:
                 cur = conn.execute("INSERT INTO sensor_firmware(version,model,sha256,image,created_at) VALUES(?,?,?,?,?)",
-                                   (version, MODEL, hashlib.sha256(image).hexdigest(), image, db.utc_now()))
+                                   (version, MODEL, sha, image, db.utc_now()))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Эта версия уже загружена") from None
         return {"id": cur.lastrowid, "version": version}
 
     @r.put("/devices/{device}/ota", dependencies=admin)
-    def target(device: str, firmware_id: int | None = Query(default=None, ge=1)):
+    def target(device: str, firmware_id: int | None = Query(default=None, ge=1),
+               bundled_version: str | None = Query(default=None, max_length=11)):
+        if firmware_id is not None and bundled_version is not None:
+            raise HTTPException(422, "Выберите один образ прошивки")
         with db.connect() as conn:
-            d = get_device(conn, device)
-            if firmware_id is not None:
-                if d["model"] == ESP01_MODEL:
-                    raise HTTPException(422, "OTA ESP-01S 1 МБ пока не поддерживается. Используйте USB–UART.")
-                fw = conn.execute("SELECT version,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
+            d = get_supported_device(conn, device)
+            if firmware_id is not None or bundled_version is not None:
+                if bundled_version is not None:
+                    bundle = sensor_firmware.current()
+                    if bundle is None or bundle.factory.version != bundled_version:
+                        raise HTTPException(404, "Прошивка этой версии недоступна")
+                    conn.execute("""
+                        INSERT INTO sensor_firmware(version,model,sha256,image,created_at) VALUES(?,?,?,?,?)
+                        ON CONFLICT(version) DO NOTHING
+                    """, (bundled_version, MODEL, bundle.esp32_sha256, bundle.esp32, db.utc_now()))
+                    fw = conn.execute("SELECT id,version,model,sha256 FROM sensor_firmware WHERE version=?",
+                                      (bundled_version,)).fetchone()
+                    if fw["sha256"] != bundle.esp32_sha256:
+                        raise HTTPException(409, "Загружен другой образ с тем же номером версии")
+                    firmware_id = fw["id"]
+                else:
+                    fw = conn.execute("SELECT version,model FROM sensor_firmware WHERE id=?", (firmware_id,)).fetchone()
                 if not fw or fw["model"] != d["model"] or (d["firmware"] and version_tuple(fw["version"]) <= version_tuple(d["firmware"])):
                     raise HTTPException(422, "Выберите более новую версию")
             conn.execute("UPDATE sensor_devices SET target_firmware=?,ota_failures=0,ota_generation=ota_generation+1 WHERE id=?", (firmware_id, device))

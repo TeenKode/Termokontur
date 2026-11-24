@@ -28,7 +28,8 @@ SIMULATED_USB=r'''(() => {
    if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false});
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
    else if(req.cmd==='configure'){window.savedUSB=req;response.saved=true;}
-   const bytes=new TextEncoder().encode('startup log\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
+   else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
+   const bytes=new TextEncoder().encode('startup log\nSETUP password: masked-test-password\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
  window.radioConnect=async()=>{
@@ -46,6 +47,11 @@ SIMULATED_USB=r'''(() => {
 spec=importlib.util.spec_from_file_location('onboarding_fixture',ROOT/'tests/test_sensor_onboarding.py')
 fixtures=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixtures)
 with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
+    version = fixtures.__version__
+    asset = Path(tmp) / 'firmware' / f'{version}.zip'
+    asset.parent.mkdir()
+    supplied_bundle = os.getenv('TEST_FIRMWARE_BUNDLE')
+    asset.write_bytes(Path(supplied_bundle).read_bytes() if supplied_bundle else fixtures.kit(version))
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     env={**os.environ,'TERMOKONTUR_DB':str(Path(tmp)/'test.sqlite3'),
          'TERMOKONTUR_SECRET':'usb-browser-test-secret-at-least-32-characters',
@@ -70,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert api.post('/api/login',json={'password':'browser-test-password'}).status_code==200
                 room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 101'}).json()
                 assert api.post('/api/sensors/installer',files={'file':('demo.zip',fixtures.kit('0.1.5'))}).status_code==200
-                browser=pw.chromium.launch(executable_path=shutil.which('chromium'),headless=True,args=['--no-sandbox'])
+                browser=pw.chromium.launch(executable_path=os.getenv('CHROMIUM_PATH') or shutil.which('chromium'),headless=True,args=['--no-sandbox'])
                 page=browser.new_page(ignore_https_errors=True,viewport={'width':1440,'height':1100},locale='ru-RU')
                 errors=[];requests=[]
                 page.on('pageerror',lambda error:errors.append(str(error)))
@@ -87,9 +93,16 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.route('**/static/sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=wrapper))
                 page.goto(base);page.fill('#password','browser-test-password');page.click('#login-form button[type="submit"]')
                 page.wait_for_selector('#app-root',state='visible');page.click('[data-tab="sensors"]')
+                firmware_url = f'/api/sensors/firmware/bundled/{version}'
+                expect(page.locator('#sensor-bundled-status')).to_contain_text(version)
+                with page.expect_download() as download:
+                    page.click('#sensor-c3-ota-file')
+                assert download.value.suggested_filename == f'termokontur-esp32-c3-{version}.bin'
                 # Import the actual vendored SDK under the application's CSP.
                 assert page.evaluate("async()=>typeof (await import('/static/vendor/esptool.bundle.js')).ESPLoader")=='function'
                 page.click('#sensor-usb-open');page.wait_for_selector('#sensor-usb-dialog',state='visible')
+                expect(page.locator('#usb-firmware')).to_have_value(f'{firmware_url}/esp32-c3-factory.bin')
+                expect(page.locator('#usb-firmware option')).to_have_count(2)
                 page.fill('#usb-name','Демо: USB-датчик');page.select_option('#usb-type','ds18b20');page.fill('#usb-ssid','School-IoT-2.4G');page.fill('#usb-wifi-password','SchoolPassDemo2026')
                 page.locator('#sensor-usb-form details summary').click()
                 page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
@@ -117,7 +130,10 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/10-usb-setup.jpg'),type='jpeg',quality=85)
                 page.evaluate('window.originalDateNow=Date.now;Date.now=()=>window.originalDateNow()+315360000000')
-                page.click('#usb-flash');expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
+                with page.expect_response(base + firmware_url + '/esp32-c3-factory.bin') as image:
+                    page.click('#usb-flash')
+                assert image.value.ok
+                expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
                 assert page.evaluate('window.simFlashed') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
@@ -135,6 +151,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
                 page.click('#usb-close');page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
+                page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
+                page.locator('#sensor-detail summary').filter(has_text='Обновление прошивки').click()
+                page.select_option('#sensor-firmware', f'bundled:{version}')
+                with page.expect_response(lambda r: r.url.endswith(f'/ota?bundled_version={version}')) as ota:
+                    page.get_by_role('button', name='Назначить обновление').click()
+                assert ota.value.ok
                 # A request from another self-keyed device appears as pending, not authorized.
                 private,ident=fixtures.identity();ident['hardware_id']='1123456789ab'
                 signed=fixtures.proof(api,private,ident)
@@ -147,8 +169,25 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     expect(page.locator('#sensor-usb-dialog')).to_be_visible();assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                     assert page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollWidth<=el.clientWidth+1')
                     page.screenshot(path=f'/tmp/termokontur-usb-{width}.png');page.click('#usb-close')
+                page.get_by_role('link', name='Отладка прошивки').click()
+                expect(page.get_by_role('heading', name='Отладка прошивки')).to_be_visible()
+                page.click('#debug-connect')
+                expect(page.locator('#debug-hardware')).to_have_text('0123456789ab')
+                expect(page.locator('#debug-result')).to_contain_text(version)
+                page.click('#debug-measure')
+                expect(page.locator('#debug-temperature')).to_have_text('21,5 °C')
+                expect(page.locator('#debug-humidity')).to_have_text('44,2 %')
+                expect(page.locator('#debug-battery')).to_have_text('3,95 В')
+                expect(page.locator('#debug-log')).to_contain_text('SETUP password: [скрыт]')
+                expect(page.locator('#debug-log')).not_to_contain_text('masked-test-password')
+                with page.expect_download() as debug_log:
+                    page.click('#debug-save')
+                assert 'Пробный замер' in debug_log.value.path().read_text(encoding='utf-8')
+                page.click('#debug-disconnect')
+                expect(page.locator('#debug-connect')).to_be_enabled()
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                 assert not errors,errors
                 browser.close()
-            print('Browser/API passed: simulated ROM flash, real key proof, automatic USB approval, private USB settings, signed radio auth+ingest, pending fallback, desktop/mobile and local CSP bundle. Physical USB not tested.')
+            print('Browser/API passed: bundled firmware, simulated USB flash and diagnostics, authorization, signed ingest, and desktop/mobile layout. Physical USB not tested.')
         finally:
             server.terminate();server.wait(timeout=10)

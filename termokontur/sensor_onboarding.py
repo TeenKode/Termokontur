@@ -2,16 +2,10 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import secrets
-import re
 import sqlite3
-import struct
 import time
-import zipfile
-import zlib
-from pathlib import PurePosixPath
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -20,10 +14,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Up
 from fastapi.responses import Response, JSONResponse
 from pydantic import Field, model_validator
 
-from . import db, sensors, tls
-
-MAX_KIT = 16 * 1024 * 1024
-MAX_FACTORY = 0x20000 + sensors.MAX_FIRMWARE
+from . import db, sensor_firmware, sensors, tls
 
 
 class Identity(sensors.Strict):
@@ -117,7 +108,7 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
     identity = conn.execute("SELECT * FROM sensor_identities WHERE fingerprint=?", (fp,)).fetchone()
     if not identity:
         raise HTTPException(404, "Заявка не найдена")
-    d = sensors.get_device(conn, identity['device_id']) if identity['device_id'] else None
+    d = sensors.get_supported_device(conn, identity['device_id']) if identity['device_id'] else None
     if d and d['room_id'] != room_id:
         raise HTTPException(409, "Смените помещение в карточке датчика")
     old = conn.execute("SELECT id,enabled FROM sensor_devices WHERE hardware_id=? AND id!=?", (identity['hardware_id'], d['id'] if d else '')).fetchone()
@@ -146,52 +137,6 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
                  (device, sensor_type or identity['sensor_type'], fp))
     sensors.event(conn, device, "approved", "Авторизован администратором по открытому ключу " + fp[:16])
     return {'device_id': device, 'fingerprint': fp, 'config': conf.model_dump(), 'status': 'approved'}
-
-
-def inspect_kit(data):
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            names = z.namelist()
-            if len(names) != len(set(names)) or any(PurePosixPath(n).is_absolute() or '..' in PurePosixPath(n).parts for n in names):
-                raise ValueError("ZIP повреждён: неверные пути или повторяющиеся файлы")
-            if z.getinfo('manifest.json').file_size > 65536 or z.getinfo('factory.bin').file_size > MAX_FACTORY:
-                raise ValueError("Файлы комплекта слишком большие")
-            manifest = json.loads(z.read('manifest.json'))
-            image = z.read('factory.bin')
-        entry = manifest['files']['factory.bin']
-        sha = hashlib.sha256(image).hexdigest()
-        if entry['sha256'] != sha or entry['size'] != len(image):
-            raise ValueError("Комплект повреждён: проверка factory.bin не пройдена")
-        if not 0x20100 <= len(image) <= MAX_FACTORY or image[0] != 0xe9 or struct.unpack_from('<H', image, 12)[0] != 5:
-            raise ValueError("Нужен заводской образ ESP32-C3")
-        app = image[0x20000:]
-        if app[0] != 0xe9 or struct.unpack_from('<H', app, 12)[0] != 5 or struct.unpack_from('<I', app, 32)[0] != 0xabcd5432:
-            raise ValueError("Неверное приложение ESP32-C3")
-        version = app[48:80].split(b'\0', 1)[0].decode('ascii')
-        if not re.fullmatch(r'\d{1,3}\.\d{1,3}\.\d{1,3}',version) or app[80:112].split(b'\0', 1)[0] != b'termokontur-sensor' or version != manifest['version']:
-            raise ValueError("Неверное имя приложения или версия")
-        if sensors.version_tuple(version) < (0, 1, 4):
-            raise ValueError("Нужна прошивка 0.1.4 или новее с USB-настройкой")
-        if image[0x9000:0xf000] != b'\xff' * 0x6000:
-            raise ValueError("Комплект содержит чужие настройки. Загрузите чистую сборку.")
-        actual = {}
-        for pos in range(0x8000, 0x9000-31, 32):
-            magic, kind, subtype, offset, size, name, flags = struct.unpack_from('<HBBII16sI', image, pos)
-            if magic != 0x50aa:
-                break
-            actual[name.split(b'\0', 1)[0].decode()] = (kind, subtype, offset, size)
-        if actual != {'nvs': (1,2,0x9000,0x6000), 'otadata': (1,0,0xf000,0x2000),
-                       'phy_init': (1,1,0x11000,0x1000), 'ota_0': (0,16,0x20000,0x1c0000),
-                       'ota_1': (0,17,0x1e0000,0x1c0000), 'datalog': (1,64,0x3a0000,0x60000)}:
-            raise ValueError("Неподдерживаемая разметка памяти")
-        commit = manifest['source_commit']
-        if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):
-            raise ValueError("В комплекте неверно указан исходный коммит")
-        return version, sha, commit, image
-    except (zipfile.BadZipFile, RuntimeError, zlib.error):
-        raise HTTPException(422, "Неверный комплект: ZIP повреждён, зашифрован или использует неподдерживаемое сжатие") from None
-    except (ValueError, KeyError, TypeError, IndexError, struct.error, UnicodeError) as exc:
-        raise HTTPException(422, "Неверный комплект: " + str(exc)) from None
 
 
 def router(require_admin):
@@ -241,7 +186,7 @@ def router(require_admin):
             status = identity['state']
             if status != 'approved':
                 return {'status':status, 'fingerprint':fp}
-            d = sensors.get_device(conn, identity['device_id'])
+            d = sensors.get_supported_device(conn, identity['device_id'])
             if not d['enabled'] or not conn.execute('SELECT 1 FROM rooms WHERE id=? AND active=1',(d['room_id'],)).fetchone():
                 raise HTTPException(403, 'Датчик или помещение отключены')
             if payload.sensor_type != d['sensor_type']:
@@ -291,19 +236,23 @@ def router(require_admin):
 
     @r.post('/installer', dependencies=admin)
     async def upload(file: UploadFile = File(...)):
-        data = await file.read(MAX_KIT+1)
-        if len(data)>MAX_KIT:
+        data = await file.read(sensor_firmware.MAX_KIT + 1)
+        if len(data) > sensor_firmware.MAX_KIT:
             raise HTTPException(413, 'Комплект превышает 16 МиБ')
-        version, sha, commit, image = inspect_kit(data)
+        try:
+            kit = sensor_firmware.read_kit(data)
+        except ValueError as exc:
+            raise HTTPException(422, 'Неверный комплект: ' + str(exc)) from None
         with db.connect() as conn:
-            old = conn.execute('SELECT id,sha256 FROM sensor_installers WHERE version=?', (version,)).fetchone()
+            conn.execute('BEGIN IMMEDIATE')
+            old = conn.execute('SELECT id,sha256 FROM sensor_installers WHERE version=?', (kit.version,)).fetchone()
             if old:
-                if old['sha256'] != sha:
+                if old['sha256'] != kit.sha256:
                     raise HTTPException(409, 'Эта версия уже загружена. Используйте комплект с новым номером версии.')
-                return {'id':old['id'], 'version':version}
+                return {'id': old['id'], 'version': kit.version}
             cur = conn.execute('INSERT INTO sensor_installers(version,sha256,source_commit,image,created_at) VALUES(?,?,?,?,?)',
-                               (version,sha,commit,image,db.utc_now()))
-        return {'id':cur.lastrowid, 'version':version}
+                               (kit.version, kit.sha256, kit.source_commit, kit.image, db.utc_now()))
+        return {'id': cur.lastrowid, 'version': kit.version}
 
     @r.get('/installer', dependencies=admin)
     def installer():

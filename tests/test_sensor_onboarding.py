@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import hashlib
 import io
@@ -7,10 +8,13 @@ import time
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from termokontur import db, sensor_onboarding as onboarding
+from termokontur import __version__, db, sensor_firmware, sensor_onboarding as onboarding
+
+BUNDLED = "/api/sensors/firmware/bundled"
 
 
 def identity():
@@ -80,6 +84,17 @@ def test_usb_approval_requires_admin_and_proof(client):
     assert client.get('/api/sensors/claims').status_code == 401
     assert client.get('/api/sensors/installer').status_code == 401
     assert client.get('/api/sensors/installer/1/factory.bin').status_code == 401
+    assert client.get(BUNDLED).status_code == 401
+    assert client.get(f"{BUNDLED}/{__version__}/esp32-c3.bin").status_code == 401
+    assert client.get("/sensors/firmware-debug").status_code == 401
+
+
+def test_firmware_debug_uses_panel_version(admin):
+    page = admin.get("/sensors/firmware-debug")
+    assert page.status_code == 200
+    assert f'id="debug-panel-version">{__version__}</strong>' in page.text
+    assert "/static/firmware-debug.mjs?v=" in page.text
+    assert page.headers["cache-control"] == "no-store"
 
 
 def test_signature_replay_metadata_substitution_and_expiry(admin):
@@ -173,6 +188,65 @@ def kit(version='0.1.4', mutate=None):
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
         z.writestr('factory.bin',image);z.writestr('manifest.json',json.dumps(manifest))
     return out.getvalue()
+
+
+def test_fetch_cache_and_download_current_firmware(admin, monkeypatch, tmp_path):
+    data = kit(__version__)
+    stale = kit("0.8.0")
+    asset = tmp_path / "firmware" / f"{__version__}.zip"
+    client_class = httpx.AsyncClient
+    replies = iter([httpx.Response(404), httpx.Response(200, content=stale), httpx.Response(200, content=data)])
+
+    def respond(request):
+        assert str(request.url) == sensor_firmware.RELEASE_URL
+        return next(replies)
+
+    def mocked_client(**kwargs):
+        return client_class(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
+    assert admin.get(BUNDLED).json() is None
+    for _ in range(2):
+        assert not asyncio.run(sensor_firmware.fetch_current())
+        assert not asset.exists()
+    assert asyncio.run(sensor_firmware.fetch_current())
+    assert asset.read_bytes() == data
+    assert asyncio.run(sensor_firmware.fetch_current())
+
+    bundle = sensor_firmware.read_release(data)
+    meta = admin.get(BUNDLED).json()
+    assert meta["version"] == __version__
+    assert meta["esp32"] == {"sha256": bundle.esp32_sha256, "size": len(bundle.esp32)}
+    for target, image in [("esp32-c3", bundle.esp32), ("esp32-c3-factory", bundle.factory.image)]:
+        downloaded = admin.get(f"{BUNDLED}/{__version__}/{target}.bin")
+        assert downloaded.content == image
+        assert f"termokontur-{target}-{__version__}.bin" in downloaded.headers["content-disposition"]
+    assert admin.get(f"{BUNDLED}/0.8.0/esp32-c3.bin").status_code == 404
+
+
+def test_assign_bundled_firmware_without_manual_upload(admin, tmp_path):
+    from test_sensors import batch, setup_sensor, sync
+
+    data = kit(__version__)
+    asset = tmp_path / "firmware" / f"{__version__}.zip"
+    asset.parent.mkdir()
+    asset.write_bytes(data)
+    device, _, headers, _ = setup_sensor(admin)
+    route = f'/api/sensors/devices/{device["device_id"]}'
+    assert admin.get("/api/sensors/firmware").json() == []
+    assert sync(admin, device, headers, batch()).json()["ota"] is None
+    assert admin.put(f"{route}/ota?bundled_version=0.8.0").status_code == 404
+    for _ in range(2):
+        reply = admin.put(f"{route}/ota?bundled_version={__version__}")
+        assert reply.status_code == 200, reply.text
+    offer = sync(admin, device, headers, batch()).json()["ota"]
+    bundle = sensor_firmware.read_release(data)
+    assert offer["version"] == __version__
+    assert offer["sha256"] == bundle.esp32_sha256
+    assert len(admin.get("/api/sensors/firmware").json()) == 1
+    # A pending OTA keeps its own copy if the panel later changes version.
+    asset.unlink()
+    assert admin.get(f'{route}/firmware/{offer["id"]}', headers=headers).content == bundle.esp32
 
 
 def test_installer_upload_integrity_version_and_authenticated_download(admin, client):
