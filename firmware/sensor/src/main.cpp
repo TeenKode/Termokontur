@@ -169,14 +169,13 @@ static int load_blob(const char *key, void *p, size_t n) {
 }
 static bool save_state() { return save_blob("state", &state, sizeof state); }
 static bool valid_config(const Config &c) {
-  return c.version && c.version <= 2147483647 && c.measure_s >= 60 &&
-         c.measure_s <= 86400 && c.send_s >= 600 && c.send_s <= 604800 &&
-         c.send_s >= c.measure_s && c.cool_s >= 300 && c.cool_s <= 86400 &&
-         c.wifi_budget_s >= 15 && c.wifi_budget_s <= 120 &&
-         c.cutoff_mv >= 3100 && c.cutoff_mv <= 3800 && c.wifi_min_mv >= 3300 &&
-         c.wifi_min_mv <= 4100 && c.ota_min_mv >= 3600 &&
-         c.ota_min_mv <= 4200 && c.cutoff_mv <= c.wifi_min_mv &&
-         c.wifi_min_mv <= c.ota_min_mv && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
+  return c.version && c.version <= 2147483647 && c.measure_s >= 1 &&
+         c.measure_s <= 604800 && c.send_s >= 1 && c.send_s <= 604800 &&
+         c.cool_s <= 86400 && c.wifi_budget_s >= 1 && c.wifi_budget_s <= 600 &&
+         c.cutoff_mv >= 3000 && c.cutoff_mv <= 4200 &&
+         (c.wifi_min_mv == 0 || (c.wifi_min_mv >= c.cutoff_mv && c.wifi_min_mv <= 4200)) &&
+         c.ota_min_mv >= std::max<uint32_t>(3300, c.cutoff_mv) &&
+         c.ota_min_mv <= 4200 && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
          c.adc_scale_ppm >= 1600000 && c.adc_scale_ppm <= 2400000;
 }
 static int identity_rng(void *, unsigned char *out, size_t size) {
@@ -692,7 +691,7 @@ static bool config_from(cJSON *j, bool local = false) {
   if (!cJSON_IsObject(j))
     return false;
   Config c = cfg;
-#define GET(field) c.field = number(j, #field, c.field)
+#define GET(field) do { auto value = number(j, #field, c.field); if (!std::isfinite(value) || value < 0 || value > UINT32_MAX || std::floor(value) != value) return false; c.field = static_cast<uint32_t>(value); } while (0)
   GET(version);
   GET(measure_s);
   GET(send_s);
@@ -1023,8 +1022,6 @@ static void usb_arm_boot_debug(cJSON *out) {
     add(out, "error", "Для отладки по BOOT откройте режим настройки и отключите зарядку.");
   } else if (!setup_provisioned) {
     add(out, "error", "Сначала настройте Wi-Fi и подключите датчик к серверу.");
-  } else if (!cfg.enabled) {
-    add(out, "error", "Измерения отключены в параметрах датчика.");
   } else {
     num(out, "duration_s", BOOT_DEBUG_WINDOW_S);
     setup_state = SetupState::boot_debug;
@@ -1438,7 +1435,10 @@ extern "C" void app_main() {
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
     uint16_t mv = battery_mv();
-    if (!usb_host && (mv < cfg.wifi_min_mv || mv > 5000)) sleep_for(cfg.measure_s);
+    if (!usb_host && !sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv)) {
+      printf("FACTORY: battery %u mV below threshold or unavailable\n", (unsigned)mv);
+      sleep_for(cfg.measure_s);
+    }
     deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
     const bool registered = wifi_up() && sync_time() && enroll();
     stop_network();
@@ -1487,19 +1487,24 @@ extern "C" void app_main() {
     sleep_for(3600);
   vTaskDelay(pdMS_TO_TICKS(500));
   uint16_t mv = battery_mv();
-  bool usb_without_battery = false;
-  if (mv < 2000 || mv > 5000) {
-    usb_without_battery = boot_debug && usb_serial_jtag_is_connected();
-    if (!usb_without_battery) {
+  // An explicitly armed BOOT test on a connected USB host is externally
+  // powered; ADC readings may be floating or misleading without a battery.
+  // Do not report a fabricated battery voltage or attempt OTA in this mode.
+  const bool usb_without_battery = boot_debug && usb_serial_jtag_is_connected();
+  if (usb_without_battery) {
+    printf("BOOT: USB-powered test, ADC=%u mV (ignored)\n", (unsigned)mv);
+    mv = 0;
+  } else {
+    if (mv < 2000 || mv > 5000) {
       if (boot_debug) boot_debug_result("Напряжение аккумулятора недоступно. Подключите USB к компьютеру для пробы.");
       else puts("ADC/divider check required");
       sleep_for(3600);
     }
-    mv = 0;
-  }
-  if (!usb_without_battery && mv < cfg.cutoff_mv) {
-    if (boot_debug) boot_debug_result("Напряжение аккумулятора ниже порога работы.");
-    sleep_for(21600);
+    if (mv < cfg.cutoff_mv) {
+      printf("BATTERY: %u mV below cutoff %u mV\n", (unsigned)mv, (unsigned)cfg.cutoff_mv);
+      if (boot_debug) boot_debug_result("Напряжение аккумулятора ниже порога работы.");
+      sleep_for(21600);
+    }
   }
   if (charging()) {
     if (boot_debug) boot_debug_result("Отладка прервана зарядкой.");
@@ -1523,16 +1528,17 @@ extern "C" void app_main() {
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
-      cfg.enabled && (boot_debug || rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
+      boot_debug || (cfg.enabled && rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
   // Hardware RESET and power loss invalidate RTC time. Obtain a validated
   // HTTPS server timestamp before sampling so the first reading has a date.
   // If offline or below the Wi-Fi threshold, preserve the untimed reading.
-  const bool wifi_allowed = usb_without_battery || mv >= cfg.wifi_min_mv;
+  const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
+  const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
   const bool clock_preflight = usb_without_battery || sensor::needs_clock_preflight(
       time_quality != 0, measurement_due, wifi_allowed);
   bool time_prepared = false;
   if (clock_preflight) {
-    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     if (wifi_up()) {
       time_prepared = sync_time();
     } else {
@@ -1584,7 +1590,7 @@ extern "C" void app_main() {
   auto now = time(nullptr);
   if ((boot_debug || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed) {
     if (!clock_preflight)
-      deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+      deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     // Do not start another full Wi-Fi session if the time preflight failed.
     bool ok = (!clock_preflight || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
@@ -1619,7 +1625,9 @@ extern "C" void app_main() {
     rt.charging = true;
   auto remaining = (int64_t)rt.next_measure - (int64_t)rt.uptime -
                    esp_timer_get_time() / 1000000;
-  if (last_error == "authorization_pending") remaining = std::min<int64_t>(remaining > 0 ? remaining : cfg.measure_s, 300);
-  sleep_for(remaining > 0 ? std::min((int64_t)cfg.measure_s, remaining)
-                          : cfg.measure_s);
+  // A send interval shorter than the sampling interval must wake the device
+  // for its independent radio deadline, without forcing another sample.
+  const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
+      wifi_allowed && time_quality != 0, rt.next_send, time(nullptr));
+  sleep_for(last_error == "authorization_pending" ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
 }

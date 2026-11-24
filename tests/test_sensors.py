@@ -447,3 +447,15 @@ def test_enrollment_denied_while_room_disabled(admin):
         assert tuple(saved) == (None, None)
         conn.execute('UPDATE rooms SET active=1 WHERE id=?', (room['id'],))
     assert admin.post('/api/sensors/enroll', json=enrollment).status_code == 200
+
+
+def test_relaxed_intervals_and_voltage_limits():
+    config = sensors.Config(measure_s=60, send_s=1, cool_s=0, wifi_budget_s=300,
+                            cutoff_mv=3000, wifi_min_mv=0, ota_min_mv=3300)
+    assert config.send_s == 1 and config.wifi_min_mv == 0
+    assert sensors.Record.model_validate(record(interval_s=1)).interval_s == 1
+    assert sensors.Record.model_validate(record(interval_s=604800)).interval_s == 604800
+    for kwargs in ({"measure_s":0}, {"send_s":0}, {"cutoff_mv":2999},
+                   {"cutoff_mv":3300,"wifi_min_mv":3200}, {"ota_min_mv":3299}):
+        with pytest.raises(ValueError):
+            sensors.Config(**kwargs)

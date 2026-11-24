@@ -21,6 +21,19 @@ inline bool needs_clock_preflight(bool trusted_clock, bool measurement_due,
                                   bool wifi_allowed) {
   return !trusted_clock && measurement_due && wifi_allowed;
 }
+// The optional Wi-Fi threshold can be disabled (0), but never bypass the
+// configured battery cutoff when operating from a battery.
+inline bool battery_wifi_allowed(uint16_t mv, uint32_t cutoff, uint32_t wifi_min) {
+  return mv >= cutoff && mv <= 5000 && (wifi_min == 0 || mv >= wifi_min);
+}
+inline uint32_t next_sleep_s(uint32_t interval, int64_t measurement_remaining,
+                            bool wifi_allowed, int64_t next_send, int64_t now) {
+  uint32_t seconds = measurement_remaining > 0 ?
+      static_cast<uint32_t>(std::min<int64_t>(interval, measurement_remaining)) : interval;
+  if (wifi_allowed && next_send > now)
+    seconds = static_cast<uint32_t>(std::min<int64_t>(seconds, next_send - now));
+  return std::max<uint32_t>(1, seconds);
+}
 // This gate is shared by normal work, provisioning and pending OTA diagnostics.
 inline bool work_allowed(bool usb_connected, uint64_t elapsed,
                          uint64_t cool_until) {

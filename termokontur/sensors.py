@@ -30,23 +30,23 @@ class Strict(BaseModel):
 
 class Config(Strict):
     version: int = Field(default=1, ge=1, le=2147483647)
-    measure_s: int = Field(default=1800, ge=60, le=86400)
-    send_s: int = Field(default=86400, ge=600, le=604800)
-    cool_s: int = Field(default=1800, ge=300, le=86400)
-    wifi_budget_s: int = Field(default=45, ge=15, le=120)
-    wifi_min_mv: int = Field(default=3600, ge=3300, le=4100)
-    cutoff_mv: int = Field(default=3300, ge=3100, le=3800)
-    ota_min_mv: int = Field(default=3900, ge=3600, le=4200)
+    measure_s: int = Field(default=1800, ge=1, le=604800)
+    send_s: int = Field(default=86400, ge=1, le=604800)
+    cool_s: int = Field(default=1800, ge=0, le=86400)
+    wifi_budget_s: int = Field(default=45, ge=1, le=600)
+    wifi_min_mv: int = Field(default=3600, ge=0, le=4200)
+    cutoff_mv: int = Field(default=3300, ge=3000, le=4200)
+    ota_min_mv: int = Field(default=3900, ge=3300, le=4200)
     tx_qdbm: int = Field(default=34, ge=8, le=78)
     adc_scale_ppm: int = Field(default=2000000, ge=1600000, le=2400000)
     enabled: bool = True
 
     @model_validator(mode="after")
     def coherent(self):
-        if not self.cutoff_mv <= self.wifi_min_mv <= self.ota_min_mv:
-            raise ValueError("Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление")
-        if self.send_s < self.measure_s:
-            raise ValueError("Интервал передачи должен быть не меньше интервала измерений")
+        if self.wifi_min_mv and self.wifi_min_mv < self.cutoff_mv:
+            raise ValueError("Порог Wi-Fi должен быть не ниже отключения или 0 (без отдельного порога)")
+        if self.ota_min_mv < self.cutoff_mv:
+            raise ValueError("Порог обновления должен быть не ниже порога отключения")
         return self
 
 
@@ -79,7 +79,7 @@ class Record(Strict):
     temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     battery_mv: BatteryMV
-    interval_s: int = Field(ge=60, le=86400)
+    interval_s: int = Field(ge=1, le=604800)
     error: Literal["", "sensor_crc", "sensor_io"] = ""
 
     @model_validator(mode="after")

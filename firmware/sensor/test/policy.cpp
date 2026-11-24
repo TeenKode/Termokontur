@@ -35,6 +35,13 @@ int main() {
   assert(sensor::retry_delay(86400, 0) == 3600);
   assert(sensor::retry_delay(86400, 100) == 57600);
   assert(sensor::retry_delay(1800, 10) == 1800);
+  assert(sensor::battery_wifi_allowed(3100, 3000, 0));
+  assert(!sensor::battery_wifi_allowed(2999, 3000, 0));
+  assert(!sensor::battery_wifi_allowed(3300, 3000, 3600));
+  assert(!sensor::battery_wifi_allowed(5001, 3000, 0));
+  assert(sensor::next_sleep_s(1800, 1500, true, 1010, 1000) == 10);
+  assert(sensor::next_sleep_s(1800, 1500, false, 1010, 1000) == 1500);
+  assert(sensor::next_sleep_s(1, 0, true, 1000, 1000) == 1);
   std::cout << "Policy: charging/cooling, 3996 ACK boundaries and retry "
                "budgets passed\n";
 }
