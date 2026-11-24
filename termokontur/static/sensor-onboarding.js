@@ -1,6 +1,24 @@
 "use strict";
-let usbInstallers=[],usbDefaults=null,usbBusy=false,usbExpectedHardware=null;
+let usbInstallers=[],usbDefaults=null,usbBusy=false,usbExpectedHardware=null,usbRegistrationTimer=null;
+function stopUsbRegistrationWatch(){if(usbRegistrationTimer!==null)clearTimeout(usbRegistrationTimer);usbRegistrationTimer=null;}
+function watchUsbRegistration(hardware,remaining=45){
+  stopUsbRegistrationWatch();
+  usbRegistrationTimer=setTimeout(async()=>{
+    if(!$("sensor-usb-dialog").open||usbBusy||usbExpectedHardware!==hardware)return;
+    try{
+      const devices=await api("/api/sensors/devices");
+      if(!$("sensor-usb-dialog").open||usbBusy||usbExpectedHardware!==hardware)return;
+      if(devices.some(d=>d.hardware_id===hardware&&d.enabled&&d.identity_state==="approved")){
+        usbStatus("Готово. Сервер подтвердил регистрацию по Wi-Fi. Для отладки коротко нажмите RESET. Для автономной работы включите питание от аккумулятора.");
+        await refreshSensors();watchUsbRegistration(usbExpectedHardware);return;
+      }
+    }catch{}
+    if(remaining>1)watchUsbRegistration(hardware,remaining-1);
+    else usbStatus("Прошивка и настройки записаны. Регистрация пока не подтверждена. Проверьте Wi-Fi и питание или настройте без прошивки.");
+  },2000);
+}
 function usbServerBootstrapVersion(version){const m=/^(\d+)\.(\d+)\.(\d+)$/.exec(version||"");return Boolean(m&&(Number(m[1])>0||Number(m[2])>1||(Number(m[2])===1&&Number(m[3])>=5)));}
+function usbFactoryVersion(version){const [a,b,c]=String(version).split(".").map(Number);return a>1||(a===1&&(b>1||(b===1&&c>=5)));}
 const usbSupported=()=>Boolean(window.isSecureContext&&navigator.serial);
 const usbStatus=text=>{$("usb-status").textContent=text;};
 function usbClearSecrets(){for(const id of ["usb-wifi-password","usb-setup-password","usb-setup-confirm"])$(id).value="";}
@@ -20,7 +38,7 @@ async function refreshInstaller(){
     $("sensor-c3-ota-file").href=base+"/esp32-c3.bin";
     $("sensor-c3-factory-file").href=base+"/esp32-c3-factory.bin";
     const url=$("sensor-c3-factory-file").getAttribute("href");
-    usbInstallers.push({...bundle.factory,url});
+    usbInstallers.push({...bundle.factory,version:bundle.version,url});
     option(select,url,bundle.version+" · из комплекта панели");
   }
   if(manual&&!(bundle?.version===manual.version&&bundle.factory.sha256===manual.sha256)){
@@ -96,6 +114,7 @@ async function usbRun(flash){
   if(usbBusy)return;
   let serial=null,flashed=false,approved=false,savedLocally=false;
   try{
+    stopUsbRegistrationWatch();
     const data=usbSettings();if(!data)return;
     if(!usbSupported())throw Error("USB недоступен. Откройте панель по HTTPS в Chrome или Edge на компьютере.");
     if(flash&&!$("usb-new-board").checked)throw Error("Подтвердите удаление данных платы или нажмите «Настроить без прошивки».");
@@ -115,11 +134,23 @@ async function usbRun(flash){
       usbStatus("Проверяем комплект и записываем прошивку. Не отключайте USB.");$("usb-progress").hidden=false;$("usb-progress").value=0;
       const response=await fetch(installer.url,{credentials:"same-origin"});
       if(!response.ok)throw Error("Не удалось получить комплект с сервера");
+      const direct=usbFactoryVersion(installer.version);
       usbExpectedHardware=await usb.flashFactory(port,await response.arrayBuffer(),installer,{
+        prepareSettings:direct?async hardware=>{
+          usbStatus("Готовим одноразовое разрешение и записываем настройки вместе с прошивкой…");
+          const auth=await api("/api/sensors/usb/prepare","POST",{hardware_id:hardware,name:data.name,room_id:data.room_id,sensor_type:data.sensor_type,config:data.config});
+          if(!/^[a-f0-9]{64}$/.test(auth.ticket))throw Error("Сервер не выдал разрешение заводской настройки");
+          return {...data.settings,hardware_id:hardware,factory_ticket:auth.ticket,device:"",code:"",sensor_type:data.sensor_type,config:{...data.config,version:1}};
+        }:null,
         checkBoard:hardware=>api("/api/sensors/usb/check/"+hardware),progress:value=>{$("usb-progress").value=value;},
         log:line=>{$("usb-log").hidden=false;$("usb-log").textContent=($("usb-log").textContent+String(line)+"\n").slice(-4000);}});
       flashed=true;usbStatus("Прошивка записана. Ожидаем запуска датчика…");
       $("usb-new-board").checked=false;
+      if(direct){
+        usbClearSecrets();
+        usbStatus("Готово: прошивка и настройки записаны. Датчик зарегистрируется по Wi-Fi самостоятельно. Дождитесь появления карточки; для отладки коротко нажмите RESET после регистрации. Если связи нет, проверьте Wi-Fi или настройте без прошивки.");
+        await refreshSensors();return;
+      }
     }
     const connection=await usb.connectSensor(port,{expectedHardware:usbExpectedHardware,getPorts:()=>navigator.serial.getPorts(),onAttempt:(n,total)=>usbStatus("Ожидаем режим настройки: попытка "+n+" из "+total+"…")});
     serial=connection.serial;const {hello,fingerprint:fp}=connection;
@@ -165,8 +196,8 @@ async function usbRun(flash){
 }
 $("sensor-usb-form").addEventListener("submit",e=>{e.preventDefault();usbRun(true);});
 $("usb-configure").addEventListener("click",()=>usbRun(false));
-$("usb-close").addEventListener("click",()=>{if(!usbBusy){usbClearSecrets();$("sensor-usb-dialog").close();}});
-$("sensor-usb-dialog").addEventListener("cancel",e=>{if(usbBusy)e.preventDefault();else usbClearSecrets();});
+$("usb-close").addEventListener("click",()=>{if(!usbBusy){stopUsbRegistrationWatch();usbClearSecrets();$("sensor-usb-dialog").close();}});
+$("sensor-usb-dialog").addEventListener("cancel",e=>{if(usbBusy)e.preventDefault();else{stopUsbRegistrationWatch();usbClearSecrets();}});
 $("sensor-installer-form").addEventListener("submit",async e=>{
   e.preventDefault();const button=e.target.querySelector("button");button.disabled=true;
   try{const data=new FormData();data.append("file",$("sensor-installer-file").files[0]);const r=await fetch("/api/sensors/installer",{method:"POST",credentials:"same-origin",body:data});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Комплект не принят");}await refreshInstaller();if(sensorSelected)await openSensor(sensorSelected);toast("Комплект прошивки загружен");}catch(error){toast(error.message,true);}finally{button.disabled=false;}

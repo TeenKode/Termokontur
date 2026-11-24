@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-merge-') as tmp:
         assert factory[offset:offset + len(payload[name])] == payload[name], name
     assert len(factory) == 0x20000 + len(image)
     assert factory[0x9000:0xf000] == b'\xff' * 0x6000
+    assert factory[0x12000:0x16000] == b'\xff' * 0x4000
     payload['factory.bin'] = factory
 payload['web-manifest.json'] = (json.dumps({
     'name': 'Termokontur sensor (initial installation)', 'version': version,

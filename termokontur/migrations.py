@@ -68,7 +68,15 @@ def _retire_unsupported_sensors(conn: sqlite3.Connection, _: str) -> None:
     conn.execute("UPDATE sensor_devices SET enabled=0 WHERE model<>'c3-sht40-v1'")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors)
+def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_factory_tickets (
+        ticket_hash TEXT PRIMARY KEY, hardware_id TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL, room_id INTEGER NOT NULL, sensor_type TEXT NOT NULL,
+        config TEXT NOT NULL, expires INTEGER NOT NULL, consumed_fp TEXT
+    )""")
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

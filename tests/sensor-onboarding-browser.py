@@ -46,7 +46,7 @@ SIMULATED_USB=r'''(() => {
   const post=async(path,body)=>{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json();};
   const challenge=await post('/api/sensors/auth/challenge',ident);
   const signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(challenge.message))));
-  const authorized=await post('/api/sensors/auth/prove',{...ident,challenge:challenge.challenge,signature});
+  const authorized=await post('/api/sensors/auth/prove',{...ident,challenge:challenge.challenge,signature,...(window.savedUSB.factory_ticket?{setup_ticket:window.savedUSB.factory_ticket}:{})});
   const record={seq:1,boot_id:'0000000000000001',uptime_s:60,measured_at:Math.floor(Date.now()/1000)-10,time_quality:'rtc',temperature:21.5,humidity:null,battery_mv:3950,interval_s:60,error:''};
   const reply=await fetch('/api/sensors/devices/'+authorized.device_id+'/sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+authorized.token},body:JSON.stringify({model:'c3-sht40-v1',sensor_type:ident.sensor_type,firmware:'0.1.5',records:[record],next_seq:2,lost:0,rssi:-55,battery_mv:3950,config_version:window.savedUSB.config.version,boots:1})});
   if(!reply.ok)throw Error(await reply.text());return reply.json();
@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 wrapper='''export {SensorSerial,verifyIdentity,connectSensor} from './test-real-sensor-usb.mjs';
                 export async function flashFactory(port,image,metadata,callbacks){
                   if(image.byteLength!==metadata.size)throw Error('size mismatch');
-                  await callbacks.checkBoard('0123456789ab');callbacks.progress(100);window.simFlashed=true;return '0123456789ab';
+                  await callbacks.checkBoard('0123456789ab');if(callbacks.prepareSettings)window.savedUSB=await callbacks.prepareSettings('0123456789ab');callbacks.progress(100);window.simFlashed=true;return '0123456789ab';
                 }'''
                 page.route('**/static/sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=wrapper))
                 page.goto(base);page.fill('#password','browser-test-password');page.click('#login-form button[type="submit"]')
@@ -149,21 +149,24 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert image.value.ok
                 expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
                 expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
-                assert page.evaluate('window.simFlashed && window.simFinished') is True
+                assert page.evaluate('window.simFlashed && !window.simFinished') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
                 page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
                 assert page.input_value('#usb-wifi-password')==''
                 onboard=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/onboard')]
-                assert len(onboard)==1 and 'ssid' not in onboard[0] and 'password' not in onboard[0]
+                assert not onboard
+                prepared=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/usb/prepare')]
+                assert len(prepared)==1 and 'ssid' not in prepared[0] and 'password' not in prepared[0]
                 assert api.get('/api/sensors/claims').json()==[]
-                assert len(api.get('/api/sensors/devices').json())==1
+                assert api.get('/api/sensors/devices').json()==[]
                 page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0')
                 page.screenshot(path='/tmp/termokontur-usb-ready-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/11-usb-authorized.jpg'),type='jpeg',quality=85)
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
+                assert len(api.get('/api/sensors/devices').json())==1
                 page.click('#usb-close');page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
                 page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
