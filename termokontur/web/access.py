@@ -118,19 +118,29 @@ def session(request: Request):
 
 @router.post("/login")
 def login(payload: Login, request: Request, response: Response):
+    _verify_origin(request)
     ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
     failed_logins = request.app.state.failed_logins
-    failures = [t for t in failed_logins.get(ip, []) if now - t < 300]
-    if len(failures) >= 5:
-        raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
+    # Reserve a slot before the expensive password verification so simultaneous
+    # requests cannot all see an empty failure counter. Bound memory globally.
+    with request.app.state.login_lock:
+        for key, times in list(failed_logins.items()):
+            recent = [t for t in times if now - t < 300]
+            if recent:
+                failed_logins[key] = recent
+            else:
+                failed_logins.pop(key, None)
+        failures = failed_logins.get(ip, [])
+        if len(failures) >= 5 or (ip not in failed_logins and len(failed_logins) >= 4096):
+            raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
+        failed_logins[ip] = [*failures, now]
     username = payload.username.strip().lower()
     viewer = auth.check_building_password(username, payload.password) if username else None
     if (username and not viewer) or (not username and not auth.check_password(payload.password)):
-        failures.append(now)
-        failed_logins[ip] = failures
         raise HTTPException(401, "Неверный пароль")
-    failed_logins.pop(ip, None)
+    with request.app.state.login_lock:
+        failed_logins.pop(ip, None)
     if viewer:
         session_data = f"v:{username}:{int(time.time()) + 8 * 3600}:{secrets.token_urlsafe(18)}"
         cookie = f"{session_data}:{_building_signature(session_data, viewer)}"

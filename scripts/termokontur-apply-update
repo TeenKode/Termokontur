@@ -8,6 +8,7 @@ PREV=/opt/termokontur-previous
 BACKUPS="$DATA/backups"
 STAGE=
 SWAPPED=0
+SERVICES_STOPPED=0
 BACKUP_FILE=
 SERVICES_SAVED=0
 UNITS_DIR=/etc/systemd/system
@@ -123,6 +124,9 @@ cleanup() {
       systemctl start termokontur.service || true
       if ! health; then echo "WARNING: rollback web health check failed" >&2; fi
       systemctl start termokontur-max.service || true
+    elif (( SERVICES_STOPPED )); then
+      systemctl start termokontur.service || true
+      systemctl start termokontur-max.service || true
     fi
     record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
   fi
@@ -169,7 +173,11 @@ chmod 0755 "$STAGE"
 
 record installing "Зависимости готовы. Подготавливаем резервную копию…" backup
 
-# Backup SQLite online without stopping the running application.
+# Quiesce both SQLite writers before taking the rollback snapshot. If any
+# later preparation fails, cleanup restarts the unchanged installation.
+SERVICES_STOPPED=1
+systemctl stop termokontur-max.service
+systemctl stop termokontur.service
 install -o termokontur -g termokontur -m 0700 -d "$BACKUPS"
 BACKUP_FILE="$BACKUPS/pre-update-$(date -u +%Y%m%dT%H%M%SZ)-$REVISION.sqlite3"
 runuser -u termokontur -- /usr/bin/python3 - "$DATA/termokontur.sqlite3" "$BACKUP_FILE" <<'PY'
@@ -180,8 +188,6 @@ PY
 runuser -u termokontur -- chmod 0600 "$BACKUP_FILE"
 record installing "Резервная копия сохранена. Переключаем приложение…" switching
 
-systemctl stop termokontur-max.service 2>/dev/null || true
-systemctl stop termokontur.service
 if [[ -d "$PREV" ]]; then rm -rf -- "$PREV"; fi
 mv "$APP" "$PREV"
 SWAPPED=1
@@ -202,7 +208,8 @@ systemctl daemon-reload
 systemctl start termokontur.service
 record installing "Приложение запущено. Проверяем его доступность…" verifying
 health || { echo "Web health check failed after version swap" >&2; exit 1; }
-systemctl start termokontur-max.service || true
+systemctl start termokontur-max.service
+systemctl is-active --quiet termokontur-max.service
 systemctl enable --now termokontur-update.path
 
 record installing "Проверка завершена. Сохраняем сведения о версии…" finishing

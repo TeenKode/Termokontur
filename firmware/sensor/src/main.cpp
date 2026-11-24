@@ -625,6 +625,7 @@ static std::string post(const std::string &path, const std::string &body,
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
 static bool server_supports_usb_sync = false;
+static bool server_supports_tail_loss = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -653,6 +654,7 @@ static bool sync_time() {
   std::string certificate = root->valuestring;
   server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
   server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
+  server_supports_tail_loss = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_tail_loss"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -930,9 +932,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     return false;
   uint64_t cursor = state.ack;
   bool replaying = false;
+  // The journal is scanned before measurement and maintained by its sole
+  // writer. Each transmitted record is still checked against its Flash CRC.
   for (int page = 0; page < 64 && available(); page++) {
-    if (!journal.scan())
-      return false;
     uint64_t lost = state.lost_base + journal.missing(state.ack, state.next);
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
@@ -987,6 +989,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
         count++;
         max_sent = r.seq + 1;
       }
+    // A short final page proves that no additional entries remain in this
+    // journal. Older servers never receive this optional capability.
+    const bool journal_end = server_supports_tail_loss && count < 32;
+    if (journal_end) cJSON_AddBoolToObject(j, "journal_end", true);
     auto body = stringify(j);
     cJSON_Delete(j);
     auto response = post("/api/sensors/devices/" + device + "/sync", body);
@@ -1003,7 +1009,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     }
     auto ack_node = cJSON_GetObjectItemCaseSensitive(j, "ack_seq");
     double ack_num = cJSON_IsNumber(ack_node) ? ack_node->valuedouble : 0;
-    const uint64_t ack_limit = replaying && count == 0 ? state.ack : max_sent;
+    const uint64_t ack_limit = journal_end ? state.next : (replaying && count == 0 ? state.ack : max_sent);
     if (!sensor::valid_ack(ack_num, cursor, ack_limit)) {
       cJSON_Delete(j);
       last_error = "invalid_ack";

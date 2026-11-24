@@ -1324,6 +1324,7 @@ const settingsGroups = {
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
 const settingsEditRevision=new WeakMap();
+const settingsBaseline=new WeakMap();
 const settingsCategory=$("settings-category");
 for(const button of document.querySelectorAll(".settings-nav-button")){
   option(settingsCategory,button.dataset.settingsTarget,button.textContent.trim());
@@ -1443,7 +1444,7 @@ async function loadSettings() {
           if(input.type!=="file")input.value=values[i].value;
           if(input.type==="checkbox"||input.type==="radio")input.checked=values[i].checked;
         });
-      }else form.dataset.dirty="false";
+      }else {form.dataset.dirty="false";settingsBaseline.set(form,{...settingsCache});}
     }
     syncNotificationControls();
     renderSettingsSummary();
@@ -1562,13 +1563,17 @@ async function saveSettingsPatch(form,patch,message){
   const feedback=form.querySelector(".settings-save-feedback");
   setFeedback(feedback.id,"Сохраняем…","working");
   try{
-    const latest=await api("/api/settings");
-    const data={...latest,...patch};
+    const baseline=settingsBaseline.get(form)||settingsCache;
+    const data={...baseline,...patch};
     if(data.retention_days>0 && data.retention_days<30)
       throw Error("Срок хранения: минимум 30 дней или 0");
     if(!Array.isArray(data.reminder_days)||data.reminder_days.length===0)
       throw Error("Выберите хотя бы один день для расписания");
-    settingsCache=await api("/api/settings","PUT",data);
+    const expected=Object.fromEntries(Object.keys(patch).map(key=>[key,baseline[key]]));
+    settingsCache=await api("/api/settings","PATCH",{changes:patch,expected});
+    // Only advance the saved form's baseline; other forms may still display
+    // the values they originally loaded and must detect a concurrent edit.
+    settingsBaseline.set(form,{...settingsCache});
     renderSettingsSummary();
     document.title=settingsCache.organization_name+" — Термоконтур";
     if(revision===settingsEditRevision.get(form)){

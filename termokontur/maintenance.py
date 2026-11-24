@@ -6,6 +6,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import closing
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
@@ -13,6 +14,7 @@ from threading import Lock
 
 from . import db, migrations, settings
 
+UPDATE_NAME_PATTERN = re.compile(r"^pre-update-[0-9TZ]{16}-[a-f0-9]{40}\.sqlite3$")
 NAME_PATTERN = re.compile(r"^termokontur-(?:manual|auto|import|pre-restore)-[0-9TZ]{16}-[0-9a-f]{12}\.sqlite3$")
 REQUIRED_TABLES = {"rooms", "readings", "settings", "admin_account", "max_bindings"}
 MAX_IMPORT_BYTES = 1024**3
@@ -32,13 +34,35 @@ def _filename(kind: str) -> str:
     return f"termokontur-{kind}-{stamp}-{secrets.token_hex(6)}.sqlite3"
 
 def backup_path(name: str) -> Path:
-    if not NAME_PATTERN.fullmatch(name):
+    if not (NAME_PATTERN.fullmatch(name) or UPDATE_NAME_PATTERN.fullmatch(name)):
         raise ValueError("Недопустимое имя резервной копии")
     root = backup_dir().resolve()
     target = root / name
     if target.is_symlink() or not target.is_file() or target.resolve().parent != root:
         raise ValueError("Резервная копия не найдена")
     return target
+
+@lru_cache(maxsize=1)
+def _expected_columns() -> dict[str, set[str]]:
+    # Use the same migration chain as a clean installation, rather than a
+    # hand-maintained list that can become stale with the next schema version.
+    with closing(sqlite3.connect(":memory:")) as conn:
+        migrations.apply(conn, db.utc_now())
+        return {
+            row[0]: {column[1] for column in conn.execute(
+                "SELECT * FROM pragma_table_info(?)", (row[0],))}
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+
+
+def _inspect_current_schema(conn: sqlite3.Connection) -> None:
+    for table, expected in _expected_columns().items():
+        actual = {column[1] for column in conn.execute("SELECT * FROM pragma_table_info(?)", (table,))}
+        if not expected.issubset(actual):
+            raise ValueError(f"В резервной копии повреждена структура таблицы {table}")
+    if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise ValueError("Резервная копия содержит нарушенные связи между таблицами")
+
 
 def inspect(path: Path) -> None:
     if path.stat().st_size < 4096:
@@ -47,7 +71,7 @@ def inspect(path: Path) -> None:
     try:
         with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
-            migrations.read_version(conn)
+            version = migrations.read_version(conn)
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("Резервная копия повреждена")
             schema = conn.execute("SELECT name, type FROM sqlite_master").fetchall()
@@ -58,7 +82,17 @@ def inspect(path: Path) -> None:
                 raise ValueError("Файл содержит неподдерживаемые объекты SQLite")
             if not conn.execute("SELECT 1 FROM admin_account WHERE id=1").fetchone():
                 raise ValueError("Резервная копия не содержит учётную запись администратора")
-    except sqlite3.DatabaseError as exc:
+            if version == migrations.SCHEMA_VERSION:
+                _inspect_current_schema(conn)
+        if version < migrations.SCHEMA_VERSION:
+            # Old backups remain supported. Migrate a disposable copy, never
+            # modify the uploaded original or the live database during validation.
+            with TemporaryDirectory(dir=path.parent, prefix=".validate-") as workspace:
+                staged = Path(workspace) / "validate.sqlite3"
+                _copy_database(path, staged)
+                db.initialize(staged)
+                inspect(staged)
+    except (sqlite3.DatabaseError, RuntimeError) as exc:
         raise ValueError("Невозможно прочитать SQLite-файл") from exc
 
 def _copy_database(source: Path, dest: Path) -> None:
@@ -84,7 +118,7 @@ def create_backup(kind: str = "manual") -> dict:
 def list_backups() -> list[dict]:
     result = []
     for file in backup_dir().iterdir():
-        if not NAME_PATTERN.fullmatch(file.name) or file.is_symlink() or not file.is_file():
+        if not (NAME_PATTERN.fullmatch(file.name) or UPDATE_NAME_PATTERN.fullmatch(file.name)) or file.is_symlink() or not file.is_file():
             continue
         stat=file.stat()
         result.append({"name":file.name,"size":stat.st_size,
@@ -116,14 +150,24 @@ def prune_data(retention_days: int) -> dict:
         return {"readings": 0, "receipts": 0}
     if not 30 <= retention_days <= 3650:
         raise ValueError("Недопустимый срок хранения")
-    cutoff=(datetime.now(timezone.utc)-timedelta(days=retention_days)).isoformat(timespec="seconds")
+    cutoff_time = datetime.now(timezone.utc)-timedelta(days=retention_days)
+    cutoff = cutoff_time.isoformat(timespec="seconds")
+    cutoff_epoch = int(cutoff_time.timestamp())
     with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         readings=conn.execute("DELETE FROM readings WHERE observed_at<?", (cutoff,)).rowcount
+        # Keep only opaque sequence receipts, so a retransmission cannot
+        # recreate expired readings or poison the device's ACK.
+        conn.execute("""INSERT OR IGNORE INTO sensor_record_receipts
+            SELECT device_id,seq,fingerprint FROM sensor_records
+            WHERE COALESCE(measured_at,received_at)<?""", (cutoff_epoch,))
+        sensor_records = conn.execute("DELETE FROM sensor_records WHERE COALESCE(measured_at,received_at)<?",
+                                      (cutoff_epoch,)).rowcount
     # Replays must remain idempotent at least while the corresponding
     # message receipts are retained for 30 days.
     from . import max_delivery
     max_delivery.prune(min(retention_days,30))
-    return {"readings":readings}
+    return {"readings":readings, "sensor_records": sensor_records}
 
 def schedule() -> dict:
     days=int(settings.get("backup_interval_days", "1"))
@@ -143,6 +187,9 @@ def schedule() -> dict:
         for old in auto[keep:]:
             delete_backup(old["name"])
         auto = auto[:keep]
+        updates = [item for item in list_backups() if UPDATE_NAME_PATTERN.fullmatch(item["name"])]
+        for old in updates[keep:]:
+            delete_backup(old["name"])
     except (OSError, ValueError, sqlite3.Error):
         backup_error = True
         logger.exception("Scheduled backup failed")

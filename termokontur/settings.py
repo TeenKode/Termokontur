@@ -93,7 +93,18 @@ def set_secret(key: str, value: str | None) -> None:
         else:
             raise ValueError("Ключ должен содержать минимум 20 символов")
 
-def public() -> dict:
+def public(conn=None) -> dict:
+    if conn is None:
+        with db.connect() as current:
+            return public(current)
+    stored = dict(conn.execute("SELECT key,value FROM settings"))
+    def get(key, default=None):
+        if key in stored:
+            return stored[key]
+        if key in ENV_DEFAULTS:
+            env, fallback = ENV_DEFAULTS[key]
+            return os.environ.get(env, fallback)
+        return default
     data = {key: get(key) for key in ENV_DEFAULTS}
     data["stale_hours"] = int(data["stale_hours"])
     data["reminders_enabled"] = data["reminders_enabled"] == "1"

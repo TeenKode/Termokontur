@@ -466,3 +466,57 @@ def test_relaxed_intervals_and_voltage_limits():
                    {"wifi_min_mv":4201}, {"ota_min_mv":-1}):
         with pytest.raises(ValueError):
             sensors.Config(**kwargs)
+
+
+def test_explicit_end_of_journal_acknowledges_only_confirmed_tail_losses(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    assert admin.get("/api/sensors/bootstrap").json()["sync_tail_loss"] is True
+    assert sync(admin, d, headers, batch()).json()["ack_seq"] == 2
+    # An older firmware's empty page must not implicitly acknowledge data.
+    assert sync(admin, d, headers, batch([], next_seq=5, lost=3)).json()["ack_seq"] == 2
+    assert sync(admin, d, headers, batch([], next_seq=6, lost=3, journal_end=True)).status_code == 409
+    final = batch([], next_seq=5, lost=3, journal_end=True)
+    for _ in range(2):
+        assert sync(admin, d, headers, final).json()["ack_seq"] == 5
+    assert sync(admin, d, headers, batch([record(5)], next_seq=6, lost=3)).json()["ack_seq"] == 6
+    with db.connect() as conn:
+        assert conn.execute("SELECT acknowledged_lost FROM sensor_devices").fetchone()[0] == 3
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 2
+
+
+def test_move_preserves_delayed_measurement_room(admin):
+    d, _, headers, original = setup_sensor(admin)
+    target = db.create_room("Школа", "1", "13", "Кабинет", 18, 24)
+    assert admin.patch("/api/sensors/devices/" + d["device_id"], json={
+        "name": "Датчик", "room_id": target["id"], "enabled": True}).status_code == 200
+    result = sync(admin, d, headers, batch([record(1), record(2, measured_at=int(time.time()))], next_seq=3))
+    assert result.status_code == 200, result.text
+    with db.connect() as conn:
+        assert [r[0] for r in conn.execute("SELECT room_id FROM sensor_records ORDER BY seq")] == [original["id"], target["id"]]
+        assert [r[0] for r in conn.execute("SELECT room_id FROM readings ORDER BY id")] == [original["id"], target["id"]]
+
+
+def test_retention_removes_sensor_payload_but_replay_is_idempotent(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    payload = batch([record(measured_at=int(time.time())-100*86400)])
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    result = maintenance.prune_data(30)
+    assert result["readings"] == result["sensor_records"] == 1
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    with db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0
+    payload["records"][0]["temperature"] = 22.0
+    assert sync(admin, d, headers, payload).status_code == 409
+
+
+def test_late_expired_sensor_record_is_acknowledged_without_restoring_history(admin):
+    from termokontur import settings
+    d, _, headers, _ = setup_sensor(admin)
+    settings.update({"retention_days": "30"})
+    payload = batch([record(measured_at=int(time.time())-100*86400)])
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    with db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0

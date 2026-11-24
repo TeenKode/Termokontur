@@ -35,7 +35,13 @@ case "$verb" in
   start)
     if [[ "${1:-}" == "termokontur.service" ]]; then start_web; fi ;;
   stop)
-    if [[ "${1:-}" == "termokontur.service" ]]; then stop_web; fi ;;
+    if [[ "${1:-}" == "termokontur.service" ]]; then
+      if [[ "${TEST_BREAK_UPGRADE:-0}" == "1" && -f /run/termokontur-test.pid && ! -f /tmp/tk-late-reading ]]; then
+        touch /tmp/tk-late-reading
+        runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); c.execute("INSERT INTO readings(room_id,value,source,observed_at) SELECT id,23.5,\x27manual\x27,\x272026-01-01T00:00:00+00:00\x27 FROM rooms WHERE name=\x27101\x27"); c.commit()'
+      fi
+      stop_web
+    fi ;;
   restart)
     if [[ "${1:-}" == "termokontur.service" ]]; then
       stop_web
@@ -130,4 +136,6 @@ done
 test "$recovered" = 1
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
+curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
+  http://127.0.0.1:8092/api/readings | grep -q '23.5'
 echo "Debian 13 native install, update and rollback smoke succeeded."
