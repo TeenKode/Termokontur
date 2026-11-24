@@ -12,6 +12,12 @@ const maxAssignmentRooms = new Set();
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
 const show = (id, yes) => { $(id).hidden = !yes; };
+function setFeedback(id,message,state=""){
+  const target=$(id);
+  if(target.textContent!==message)target.textContent=message;
+  if(state)target.dataset.state=state;
+  else delete target.dataset.state;
+}
 const el = (tag, className = "", value = "") => {
   const item = document.createElement(tag);
   if(className) item.className = className;
@@ -37,107 +43,139 @@ for(const type of ["click","focusin"]){
     if(!event.target.closest(".sidebar"))closeNavigation();
   });
 }
-function toast(message, isError = false) {
-  const target = $("toast");
-  const container = document.querySelector("dialog[open]") || document.body;
-  if(target.parentElement!==container)container.append(target);
-  target.textContent = message; target.className = "toast show" + (isError ? " error" : " success");
-  target.setAttribute("role",isError?"alert":"status");
-  target.setAttribute("aria-live",isError?"assertive":"polite");
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { target.className = "toast"; }, 4200);
+const sessionEndedMessage="Сеанс завершился. Войдите снова.";
+const serverOfflineMessage="Нет связи с сервером. Проверьте подключение.";
+const browserOfflineMessage="Нет сети. Проверьте подключение.";
+let connectionProblem="";
+const activeOperations=new Map();
+
+function syncFeedbackContainer(){
+  const openDialogs=[...document.querySelectorAll("dialog[open]")];
+  const container=openDialogs.find(dialog=>dialog.contains(document.activeElement))||openDialogs.at(-1)||document.body;
+  const feedback=$("panel-feedback");
+  if(feedback.parentElement!==container)container.append(feedback);
 }
-/* Unified operation feedback. Background polling stays silent; user actions
-   show an in-button spinner and a polite, accessible global progress message. */
-let interactionButton=null, interactionAt=0, foregroundCount=0, networkFailed=false;
-const buttonOperations=new WeakMap();
-let operationRegion=null;
-function operationStatus(message,kind="working"){
-  if(!operationRegion){
-    operationRegion=document.createElement("div");
-    operationRegion.id="operation-status";
-    operationRegion.className="operation-status";
-    operationRegion.setAttribute("role","status");
-    operationRegion.setAttribute("aria-live","polite");
-    operationRegion.hidden=true;
-    const topbar=document.querySelector(".topbar");
-    (topbar?.parentNode||document.body).insertBefore(operationRegion,topbar?.nextSibling||null);
-  }
-  operationRegion.textContent=message;
-  operationRegion.dataset.kind=kind;
-  operationRegion.hidden=!message;
+const dialogObserver=new MutationObserver(syncFeedbackContainer);
+for(const dialog of document.querySelectorAll("dialog")){
+  dialogObserver.observe(dialog,{attributes:true,attributeFilter:["open"]});
 }
-document.addEventListener("click",event=>{
-  const button=event.target.closest("button");
-  if(button){interactionButton=button;interactionAt=Date.now();}
-},true);
-document.addEventListener("submit",event=>{
-  const button=event.submitter||event.target.querySelector('button[type="submit"]');
-  if(button){interactionButton=button;interactionAt=Date.now();}
-},true);
-function beginRequest(path,method){
-  const userAction=Date.now()-interactionAt<1200 && interactionButton?.isConnected;
-  if(!userAction)return ()=>{};
-  const button=interactionButton;
-  // Navigation switches are not save operations. Showing a spinner inside
-  // a tab changes its label width and can move adjacent tabs.
-  if(button.matches("[data-tab], [data-settings-target]"))return ()=>{};
-  const existing=buttonOperations.get(button);
-  if(existing) {
-    existing.count++;
-  }else{
-    buttonOperations.set(button,{count:1,disabled:button.disabled});
-    button.classList.add("operation-busy");
-    button.setAttribute("aria-busy","true");
-    button.disabled=true;
+function hideToast(){
+  clearTimeout(toastTimer);
+  show("toast",false);
+}
+function scheduleToast(){
+  clearTimeout(toastTimer);
+  const target=$("toast");
+  if(!target.hidden&&!target.matches(":hover, :focus-within")){
+    toastTimer=setTimeout(hideToast,target.dataset.kind==="error"?10000:5000);
   }
-  foregroundCount++;
-  const label=method==="GET"?"Загружаем данные…":method==="DELETE"?"Удаляем…":"Сохраняем изменения…";
-  operationStatus(label);
-  return ()=>{
-    const current=buttonOperations.get(button);
-    if(current&&--current.count===0){
-      button.classList.remove("operation-busy");
-      button.removeAttribute("aria-busy");
-      button.disabled=current.disabled;
-      buttonOperations.delete(button);
+}
+$("toast-close").addEventListener("click",hideToast);
+for(const type of ["pointerenter","pointerleave","focusin","focusout"]){
+  $("toast").addEventListener(type,()=>queueMicrotask(scheduleToast));
+}
+function toast(message,isError=false){
+  if(!message||message===sessionEndedMessage||isError&&message===connectionProblem)return;
+  syncFeedbackContainer();
+  $("toast").dataset.kind=isError?"error":"success";
+  $("toast-message").setAttribute("role",isError?"alert":"status");
+  show("toast",true);
+  $("toast-message").textContent=message;
+  scheduleToast();
+}
+function renderOperationStatus(){
+  let message=connectionProblem;
+  if(!message){
+    for(const operation of activeOperations.values()){
+      if(operation.visible)message=operation.message;
     }
-    foregroundCount=Math.max(0,foregroundCount-1);
-    if(!foregroundCount&&!networkFailed)operationStatus("");
-  };
+  }
+  const region=$("operation-status");
+  if(region.textContent!==message)region.textContent=message;
+  region.dataset.kind=connectionProblem?"error":"working";
+  show("operation-status",Boolean(message));
+}
+async function runOperation(button,message,action,owner=button){
+  if(activeOperations.has(owner)||button?.disabled)return;
+  const operation={message,visible:false};
+  activeOperations.set(owner,operation);
+  button?.classList.add("operation-busy");
+  button?.setAttribute("aria-busy","true");
+  button?.setAttribute("aria-disabled","true");
+  const timer=setTimeout(()=>{
+    operation.visible=true;
+    syncFeedbackContainer();
+    renderOperationStatus();
+  },250);
+  try{await action();}
+  catch(error){toast(error.message,true);}
+  finally{
+    clearTimeout(timer);
+    activeOperations.delete(owner);
+    button?.classList.remove("operation-busy");
+    button?.removeAttribute("aria-busy");
+    button?.removeAttribute("aria-disabled");
+    renderOperationStatus();
+  }
+}
+function onOperation(control,message,action){
+  const isForm=control.tagName==="FORM";
+  control.addEventListener(isForm?"submit":"click",event=>{
+    if(isForm&&event.submitter?.value==="cancel")return;
+    if(isForm)event.preventDefault();
+    const button=isForm
+      ?event.submitter||control.querySelector('button[type="submit"],button:not([type])')
+      :control;
+    void runOperation(button,message,()=>action(event),control);
+  });
 }
 window.addEventListener("offline",()=>{
-  networkFailed=true;operationStatus("Нет сети. Проверьте подключение.","error");
+  connectionProblem=browserOfflineMessage;
+  renderOperationStatus();
 });
-window.addEventListener("online",()=>{
-  networkFailed=false;
-  operationStatus(foregroundCount?"Восстанавливаем соединение…":"","working");
-});
-async function api(path, method = "GET", body) {
-  const finish=beginRequest(path,method);
-  try{
-    const opts = {method, credentials:"same-origin", headers:{"Accept":"application/json"}};
-    if(path.startsWith("/api/update/"))opts.cache="no-store";
-    if(body !== undefined) { opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(body); }
-    let response;
-    try {response=await fetch(path, opts);}
-    catch(error){
-      networkFailed=true;
-      operationStatus("Сервер недоступен. Проверьте подключение.","error");
-      throw new Error("Нет связи с сервером. Проверьте сеть.");
-    }
-    if(networkFailed){networkFailed=false;operationStatus("");}
-    if(response.status === 401 && path !== "/api/login") { enterLogin(); throw new Error("Сеанс завершился. Войдите снова."); }
-    if(!response.ok) {
-      let detail = response.statusText;
-      try { const error=await response.json(); detail=typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail); } catch {}
-      throw new Error(detail || "Ошибка запроса");
-    }
-    return response.json();
-  } finally {finish();}
+window.addEventListener("online",()=>{void api("/health").catch(()=>{});});
+async function api(path,method="GET",body){
+  const opts={method,credentials:"same-origin",headers:{"Accept":"application/json"}};
+  if(path.startsWith("/api/update/"))opts.cache="no-store";
+  if(body instanceof FormData)opts.body=body;
+  else if(body instanceof Blob){
+    opts.headers["Content-Type"]="application/octet-stream";
+    opts.body=body;
+  }
+  else if(body!==undefined){
+    opts.headers["Content-Type"]="application/json";
+    opts.body=JSON.stringify(body);
+  }
+  let response;
+  try{response=await fetch(path,opts);}
+  catch{
+    connectionProblem=navigator.onLine===false?browserOfflineMessage:serverOfflineMessage;
+    renderOperationStatus();
+    throw new Error(connectionProblem);
+  }
+  if(connectionProblem&&navigator.onLine!==false){
+    connectionProblem="";
+    renderOperationStatus();
+  }
+  if(response.status===401&&path!=="/api/login"){
+    if(!$("app-root").hidden)enterLogin(sessionEndedMessage);
+    throw new Error(sessionEndedMessage);
+  }
+  if(!response.ok){
+    const error=await response.json().catch(()=>null);
+    const detail=error?.detail;
+    const message=typeof detail==="string"?detail:
+      Array.isArray(detail)?"Проверьте поля формы и повторите попытку.":"Ошибка запроса ("+response.status+").";
+    throw Object.assign(new Error(message),{status:response.status});
+  }
+  return response.json();
 }
-function enterLogin() {
+function enterLogin(message="") {
   closeNavigation();
+  for(const dialog of document.querySelectorAll("dialog[open]"))dialog.close();
+  hideToast();
   show("login-screen",true); show("app-root",false); $("password").value="";
+  $("login-error").textContent=message;
 }
 function enterApp(session) {
   panelOpened=true;
@@ -788,14 +826,14 @@ function renderReportSubscriptions(schedules){
     if(item.last_delivered_at)info.append(el("small","","Последнее принято MAX: "+when(item.last_delivered_at)));
     const actions=el("div","report-schedule-actions");
     const toggle=el("button","btn secondary",item.enabled?"Выключить":"Включить");
-    toggle.type="button";toggle.addEventListener("click",async()=>{
+    toggle.type="button";onOperation(toggle,"Обновляем расписание…",async()=>{
       try{
         await api("/api/reports/subscriptions/"+item.id,"PATCH",{enabled:!item.enabled});
         await loadReportSubscriptions();toast("Расписание обновлено");
       }catch(error){toast(error.message,true);}
     });
     const remove=el("button","btn secondary","Удалить");
-    remove.type="button";remove.addEventListener("click",async()=>{
+    remove.type="button";onOperation(remove,"Удаляем расписание…",async()=>{
       if(!confirm("Удалить расписание отчётов для «"+title+"»?"))return;
       try{
         await api("/api/reports/subscriptions/"+item.id,"DELETE");
@@ -869,7 +907,7 @@ function renderMaxStaff(){
     const update=el("button","btn secondary max-staff-refresh","Обновить ФИО");
     update.type="button";
     update.title="Повторно запросить имя и фамилию у MAX";
-    update.addEventListener("click",()=>refreshMaxStaffProfile(user,update));
+    onOperation(update,"Обновляем имя сотрудника…",()=>refreshMaxStaffProfile(user,update));
     const assign=el("button","btn secondary max-staff-assign","Назначить кабинеты");
     assign.type="button";
     assign.addEventListener("click",()=>openMaxAssignment(user));
@@ -972,7 +1010,7 @@ function renderRooms(){
         const remove=el("button","max-unbind","Отвязать");
         remove.type="button";
         remove.title="Отвязать пользователя "+maxUserName(user)+" от "+room.name;
-        remove.addEventListener("click",()=>unbindMax(room,user));
+        onOperation(remove,"Снимаем привязку MAX…",()=>unbindMax(room,user));
         entry.append(details,remove);list.append(entry);
       }
       maxCell.append(list);
@@ -985,12 +1023,12 @@ function renderRooms(){
     if(room.active){
       const edit=el("button","","Изменить"),pair=el("button","","Код MAX"),disable=el("button","","Отключить");
       edit.addEventListener("click",()=>openRoom(room));
-      pair.addEventListener("click",()=>pairing(room));
-      disable.addEventListener("click",()=>disableRoom(room));
+      onOperation(pair,"Создаём код MAX…",()=>pairing(room));
+      onOperation(disable,"Отключаем помещение…",()=>disableRoom(room));
       actions.prepend(edit);actions.append(pair,disable);
     }else{
       const restore=el("button","","Восстановить");
-      restore.addEventListener("click",()=>restoreRoom(room));
+      onOperation(restore,"Восстанавливаем помещение…",()=>restoreRoom(room));
       actions.append(restore);
     }
     for(const detail of row.cells)detail.setAttribute("role","cell");
@@ -1016,7 +1054,7 @@ function renderReadings(){
       row.corrections_count?"История ("+row.corrections_count+")":"Подробнее");
     history.type="button";
     history.setAttribute("aria-label","История показания: "+row.building+" / "+row.room_name);
-    history.addEventListener("click",()=>openReadingHistory(row));
+    onOperation(history,"Загружаем историю показания…",()=>openReadingHistory(row));
     actions.append(history);tr.append(actions);tbody.append(tr);
   }
   show("readings-empty",readings.length===0);
@@ -1056,7 +1094,7 @@ function drawChart(){
   });
 }
 
-async function refresh() {
+async function refresh({background=false}={}) {
   if(refreshBusy)return;
   refreshBusy=true;
   try {
@@ -1069,22 +1107,22 @@ async function refresh() {
       allRooms=all;maxStaff=staff;
       renderRooms();renderMaxStaff();
     }
-    await Promise.all([refreshHistory(),buildingScope?undefined:refreshReadings()]);
+    await Promise.all([refreshHistory(),buildingScope?undefined:refreshReadings({background})]);
     const updated=$("updated-at");
     updated.dateTime=dash.generated_at;
     updated.textContent="Обновлено "+when(dash.generated_at);
     updated.hidden=false;
-  } catch(error) {toast(error.message,true);}
+  } catch(error) {if(!background)toast(error.message,true);}
   finally {refreshBusy=false;}
 }
-async function refreshReadings(){
+async function refreshReadings({background=false}={}){
   const request=++readingRequestId,room=$("reading-filter").value;
   try{
     const result=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));
     if(request!==readingRequestId)return;
     readings=result;
     renderReadings();
-  }catch(error){if(request===readingRequestId)toast(error.message,true);}
+  }catch(error){if(request===readingRequestId&&!background)toast(error.message,true);}
 }
 function openReading({building="",room=""}={}){
   $("reading-form").reset();
@@ -1127,8 +1165,8 @@ async function disableRoom(room) {
   try {await api("/api/rooms/"+room.id,"PATCH",{active:false});await refresh();toast("Помещение отключено");}
   catch(error){toast(error.message,true);}
 }
-$("login-form").addEventListener("submit",async event=>{
-  event.preventDefault();$("login-error").textContent="";
+onOperation($("login-form"),"Входим в панель…",async()=>{
+  $("login-error").textContent="";
   try{
     const session=await api("/api/login","POST",{username:$("login-name").value,password:$("password").value});
     if(panelOpened)window.location.reload();
@@ -1136,11 +1174,11 @@ $("login-form").addEventListener("submit",async event=>{
   }
   catch(error){$("login-error").textContent=error.message;}
 });
-$("logout").addEventListener("click",async()=>{
+onOperation($("logout"),"Завершаем сеанс…",async()=>{
   try{await api("/api/logout","POST");window.location.reload();}
   catch(error){toast(error.message,true);}
 });
-$("refresh").addEventListener("click",refresh);
+onOperation($("refresh"),"Обновляем данные панели…",()=>refresh());
 for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
   const name=nav.dataset.tab;
   const changed=setTab(name);
@@ -1158,7 +1196,10 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
   if(name==="reports")void loadReports().catch(error=>toast(error.message,true));
   if(name==="sensors")refreshSensors();
-  if(name==="settings"&&!settingsDirty())loadSettings();
+  if(name==="settings"){
+    if(!settingsDirty()||!settingsLoaded)void loadSettings();
+    if(selectedSettingsCategory==="notifications")void loadNotificationCenter();
+  }
 });
 $("search-rooms").addEventListener("input",renderOverview);
 $("overview-status").addEventListener("change",renderOverview);
@@ -1184,7 +1225,7 @@ $("quick-reading").addEventListener("click",()=>openReading({building:$("buildin
 $("add-reading").addEventListener("click",()=>openReading({room:$("reading-filter").value}));
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
-$("report-filter-form").addEventListener("submit",event=>{event.preventDefault();void loadReport();});
+onOperation($("report-filter-form"),"Формируем отчёт…",loadReport);
 $("report-filter-form").addEventListener("change",()=>{
   reportRequestId++;
   clearReport("Нажмите «Сформировать», чтобы обновить отчёт.");
@@ -1197,7 +1238,7 @@ for(const button of document.querySelectorAll("[data-report-section]")){
 $("report-sub-frequency").addEventListener("change",()=>{
   show("report-sub-weekday-wrapper",$("report-sub-frequency").value==="weekly");
 });
-$("report-sub-form").addEventListener("submit",async event=>{
+onOperation($("report-sub-form"),"Сохраняем расписание отчётов…",async event=>{
   event.preventDefault();
   const user_id=$("report-sub-user").value;
   if(!user_id){toast("Выберите получателя MAX",true);return;}
@@ -1211,11 +1252,12 @@ $("report-sub-form").addEventListener("submit",async event=>{
     await loadReportSubscriptions();toast("Расписание отчётов добавлено");
   }catch(error){toast(error.message,true);}
 });
-$("open-staff").addEventListener("click",()=>{
-  if(setTab("staff"))void loadMaxStaff().catch(error=>toast(error.message,true));
+onOperation($("open-staff"),"Загружаем сотрудников…",async()=>{
+  if(setTab("staff"))await loadMaxStaff();
 });
-$("staff-refresh").addEventListener("click",()=>{
-  void loadMaxStaff().then(()=>toast("Список сотрудников обновлён")).catch(error=>toast(error.message,true));
+onOperation($("staff-refresh"),"Обновляем список сотрудников…",async()=>{
+  await loadMaxStaff();
+  toast("Список сотрудников обновлён");
 });
 $("max-users-search").addEventListener("input",renderMaxStaff);
 $("max-users-unassigned").addEventListener("change",renderMaxStaff);
@@ -1229,8 +1271,7 @@ $("max-assignment-all").addEventListener("change",event=>{
   }
   renderMaxAssignment();
 });
-$("max-user-rooms-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("max-user-rooms-form"),"Сохраняем назначения…",async()=>{
   if(!selectedMaxStaff)return;
   const button=$("max-assignment-save");button.disabled=true;
   const notify=$("max-assignment-notify").checked;
@@ -1256,9 +1297,7 @@ $("copy-pairing").addEventListener("click",async()=>{
   try{await navigator.clipboard.writeText("/bind "+$("pairing-code").textContent);toast("Команда скопирована");}
   catch{toast("Скопируйте команду вручную",true);}
 });
-$("room-form").addEventListener("submit",async event=>{
-  if(event.submitter?.value==="cancel")return;
-  event.preventDefault();
+onOperation($("room-form"),"Сохраняем помещение…",async()=>{
   const roomId=$("edit-room-id").value;
   const data={building:$("room-building").value.trim(),floor:$("room-floor").value.trim(),
     name:$("room-name").value.trim(),kind:$("room-kind").value.trim(),
@@ -1268,9 +1307,7 @@ $("room-form").addEventListener("submit",async event=>{
     $("room-dialog").close();await refresh();toast("Помещение сохранено");}
   catch(error){toast(error.message,true);}
 });
-$("reading-form").addEventListener("submit",async event=>{
-  if(event.submitter?.value==="cancel")return;
-  event.preventDefault();
+onOperation($("reading-form"),"Записываем показание…",async()=>{
   try{await api("/api/readings","POST",{room_id:Number($("reading-room").value),value:Number($("reading-value").value)});
     $("reading-dialog").close();await refresh();toast("Показание записано");}
   catch(error){toast(error.message,true);}
@@ -1286,6 +1323,7 @@ const settingsGroups = {
   backups:["maintenance-form"],tls:["tls-form","sensor-ca-form"],calendar:["calendar-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
+const settingsEditRevision=new WeakMap();
 const settingsCategory=$("settings-category");
 for(const button of document.querySelectorAll(".settings-nav-button")){
   option(settingsCategory,button.dataset.settingsTarget,button.textContent.trim());
@@ -1310,6 +1348,7 @@ function markSettingsSaved(form,message){
   updateDirtyNavigation();
 }
 function markSettingsDirty(form){
+  settingsEditRevision.set(form,(settingsEditRevision.get(form)||0)+1);
   form.dataset.dirty="true";
   const feedback=form.querySelector(".settings-save-feedback");
   if(feedback){feedback.textContent="Есть несохранённые изменения";feedback.dataset.state="unsaved";}
@@ -1409,6 +1448,7 @@ async function loadSettings() {
     syncNotificationControls();
     renderSettingsSummary();
     updateDirtyNavigation();
+    updateNotificationPreview();
     await Promise.all([loadUpdateStatus(),loadBackups()]);
     if(selectedSettingsCategory==="max")void loadMaxDiagnostics();
   } catch(error){toast(error.message,true);}
@@ -1426,20 +1466,18 @@ async function loadSensorCa(){
     $("sensor-ca-remove").disabled=state.source!=="upload";
   }catch(error){$("sensor-ca-status").textContent=error.message;}
 }
-$("sensor-ca-form").addEventListener("submit",async event=>{
-  event.preventDefault();const form=event.currentTarget,button=form.querySelector("button");
-  button.disabled=true;const finish=beginRequest("/api/tls/sensor-ca","POST");
+onOperation($("sensor-ca-form"),"Проверяем сертификаты датчиков…",async event=>{
+  const form=event.currentTarget;
   try{
-    const response=await fetch("/api/tls/sensor-ca",{method:"POST",credentials:"same-origin",body:new FormData(form)});
-    if(response.status===401){enterLogin();throw Error("Сеанс завершился");}
-    const data=await response.json();
-    if(!response.ok)throw Error(typeof data.detail==="string"?data.detail:"Не удалось загрузить CA");
+    const data=await api("/api/tls/sensor-ca","POST",new FormData(form));
     form.reset();markSettingsSaved(form,"CA сохранены");await loadSensorCa();
-    toast(data.chain_matches===false?"CA сохранены, но цепочка не совпадает":"Сертификаты датчиков сохранены",data.chain_matches===false);
-  }catch(error){form.querySelector(".settings-save-feedback").textContent=error.message;toast(error.message,true);}
-  finally{button.disabled=false;finish();}
+    if(data.chain_matches===false){
+      setFeedback("sensor-ca-feedback","Сертификаты сохранены. Цепочка текущего сервера отличается.","warning");
+      toast("Сертификаты сохранены. Цепочка текущего сервера отличается.",true);
+    }else toast("Сертификаты датчиков сохранены");
+  }catch(error){setFeedback("sensor-ca-feedback",error.message,"error");toast(error.message,true);}
 });
-$("sensor-ca-remove").addEventListener("click",async()=>{
+onOperation($("sensor-ca-remove"),"Удаляем сертификаты датчиков…",async()=>{
   if(!confirm("Удалить CA датчиков? Платы могут потерять связь после изменения цепочки."))return;
   try{await api("/api/tls/sensor-ca","DELETE");await loadSensorCa();toast("CA удалены");}catch(error){toast(error.message,true);}
 });
@@ -1480,23 +1518,13 @@ async function loadTlsStatus(){
     $("tls-status").textContent="Не удалось проверить HTTPS: "+error.message;
   }
 }
-$("tls-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("tls-form"),"Загружаем и проверяем сертификат…",async event=>{
   const form=event.currentTarget;
   if(!$("tls-certificate").files.length&&!$("tls-key").files.length){
     toast("Выберите сертификат или ключ",true);return;
   }
-  const finish=beginRequest("/api/tls/certificate","POST");
   try{
-    const response=await fetch("/api/tls/certificate",{
-      method:"POST",credentials:"same-origin",
-      headers:{"Accept":"application/json"},body:new FormData(form)
-    });
-    if(response.status===401){enterLogin();throw Error("Сеанс завершился. Войдите снова.");}
-    if(!response.ok){
-      const body=await response.json().catch(()=>({}));
-      throw Error(typeof body.detail==="string"?body.detail:"Ошибка загрузки сертификата");
-    }
+    await api("/api/tls/certificate","POST",new FormData(form));
     form.reset();
     markSettingsSaved(form,"Сертификат проверен и сохранён");
     toast("Сертификат сохранён. Примените настройки.");
@@ -1505,9 +1533,9 @@ $("tls-form").addEventListener("submit",async event=>{
     $("tls-feedback").textContent="Не сохранено: "+error.message;
     $("tls-feedback").dataset.state="error";
     toast(error.message,true);
-  }finally{finish();}
+  }
 });
-$("tls-remove").addEventListener("click",async()=>{
+onOperation($("tls-remove"),"Удаляем сертификат…",async()=>{
   if(!confirm("Убрать загруженный сертификат? После применения сайт может переключиться на HTTP."))return;
   try{
     await api("/api/tls/certificate","DELETE");
@@ -1515,7 +1543,7 @@ $("tls-remove").addEventListener("click",async()=>{
     toast("Сертификат удалён. Примените настройки.");
   }catch(error){toast(error.message,true);}
 });
-$("tls-apply").addEventListener("click",async()=>{
+onOperation($("tls-apply"),"Применяем настройки HTTPS…",async()=>{
   if(!tlsCache?.restart_pending)return;
   const mode=tlsCache.configured?"HTTPS":"HTTP";
   if(!confirm("Перезапустить панель с протоколом "+mode+"? Адрес страницы может измениться."))return;
@@ -1530,11 +1558,9 @@ $("tls-apply").addEventListener("click",async()=>{
 /* Merge only the current form's fields into fresh settings from the server.
    Other categories and secrets are not inadvertently overwritten. */
 async function saveSettingsPatch(form,patch,message){
-  const button=form.querySelector('button[type="submit"]');
-  if(button.disabled)return;
-  button.disabled=true;
-  const originalText=button.textContent;
-  button.textContent="Сохраняем…";
+  const revision=settingsEditRevision.get(form);
+  const feedback=form.querySelector(".settings-save-feedback");
+  setFeedback(feedback.id,"Сохраняем…","working");
   try{
     const latest=await api("/api/settings");
     const data={...latest,...patch};
@@ -1545,21 +1571,18 @@ async function saveSettingsPatch(form,patch,message){
     settingsCache=await api("/api/settings","PUT",data);
     renderSettingsSummary();
     document.title=settingsCache.organization_name+" — Термоконтур";
-    markSettingsSaved(form,message);
-    toast(message);
+    if(revision===settingsEditRevision.get(form)){
+      markSettingsSaved(form,message);
+      toast(message);
+    }
     return true;
   }catch(error){
-    const feedback=form.querySelector(".settings-save-feedback");
-    if(feedback){feedback.textContent="Не сохранено: "+error.message;feedback.dataset.state="error";}
+    setFeedback(feedback.id,"Не сохранено. "+error.message,"error");
     toast(error.message,true);
     return false;
-  }finally{
-    button.disabled=false;
-    button.textContent=originalText;
   }
 }
-$("general-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("general-settings-form"),"Сохраняем настройки организации…",async event=>{
   const saved=await saveSettingsPatch(event.currentTarget,{
     organization_name:$("setting-organization").value.trim(),
     timezone:$("setting-timezone").value.trim(),
@@ -1567,8 +1590,7 @@ $("general-settings-form").addEventListener("submit",async event=>{
   },"Настройки организации сохранены");
   if(saved)await refresh();
 });
-$("reminders-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("reminders-settings-form"),"Сохраняем напоминания…",async event=>{
   const days=[...document.querySelectorAll('[name="remind-day"]:checked')].map(x=>Number(x.value));
   const saved=await saveSettingsPatch(event.currentTarget,{
     reminders_enabled:$("setting-enabled").checked,
@@ -1578,48 +1600,64 @@ $("reminders-settings-form").addEventListener("submit",async event=>{
   },"Расписание напоминаний сохранено");
   if(saved)await refresh();
 });
-$("alerts-settings-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("alerts-settings-form"),"Сохраняем температурные предупреждения…",async event=>{
   await saveSettingsPatch(event.currentTarget,{
     alerts_enabled:$("setting-alerts-enabled").checked,
     alert_cooldown_minutes:Number($("setting-alert-cooldown").value)
   },"Температурные уведомления сохранены");
 });
-/* Targeted MAX notifications: no HTML interpolation of untrusted user names. */
-let notificationPeople=[], notificationSelected=new Set(), notificationRequestId=null, notificationSending=false;
-function notificationTargetIds(){
+/* Targeted MAX notifications use the same recipient snapshot for preview and sending. */
+let notificationPeople=[], notificationSelected=new Set();
+let recipientState="loading", recipientFailure="", notificationSending=false;
+let notificationHistoryBusy=false, renderedNotificationHistory="";
+let lastNotificationDraft=null;
+function notificationTargets(){
   const mode=$("notification-audience").value;
+  const building=$("notification-building").value;
   return notificationPeople.filter(person=>{
     if(mode==="missing")return person.missing;
-    if(mode==="building")return person.rooms.some(room=>room.building===$("notification-building").value);
+    if(mode==="building")return person.rooms.some(room=>room.building===building);
     if(mode==="selected")return notificationSelected.has(person.user_id);
     return true;
-  }).map(person=>person.user_id);
+  });
 }
 function updateNotificationPreview(){
   const mode=$("notification-audience").value;
-  $("notification-building-wrap").hidden=mode!=="building";
-  $("notification-selected-wrap").hidden=mode!=="selected";
-  const chosen=new Set(notificationTargetIds());
-  const people=notificationPeople.filter(x=>chosen.has(x.user_id));
-  const allowed=!!settingsCache?.max_token_configured;
-  $("notification-recipient-summary").textContent=people.length
-    ?"Получателей: "+people.length+(people.length>250?" (максимум 250 за отправку)":"")
-    :"В выбранной группе нет подключённых сотрудников.";
-  $("notification-recipient-names").textContent=people.length
-    ?people.slice(0,8).map(x=>x.name).join(", ")+(people.length>8?" и ещё "+(people.length-8):"")
-    :"Сотрудник появится здесь после привязки MAX к активному помещению.";
-  $("notification-text-count").textContent=$("notification-text").value.length+" / 2000";
-  $("notification-send").disabled=!allowed||people.length===0||people.length>250||notificationSending;
-  if(!allowed)$("notification-send-feedback").textContent="Сначала настройте токен на вкладке «Бот MAX».";
+  show("notification-building-wrap",mode==="building");
+  show("notification-selected-wrap",mode==="selected");
+  const people=notificationTargets(), count=people.length, ready=recipientState==="ready";
+  const draft=$("notification-text").value;
+  let summary="Загружаем получателей…", state="working";
+  if(recipientState==="error"){
+    summary="Не удалось загрузить получателей. "+recipientFailure;
+    state="error";
+  }else if(ready){
+    state=count===0||count>250?"warning":"ready";
+    if(count>250)summary="Получателей: "+count+". Максимум за отправку — 250.";
+    else if(count)summary="Получателей: "+count;
+    else if(mode==="building"&&!$("notification-building").value)summary="Выберите корпус.";
+    else if(mode==="selected")summary="Отметьте сотрудников в списке.";
+    else summary="В этой группе нет получателей.";
+  }
+  setFeedback("notification-recipient-summary",summary,state);
+  setFeedback("notification-recipient-names",ready&&count
+    ?people.slice(0,8).map(person=>person.name).join(", ")+(count>8?" и ещё "+(count-8):"")
+    :"");
+  setFeedback("notification-text-count",draft.length+" / 2000");
+  $("notification-draft").disabled=notificationSending;
+  $("notification-refresh-recipients").disabled=notificationSending;
+  $("notification-send").disabled=!settingsCache?.max_token_configured||!ready||
+    count===0||count>250||!draft.trim()||notificationSending;
+  show("notification-token-hint",settingsCache?.max_token_configured===false);
 }
 function renderNotificationPeople(){
-  const buildings=[...new Set(notificationPeople.flatMap(p=>p.rooms.map(r=>r.building)))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const buildings=[...new Set(notificationPeople.flatMap(person=>person.rooms.map(room=>room.building)))];
+  buildings.sort((a,b)=>a.localeCompare(b,"ru"));
   const building=$("notification-building"),previous=building.value;
-  building.replaceChildren(...buildings.map(value=>{
-    const option=el("option","",value);option.value=value;return option;
-  }));
-  if(buildings.includes(previous))building.value=previous;
+  building.replaceChildren();
+  option(building,"","Выберите корпус");
+  for(const name of buildings)option(building,name,name);
+  building.value=buildings.includes(previous)?previous:"";
   const list=$("notification-selected-users");
   list.replaceChildren();
   for(const person of notificationPeople){
@@ -1631,101 +1669,135 @@ function renderNotificationPeople(){
     checkbox.addEventListener("change",()=>{
       if(checkbox.checked)notificationSelected.add(person.user_id);
       else notificationSelected.delete(person.user_id);
-      notificationRequestId=null;
       updateNotificationPreview();
     });
     const info=el("span","notification-user-info");
     info.append(el("strong","",person.name),
-      el("small","",person.rooms.map(r=>r.building+" / "+r.name).join(" · ")));
+      el("small","",person.rooms.map(room=>room.building+" / "+room.name).join(" · ")));
     if(person.missing)info.append(el("small","notification-missing","Есть кабинеты без показаний за сегодня"));
     label.append(checkbox,info);
     list.append(label);
   }
-  updateNotificationPreview();
 }
+let recipientsLoading=false;
 async function loadNotificationRecipients(){
+  if(recipientsLoading||notificationSending)return;
+  recipientsLoading=true;
+  recipientState="loading";
+  updateNotificationPreview();
   try{
     notificationPeople=await api("/api/notifications/recipients");
-    notificationSelected=new Set([...notificationSelected].filter(uid=>notificationPeople.some(p=>p.user_id===uid)));
+    const ids=new Set(notificationPeople.map(person=>person.user_id));
+    notificationSelected=new Set([...notificationSelected].filter(uid=>ids.has(uid)));
     renderNotificationPeople();
+    recipientState="ready";
   }catch(error){
-    $("notification-recipient-summary").textContent="Не удалось получить список сотрудников: "+error.message;
-    $("notification-send").disabled=true;
+    recipientFailure=error.message;
+    recipientState="error";
+  }finally{
+    recipientsLoading=false;
+    updateNotificationPreview();
   }
 }
+function renderNotificationHistory(batches){
+  const target=$("notification-history");
+  const entries=batches.map(item=>{
+    const entry=el("div","notification-history-item");
+    const top=el("div","notification-history-top");
+    top.append(el("strong","",when(item.created_at)),
+      el("span","",item.silent?"Тихое уведомление":"Обычное уведомление"));
+    const delivery=el("div","notification-delivery");
+    if(item.delivered>0)delivery.append(el("span","notification-badge accepted","Принято MAX: "+item.delivered+" из "+item.recipients));
+    const waiting=item.recipients-item.delivered-item.retrying;
+    if(waiting>0)delivery.append(el("span","notification-badge queued","В очереди: "+waiting));
+    if(item.retrying>0)delivery.append(el("span","notification-badge retrying","Повторная отправка: "+item.retrying));
+    entry.append(top,el("p","notification-history-message",item.text),delivery);
+    return entry;
+  });
+  target.replaceChildren(...entries);
+}
 async function loadNotificationHistory(){
+  if(notificationHistoryBusy)return;
+  notificationHistoryBusy=true;
   try{
     const batches=await api("/api/notifications/history");
-    const target=$("notification-history");target.replaceChildren();
-    if(!batches.length){
-      target.append(el("p","hint","Сообщений пока нет."));
-      return;
+    const snapshot=JSON.stringify(batches);
+    if(snapshot!==renderedNotificationHistory){
+      renderNotificationHistory(batches);
+      renderedNotificationHistory=snapshot;
     }
-    for(const item of batches){
-      const entry=el("div","notification-history-item");
-      const top=el("div","notification-history-top");
-      top.append(el("strong","",when(item.created_at)),
-        el("span","",item.silent?"Тихое уведомление":"Обычное уведомление"));
-      const remaining=item.recipients-item.delivered;
-      entry.append(top,el("p","notification-history-message",item.text),
-        el("small","", "Доставлено: "+item.delivered+" из "+item.recipients+
-          (remaining?" · в очереди: "+remaining:"")+
-          (item.retrying?" · повторяем доставку: "+item.retrying:"")));
-      target.append(entry);
-    }
-  }catch(error){$("notification-history").textContent="Ошибка загрузки истории: "+error.message;}
+    setFeedback("notification-history-status",batches.length?"":"Сообщений пока нет.");
+  }catch(error){
+    setFeedback("notification-history-status","Не удалось обновить историю отправок. "+error.message,"error");
+  }finally{notificationHistoryBusy=false;}
 }
 async function loadNotificationCenter(){
   await Promise.all([loadNotificationRecipients(),loadNotificationHistory()]);
 }
-$("notification-audience").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
-$("notification-building").addEventListener("change",()=>{notificationRequestId=null;updateNotificationPreview();});
-for(const id of ["notification-text","notification-silent"])
-  $(id).addEventListener("input",()=>{notificationRequestId=null;updateNotificationPreview();});
-$("notification-refresh-recipients").addEventListener("click",loadNotificationRecipients);
-$("notification-refresh-history").addEventListener("click",loadNotificationHistory);
-$("notification-compose-form").addEventListener("submit",async event=>{
-  event.preventDefault();
-  if(notificationSending)return;
-  const user_ids=notificationTargetIds();
-  const text=$("notification-text").value.trim();
-  if(!text){toast("Введите текст уведомления",true);return;}
-  if(!user_ids.length||user_ids.length>250){toast("Выберите от 1 до 250 получателей",true);return;}
+for(const id of ["notification-audience","notification-building","notification-text","notification-silent"]){
+  $(id).addEventListener("input",()=>{
+    if($("notification-send-feedback").dataset.state==="saved")setFeedback("notification-send-feedback","");
+    updateNotificationPreview();
+  });
+}
+onOperation($("notification-refresh-recipients"),"Обновляем список получателей…",loadNotificationRecipients);
+onOperation($("notification-refresh-history"),"Обновляем историю отправок…",loadNotificationHistory);
+onOperation($("notification-compose-form"),"Ставим сообщение в очередь MAX…",async()=>{
+  if(notificationSending||recipientState!=="ready"||!settingsCache?.max_token_configured)return;
+  const user_ids=notificationTargets().map(person=>person.user_id).sort();
+  const text=$("notification-text").value.trim(), silent=$("notification-silent").checked;
+  if(!text||!user_ids.length||user_ids.length>250)return;
   if(!confirm("Отправить сообщение через MAX для "+user_ids.length+" сотрудников?\n\n"+text.slice(0,240)))return;
-  const request_id=notificationRequestId||("notify-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,12));
-  notificationRequestId=request_id;
-  notificationSending=true;updateNotificationPreview();
-  const feedback=$("notification-send-feedback");
-  feedback.textContent="Сохраняем рассылку в очередь…";
+  const signature=JSON.stringify([text,user_ids,silent]);
+  if(lastNotificationDraft?.signature!==signature){
+    const id=crypto.randomUUID?.()||("notify-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,12));
+    lastNotificationDraft={signature,id};
+  }
+  notificationSending=true;
+  updateNotificationPreview();
+  setFeedback("notification-send-feedback","Сохраняем сообщение в очереди MAX…","working");
+  let refreshRecipients=false;
   try{
     const result=await api("/api/notifications/send","POST",{
-      request_id,text,user_ids,silent:$("notification-silent").checked
+      request_id:lastNotificationDraft.id,text,user_ids,silent
     });
-    feedback.textContent=result.already_queued
-      ?"Сообщение уже в очереди."
-      :"Поставлено в очередь: "+result.queued+". Ожидается отправка через MAX.";
+    setFeedback("notification-send-feedback",result.already_queued
+      ?"Сервер уже принял эту рассылку. Статусы доступны в истории."
+      :"Добавлено в очередь MAX. Получателей: "+result.queued+".","saved");
     $("notification-text").value="";
-    notificationRequestId=null;
-    toast("Сообщение поставлено в очередь для "+result.queued+" сотрудников");
+    lastNotificationDraft=null;
     await loadNotificationHistory();
-  }catch(error){feedback.textContent="Ошибка: "+error.message;toast(error.message,true);}
-  finally{notificationSending=false;updateNotificationPreview();}
+  }catch(error){
+    setFeedback("notification-send-feedback","Не удалось подтвердить постановку в очередь. "+error.message,"error");
+    if(error.status===409){
+      settingsCache.max_token_configured=false;
+      renderSettingsSummary();
+    }
+    refreshRecipients=error.status===422;
+  }finally{
+    notificationSending=false;
+    updateNotificationPreview();
+  }
+  if(refreshRecipients)await loadNotificationRecipients();
 });
+setInterval(()=>{
+  if(selectedTab==="settings"&&selectedSettingsCategory==="notifications"&&
+      !$("app-root").hidden&&!document.hidden)void loadNotificationHistory();
+},5000);
 
-
-$("max-settings-form").addEventListener("submit",async event=>{
+onOperation($("max-settings-form"),"Сохраняем токен MAX…",async event=>{
   event.preventDefault();
   const value=$("setting-max-token").value.trim();
   if(!value){toast("Введите токен",true);return;}
   try{await api("/api/settings/max-token","PUT",{value});$("setting-max-token").value="";await loadSettings();toast("Токен сохранён");}
   catch(error){toast(error.message,true);}
 });
-$("clear-max-token").addEventListener("click",async()=>{
+onOperation($("clear-max-token"),"Отключаем MAX…",async()=>{
   if(!confirm("Отключить MAX-бота? Привязки кабинетов останутся."))return;
   try{await api("/api/settings/max-token","PUT",{value:null});await loadSettings();toast("MAX отключён");}
   catch(error){toast(error.message,true);}
 });
-$("rotate-ingest").addEventListener("click",async()=>{
+onOperation($("rotate-ingest"),"Создаём ключ приёма показаний…",async()=>{
   if(!confirm("Заменить ключ? Старый перестанет работать во всех датчиках."))return;
   try{
     const r=await api("/api/settings/ingest-key","POST");
@@ -1769,7 +1841,7 @@ function passwordFeedback(){
 }
 $("new-password").addEventListener("input",passwordFeedback);
 $("confirm-password").addEventListener("input",passwordFeedback);
-$("password-settings-form").addEventListener("submit",async event=>{
+onOperation($("password-settings-form"),"Меняем пароль…",async event=>{
   event.preventDefault();
   const old=$("old-password").value,pass=$("new-password").value;
   if(pass!==$("confirm-password").value){toast("Новые пароли не совпадают",true);return;}
@@ -1815,7 +1887,7 @@ $("bulk-rooms").addEventListener("click",()=>{
 $("close-bulk").addEventListener("click",()=>$("bulk-dialog").close());
 $("cancel-bulk").addEventListener("click",()=>$("bulk-dialog").close());
 for(const id of ["bulk-list","bulk-prefix"])$(id).addEventListener("input",previewBulk);
-$("bulk-form").addEventListener("submit",async event=>{
+onOperation($("bulk-form"),"Добавляем кабинеты…",async event=>{
   event.preventDefault();
   try{
     const names=bulkNames();
@@ -1836,6 +1908,7 @@ $("bulk-form").addEventListener("submit",async event=>{
 let updateAvailable=false, updateLatestRevision=null, updateLatestVersion=null;
 let updateInstalledRevision=null, updateState="idle", updateChecking=false;
 let updateRequesting=false, updatePolling=false, updateStartedHere=false;
+let updateSupported=false,updateActionRevision=0;
 const updatePhases=[
   ["preparing","Подготовка"],["downloading","Загрузка исходного кода"],
   ["dependencies","Установка зависимостей"],["backup","Резервная копия"],
@@ -1855,12 +1928,13 @@ const updateStateLabels={
 function renderUpdateStatus(r){
   const state=r.state||"idle", active=state==="queued"||state==="installing";
   updateState=state;
+  updateSupported=r.supported;
   if(!updateInstalledRevision&&r.installed_revision)updateInstalledRevision=r.installed_revision;
   if(Object.prototype.hasOwnProperty.call(r,"available")){
     updateAvailable=r.available===true;
+    updateLatestRevision=r.latest_revision||null;
+    updateLatestVersion=r.latest_version||null;
   }
-  if(r.latest_revision)updateLatestRevision=r.latest_revision;
-  if(r.latest_version)updateLatestVersion=r.latest_version;
   if(updateLatestRevision&&r.installed_revision===updateLatestRevision)updateAvailable=false;
   const version=r.installed_version||r.version;
   $("update-current-version").textContent=version?"v"+version:"Версия неизвестна";
@@ -1871,11 +1945,14 @@ function renderUpdateStatus(r){
     $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Сборка GitHub";
     $("update-latest-build").textContent=updateLatestRevision.slice(0,12)+
       (updateAvailable?" · доступна новая сборка":" · установлена");
+  }else{
+    $("update-latest-version").textContent="Не проверено";
+    $("update-latest-build").textContent="Проверьте наличие обновлений";
   }
   $("update-state").dataset.state=state;
   $("update-state-label").textContent=updateStateLabels[state]||"Состояние обновления";
   $("update-state-symbol").textContent=({idle:"○",queued:"◷",installing:"↻",success:"✓",failed:"!"})[state]||"○";
-  $("update-status-text").textContent=r.message||"Ожидаем сведения о системе.";
+  setFeedback("update-status-text",r.message||"Проверьте наличие обновлений на GitHub.");
   $("update-status-time").textContent=r.updated_at?"Последнее событие: "+when(r.updated_at):"";
   const stepIndex=updatePhases.findIndex(([phase])=>phase===r.phase);
   const step=state==="queued"?0:Math.max(1,stepIndex+1);
@@ -1916,79 +1993,88 @@ function renderUpdateStatus(r){
     historyList.append(row);
   }
   if(state==="failed")historyPanel.open=true;
-  const busy=active||updateRequesting;
-  $("check-update").disabled=!r.supported||busy||updateChecking;
-  $("install-update").disabled=!r.supported||!updateAvailable||busy||updateChecking;
-  $("check-update").classList.toggle("busy",updateChecking);
-  $("install-update").classList.toggle("busy",updateRequesting);
-  $("check-update").textContent=updateChecking?"Проверяем…":"Проверить обновления";
-  $("install-update").textContent=updateRequesting?"Отправляем запрос…":active?"Выполняется обновление…":"Установить обновление";
+  renderUpdateControls();
   show("reload-after-update",state==="success"&&(
     updateStartedHere||!!(updateInstalledRevision&&r.installed_revision&&
       updateInstalledRevision!==r.installed_revision)
   ));
 }
+function renderUpdateControls(){
+  const active=updateState==="queued"||updateState==="installing";
+  const busy=active||updateRequesting||updateChecking;
+  $("check-update").disabled=!updateSupported||busy;
+  $("install-update").disabled=!updateSupported||!updateAvailable||busy;
+}
 async function loadUpdateStatus(){
-  if(updatePolling||updateChecking)return;
+  if(updatePolling||updateChecking||updateRequesting)return;
+  const revision=updateActionRevision;
   updatePolling=true;
   try{
     const r=await api("/api/update/status");
+    if(revision!==updateActionRevision)return;
     if(r.state==="success"&&updateInstalledRevision&&r.installed_revision!==updateInstalledRevision){
       updateAvailable=false;
     }
+    if(r.state!=="idle"&&$("update-action-feedback").dataset.state==="queued"){
+      setFeedback("update-action-feedback","");
+    }
     renderUpdateStatus(r);
   }catch(error){
+    if(revision!==updateActionRevision)return;
     $("update-status-text").textContent=
       ["queued","installing"].includes(updateState)
         ?"Нет связи с сервером. Ожидаем подключения…"
         :"Не удалось получить состояние обновления: "+error.message;
   }finally{updatePolling=false;}
 }
-$("check-update").addEventListener("click",async()=>{
+onOperation($("check-update"),"Проверяем обновления на GitHub…",async()=>{
   if(updateChecking||updateRequesting||["queued","installing"].includes(updateState))return;
   updateChecking=true;
-  updateAvailable=false;
-  $("update-state-label").textContent="Проверяем GitHub";
-  $("update-status-text").textContent="Получаем сведения о последней сборке…";
-  $("check-update").disabled=true;
-  $("install-update").disabled=true;
-  $("check-update").classList.add("busy");
-  $("check-update").textContent="Проверяем…";
+  updateActionRevision++;
+  renderUpdateControls();
+  setFeedback("update-action-feedback","Проверяем GitHub…","working");
   try{
     const r=await api("/api/update/check");
-    renderUpdateStatus(r);
+    const active=["queued","installing"].includes(r.state);
+    renderUpdateStatus(active?r:{...r,message:""});
+    setFeedback("update-action-feedback",active?"":r.message,r.available===null?"error":"saved");
   }catch(error){
-    $("update-state-label").textContent="Проверка не удалась";
-    $("update-status-text").textContent=error.message;
-    toast(error.message,true);
+    updateAvailable=false;
+    updateLatestRevision=null;
+    updateLatestVersion=null;
+    $("update-latest-version").textContent="Не проверено";
+    $("update-latest-build").textContent="Проверьте наличие обновлений";
+    setFeedback("update-action-feedback","Проверка не удалась. "+error.message,"error");
   }finally{
     updateChecking=false;
-    await loadUpdateStatus();
+    renderUpdateControls();
   }
 });
-$("install-update").addEventListener("click",async()=>{
+onOperation($("install-update"),"Отправляем запрос на обновление…",async()=>{
   if(!updateAvailable||updateRequesting||["queued","installing"].includes(updateState))return;
   if(!confirm("Установить обновление с GitHub? Панель временно перезапустится; данные будут сохранены."))return;
   updateRequesting=true;
-  updateStartedHere=true;
-  updateAvailable=false;
-  renderUpdateStatus({supported:true,installed_version:$("update-current-version").textContent.replace(/^v/,""),
-    installed_revision:updateInstalledRevision,state:"queued",phase:"preparing",
-    message:"Отправляем запрос системной службе обновления…"});
+  updateActionRevision++;
+  renderUpdateControls();
+  setFeedback("update-action-feedback","Отправляем запрос на установку…","working");
   try{
-    await api("/api/update/request","POST",{});
-    await loadUpdateStatus();
+    const result=await api("/api/update/request","POST",{});
+    updateStartedHere=true;
+    updateState=result.state;
+    setFeedback("update-action-feedback",result.message,"queued");
   }catch(error){
     // Server restart can interrupt the POST after the request was accepted.
-    $("update-status-text").textContent="Не удалось подтвердить запрос. Проверяем сервер: "+error.message;
+    setFeedback("update-action-feedback","Не удалось подтвердить запрос. "+error.message,"error");
   }finally{
     updateRequesting=false;
+    renderUpdateControls();
     await loadUpdateStatus();
   }
 });
 $("reload-after-update").addEventListener("click",()=>window.location.reload());
 setInterval(()=>{
-  if(!$("app-root").hidden&&(selectedTab==="settings"||
+  if(!$("app-root").hidden&&!document.hidden&&((selectedTab==="settings"&&
+      ["summary","updates"].includes(selectedSettingsCategory))||
       updateState==="queued"||updateState==="installing"||updateRequesting)){
     void loadUpdateStatus();
   }
@@ -2050,7 +2136,7 @@ function renderActiveMaxCodes(){
     details.append(el("strong","",item.building+" / "+item.name));
     details.append(el("small","","Действует до "+when(item.expires_at)+" · значение не сохраняется"));
     const revoke=el("button","btn secondary","Отозвать");revoke.type="button";
-    revoke.addEventListener("click",async()=>{
+    onOperation(revoke,"Отзываем код MAX…",async()=>{
       if(!confirm("Отозвать код для «"+item.name+"»? Сотрудник больше не сможет использовать этот код."))return;
       revoke.disabled=true;
       try{
@@ -2116,7 +2202,7 @@ async function loadMaxCodes(){
     toast(error.message,true);
   }
 }
-$("bulk-max-codes").addEventListener("click",async()=>{
+onOperation($("bulk-max-codes"),"Загружаем коды MAX…",async()=>{
   selectedMaxRooms.clear();issuedMaxCodes=[];activeMaxCodes=[];
   $("max-codes-search").value="";
   $("max-codes-unbound").checked=true;$("max-codes-no-code").checked=true;
@@ -2136,7 +2222,7 @@ $("cancel-max-codes").addEventListener("click",()=>$("max-codes-dialog").close()
 for(const id of ["max-codes-building","max-codes-unbound","max-codes-no-code"])
   $(id).addEventListener("change",renderMaxCodes);
 $("max-codes-search").addEventListener("input",renderMaxCodes);
-$("max-codes-reload").addEventListener("click",loadMaxCodes);
+onOperation($("max-codes-reload"),"Обновляем коды MAX…",loadMaxCodes);
 $("max-codes-clear").addEventListener("click",()=>{selectedMaxRooms.clear();renderMaxCodes();});
 $("max-codes-select-all").addEventListener("change",event=>{
   const visible=maxCodeVisibleRooms();
@@ -2149,7 +2235,7 @@ $("max-codes-select-all").addEventListener("change",event=>{
   }else for(const room of visible)selectedMaxRooms.delete(room.id);
   renderMaxCodes();
 });
-$("max-codes-form").addEventListener("submit",async event=>{
+onOperation($("max-codes-form"),"Создаём коды MAX…",async event=>{
   event.preventDefault();
   if(!selectedMaxRooms.size){toast("Выберите кабинеты",true);return;}
   const replacing=activeMaxCodes.filter(c=>selectedMaxRooms.has(c.room_id));
@@ -2233,16 +2319,15 @@ async function loadMaxDiagnostics() {
     target.textContent=lines.join(" ");
   }catch(error) { target.textContent="Ошибка диагностики MAX: "+error.message; }
 }
-$("check-max-diagnostics").addEventListener("click",loadMaxDiagnostics);
+onOperation($("check-max-diagnostics"),"Проверяем связь с MAX…",loadMaxDiagnostics);
 
 /* Keep live room status reasonably current without reloading the page. */
 setInterval(()=>{
   if(!$("app-root").hidden && !document.hidden && !document.querySelector("dialog[open]"))
-    refresh();
+    refresh({background:true});
 },30000);
 
-$("maintenance-form").addEventListener("submit",async event=>{
-  event.preventDefault();
+onOperation($("maintenance-form"),"Сохраняем настройки обслуживания…",async event=>{
   await saveSettingsPatch(event.currentTarget,{
     backup_interval_days:Number($("setting-backup-interval").value),
     backup_keep:Number($("setting-backup-keep").value),
@@ -2273,7 +2358,7 @@ async function loadBackups(){
         $("restore-dialog").showModal();
       });
       const remove=el("button","btn secondary","Удалить");
-      remove.addEventListener("click",async()=>{
+      onOperation(remove,"Удаляем резервную копию…",async()=>{
         if(!confirm("Безвозвратно удалить резервную копию "+item.name+"?"))return;
         try{await api("/api/backups/"+encodeURIComponent(item.name),"DELETE");await loadBackups();toast("Копия удалена");}
         catch(error){toast(error.message,true);}
@@ -2282,7 +2367,7 @@ async function loadBackups(){
     }
   }catch(error){$("backup-list").textContent=error.message;}
 }
-$("backup-create").addEventListener("click",async()=>{
+onOperation($("backup-create"),"Создаём резервную копию…",async()=>{
   $("backup-create").disabled=true;
   try{
     const r=await api("/api/backups","POST",{});
@@ -2292,28 +2377,20 @@ $("backup-create").addEventListener("click",async()=>{
   finally{$("backup-create").disabled=false;}
 });
 $("backup-import").addEventListener("click",()=>$("backup-upload-file").click());
-$("backup-upload-file").addEventListener("change",async()=>{
+$("backup-upload-file").addEventListener("change",()=>{
   const file=$("backup-upload-file").files[0];
+  $("backup-upload-file").value="";
   if(!file)return;
   if(!confirm("Импортировать SQLite-файл "+file.name+" как резервную копию?"))return;
-  try{
-    const response=await fetch("/api/backups/import",{
-      method:"POST",credentials:"same-origin",
-      headers:{"Content-Type":"application/octet-stream"},
-      body:file
-    });
-    if(!response.ok){
-      const error=await response.json();
-      throw Error(typeof error.detail==="string"?error.detail:"Ошибка импорта");
-    }
-    const result=await response.json();await loadBackups();
+  void runOperation($("backup-import"),"Импортируем резервную копию…",async()=>{
+    const result=await api("/api/backups/import","POST",file);
+    await loadBackups();
     toast("Копия импортирована: "+result.name);
-  }catch(error){toast(error.message,true);}
-  finally{$("backup-upload-file").value="";}
+  });
 });
 $("restore-close").addEventListener("click",()=>$("restore-dialog").close());
 $("restore-cancel").addEventListener("click",()=>$("restore-dialog").close());
-$("restore-form").addEventListener("submit",async event=>{
+onOperation($("restore-form"),"Восстанавливаем базу…",async event=>{
   event.preventDefault();
   if(!$("restore-confirm").checked){toast("Подтвердите восстановление",true);return;}
   try{

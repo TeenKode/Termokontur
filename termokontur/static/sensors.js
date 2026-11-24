@@ -7,11 +7,11 @@ const sensorConfigFields=[
   ["measure_s","Интервал измерений, с",1,604800],["send_s","Интервал передачи, с",1,604800],
   ["cool_s","Пауза после зарядки, с (0 — без паузы)",0,86400],["wifi_budget_s","Время на подключение Wi-Fi, с",1,600],
   ["cutoff_mv","Порог отключения, мВ",3000,4200],["wifi_min_mv","Минимум для Wi-Fi, мВ (0 — без отдельного порога)",0,4200],
-  ["ota_min_mv","Минимум для обновления, мВ",3300,4200],["tx_qdbm","Мощность Wi-Fi, четверти dBm",8,78],
+  ["ota_min_mv","Минимум для OTA, мВ (0 — от 3300 мВ)",0,4200],["tx_qdbm","Мощность Wi-Fi, четверти dBm",8,78],
   ["adc_scale_ppm","Коэффициент делителя АЦП, ppm",1600000,2400000]
 ];
 function sensorWhen(epoch){return epoch?when(new Date(epoch*1000).toISOString()):"—";}
-function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";b.addEventListener("click",action);return b;}
+function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";onOperation(b,"Загружаем карточку датчика…",action);return b;}
 function sensorRoomOptions(select,chosen){select.replaceChildren();for(const r of rooms)option(select,String(r.id),r.building+" · "+r.name);select.value=String(chosen||rooms[0]?.id||"");}
 async function refreshSensors(){
   $("sensor-state").textContent="Загружаем датчики…";
@@ -112,25 +112,29 @@ $("sensor-code-dialog").addEventListener("close",()=>{
   for(const id of ["sensor-code-id","sensor-code-value"])$(id).value="";
 });
 $("sensor-code-copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("sensor-code-id").value+"\n"+$("sensor-code-value").value);toast("Данные скопированы");}catch{toast("Выделите и скопируйте поля вручную",true);}});
-$("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
-$("sensor-refresh").addEventListener("click",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
-$("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
-$("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
-$("sensor-config-form").addEventListener("submit",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
+onOperation($("sensor-add-form"),"Создаём код подключения…",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
+onOperation($("sensor-refresh"),"Обновляем список датчиков…",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
+onOperation($("sensor-device-form"),"Сохраняем датчик…",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
+onOperation($("sensor-rekey"),"Отзываем доступ датчика…",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
+onOperation($("sensor-config-form"),"Сохраняем настройки датчика…",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
 $("sensor-firmware").addEventListener("change",()=>{
   $("sensor-ota-assign").disabled=!$("sensor-firmware").value;
 });
-$("sensor-ota-form").addEventListener("submit",async e=>{
+onOperation($("sensor-ota-form"),"Назначаем обновление прошивки…",async e=>{
   e.preventDefault();
   const choice=$("sensor-firmware").value;
   if(!choice)return;
   const query=choice.startsWith("bundled:")?{bundled_version:choice.slice("bundled:".length)}:{firmware_id:choice};
   try{await api("/api/sensors/devices/"+sensorSelected+"/ota?"+new URLSearchParams(query),"PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление назначено");}catch(e){toast(e.message,true);}
 });
-$("sensor-ota-cancel").addEventListener("click",async()=>{try{await api("/api/sensors/devices/"+sensorSelected+"/ota","PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление отменено");}catch(e){toast(e.message,true);}});
-$("sensor-upload-form").addEventListener("submit",async e=>{e.preventDefault();const finish=beginRequest("/api/sensors/firmware","POST");try{const form=new FormData();form.append("file",$("sensor-image").files[0]);const r=await fetch("/api/sensors/firmware",{method:"POST",credentials:"same-origin",body:form});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Не удалось загрузить образ");}await openSensor(sensorSelected);toast("Прошивка загружена");}catch(e){toast(e.message,true);}finally{finish();}});
+onOperation($("sensor-ota-cancel"),"Отменяем обновление прошивки…",async()=>{try{await api("/api/sensors/devices/"+sensorSelected+"/ota","PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление отменено");}catch(e){toast(e.message,true);}});
+onOperation($("sensor-upload-form"),"Загружаем образ прошивки…",async event=>{
+  await api("/api/sensors/firmware","POST",new FormData(event.currentTarget));
+  await openSensor(sensorSelected);
+  toast("Прошивка загружена");
+});
 $("sensor-mqtt-form").addEventListener("input",event=>{event.currentTarget.dataset.dirty="true";});
-$("sensor-mqtt-form").addEventListener("submit",async event=>{
+onOperation($("sensor-mqtt-form"),"Сохраняем настройки MQTT…",async event=>{
   event.preventDefault();
   const form=event.currentTarget;
   try{

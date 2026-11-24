@@ -34,19 +34,19 @@ class Config(Strict):
     send_s: int = Field(default=86400, ge=1, le=604800)
     cool_s: int = Field(default=1800, ge=0, le=86400)
     wifi_budget_s: int = Field(default=45, ge=1, le=600)
-    wifi_min_mv: int = Field(default=3600, ge=0, le=4200)
+    wifi_min_mv: int = Field(default=0, ge=0, le=4200)
     cutoff_mv: int = Field(default=3300, ge=3000, le=4200)
-    ota_min_mv: int = Field(default=3900, ge=3300, le=4200)
+    ota_min_mv: int = Field(default=3600, ge=0, le=4200)
     tx_qdbm: int = Field(default=34, ge=8, le=78)
     adc_scale_ppm: int = Field(default=2000000, ge=1600000, le=2400000)
     enabled: bool = True
 
     @model_validator(mode="after")
     def coherent(self):
-        if self.wifi_min_mv and self.wifi_min_mv < self.cutoff_mv:
-            raise ValueError("Порог Wi-Fi должен быть не ниже отключения или 0 (без отдельного порога)")
-        if self.ota_min_mv < self.cutoff_mv:
-            raise ValueError("Порог обновления должен быть не ниже порога отключения")
+        # Store effective values understood by both current and older firmware.
+        if self.wifi_min_mv:
+            self.wifi_min_mv = max(self.wifi_min_mv, self.cutoff_mv)
+        self.ota_min_mv = max(self.ota_min_mv, self.cutoff_mv, 3300)
         return self
 
 

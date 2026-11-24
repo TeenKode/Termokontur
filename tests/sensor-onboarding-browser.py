@@ -144,6 +144,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.fill('#usb-dns-primary','10.1.1.10');page.fill('#usb-dns-secondary','10.1.1.11')
                 page.locator('#sensor-usb-form details summary').click()
                 page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
+                expect(page.locator('#usb-config-fields input[name="wifi_min_mv"]')).to_have_value('0')
+                expect(page.locator('#usb-config-fields input[name="ota_min_mv"]')).to_have_value('3600')
+                page.fill('#usb-config-fields input[name="cutoff_mv"]','3200')
+                page.fill('#usb-config-fields input[name="wifi_min_mv"]','3100')
+                page.fill('#usb-config-fields input[name="ota_min_mv"]','0')
                 page.locator('#sensor-usb-form details summary').click()
                 page.check('#usb-new-board')
                 # The chooser is asynchronous: prevent a second setup before it closes.
@@ -184,14 +189,15 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 }""")
                 verify_log_follow(page, 'usb-log', 'lines=>window.emitFlashLog(lines)')
                 page.evaluate('window.finishFlash()')
-                expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
-                expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
+                expect(page.locator('#usb-status')).to_contain_text('Ожидаем подтверждения регистрации по Wi-Fi',timeout=30000)
                 assert page.evaluate('window.simFlashed && !window.simFinished') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
                 assert saved['dns_primary']=='10.1.1.10' and saved['dns_secondary']=='10.1.1.11'
                 page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
+                assert saved['config']['cutoff_mv']==saved['config']['wifi_min_mv']==3200
+                assert saved['config']['ota_min_mv']==3300
                 assert page.input_value('#usb-wifi-password')==''
                 onboard=[json.loads(body) for url,body in requests if url.endswith('/api/sensors/onboard')]
                 assert not onboard
@@ -204,6 +210,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/11-usb-authorized.jpg'),type='jpeg',quality=85)
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
+                expect(page.locator('#usb-status')).to_contain_text('Сервер подтвердил регистрацию по Wi-Fi')
                 assert len(api.get('/api/sensors/devices').json())==1
                 page.click('#usb-close');page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
