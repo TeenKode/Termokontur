@@ -48,11 +48,14 @@
 
 using sensor::Record;
 static constexpr gpio_num_t CHARGE_PIN = GPIO_NUM_4;
+static constexpr gpio_num_t BOOT_PIN = GPIO_NUM_9;
+static constexpr uint32_t BOOT_DEBUG_WINDOW_S = 300;
 static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
 static bool net_started = false;
 static EventGroupHandle_t events;
+static esp_netif_t *ap_netif = nullptr, *sta_netif = nullptr;
 static int64_t deadline = 0;
 static std::string last_error;
 struct Config {
@@ -316,15 +319,15 @@ static bool start_wifi(bool ap = false) {
     events = xEventGroupCreate();
     esp_netif_init();
     esp_event_loop_create_default();
-    if (ap)
-      esp_netif_create_default_wifi_ap();
-    else
-      esp_netif_create_default_wifi_sta();
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event,
                                nullptr);
     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
                                wifi_event, nullptr);
   }
+  auto &netif = ap ? ap_netif : sta_netif;
+  if (!netif)
+    netif = ap ? esp_netif_create_default_wifi_ap() : esp_netif_create_default_wifi_sta();
+  xEventGroupClearBits(events, 1);
   wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
   if (esp_wifi_init(&init) != ESP_OK)
     return false;
@@ -433,6 +436,7 @@ static std::string post(const std::string &path, const std::string &body,
 }
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
+static bool server_supports_usb_sync = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -457,6 +461,7 @@ static bool sync_time() {
   // An empty chain means use the built-in public CA bundle (TLS proxy).
   std::string certificate = root->valuestring;
   server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
+  server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -713,8 +718,8 @@ static void ota(cJSON *meta, uint16_t mv) {
   }
   last_error = "ota_failed";
 }
-static bool sync(sensor::Journal &journal, uint16_t mv,
-                 bool time_prepared = false) {
+static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
+                 bool allow_ota) {
   // Reuse the trusted server time and Wi-Fi connection obtained before the
   // first measurement. Keep both operations within one radio-on budget.
   if (!time_prepared) {
@@ -831,7 +836,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv,
       save_provision();
     }
     if (ack == state.next) {
-      ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
+      if (allow_ota) ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
       cJSON_Delete(j);
       return true;
     }
@@ -844,7 +849,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv,
 }
 
 static std::string setup_nonce;
-static std::atomic<bool> configured{false};
+enum class SetupState { waiting, saved, boot_debug, closed };
+static std::atomic<SetupState> setup_state{SetupState::waiting};
+static bool setup_provisioned = false;
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
       R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><p><small>Время и сертификат будут получены с указанного HTTPS-сервера автоматически.</small></p><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.csrf='NONCE';try{const u=new URL(b.server);if(u.protocol!=='https:'||u.username||u.password)throw Error('Укажите HTTPS-адрес сервера');const boot=await fetch(u.href.replace(/\/$/,'')+'/api/sensors/bootstrap',{credentials:'omit',cache:'no-store'});if(!boot.ok)throw Error('Не удалось получить время и сертификат сервера');const meta=await boot.json();b.epoch=meta.time;b.ca=meta.ca;const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch(error){document.getElementById('result').textContent=error.message||'Не удалось получить настройки сервера.';}};</script></html>)HTML";
@@ -853,9 +860,23 @@ static esp_err_t setup_page(httpd_req_t *req) {
   return httpd_resp_send(req, html.c_str(), html.size());
 }
 static std::mutex provision_mutex;
+static void usb_arm_boot_debug(cJSON *out) {
+  std::lock_guard<std::mutex> lock(provision_mutex);
+  if (setup_state != SetupState::waiting || charging()) {
+    add(out, "error", "Для отладки по BOOT откройте режим настройки и отключите зарядку.");
+  } else if (!setup_provisioned) {
+    add(out, "error", "Сначала настройте Wi-Fi и подключите датчик к серверу.");
+  } else if (!cfg.enabled) {
+    add(out, "error", "Измерения отключены в параметрах датчика.");
+  } else {
+    num(out, "duration_s", BOOT_DEBUG_WINDOW_S);
+    setup_state = SetupState::boot_debug;
+  }
+}
+
 static void usb_setup_wifi(cJSON *out) {
   wifi_config_t wifi{};
-  if (configured || charging() || esp_wifi_get_config(WIFI_IF_AP, &wifi) != ESP_OK) {
+  if (setup_state != SetupState::waiting || charging() || esp_wifi_get_config(WIFI_IF_AP, &wifi) != ESP_OK) {
     add(out, "error", "Откройте режим настройки, чтобы прочитать пароль точки Wi-Fi.");
     return;
   }
@@ -867,7 +888,7 @@ static void usb_setup_wifi(cJSON *out) {
 
 static void usb_test_measurement(cJSON *out) {
   std::lock_guard<std::mutex> lock(provision_mutex);
-  if (configured || charging()) {
+  if (setup_state != SetupState::waiting || charging()) {
     add(out, "error", "Для пробного замера откройте режим настройки и отключите USB зарядки.");
     return;
   }
@@ -884,7 +905,7 @@ static void usb_test_measurement(cJSON *out) {
 
 static std::string provision_apply(cJSON *j, bool require_nonce) {
   std::lock_guard<std::mutex> lock(provision_mutex);
-  if (configured || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
+  if (setup_state != SetupState::waiting || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca");
@@ -922,7 +943,7 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
                                                   random_setup_password);
   state.saved_time = epoch;
   if (!save_provision() || !save_state()) return "Не удалось сохранить настройки в памяти платы.";
-  configured = true;
+  setup_state = SetupState::saved;
   return "";
 }
 static esp_err_t setup_save(httpd_req_t *req) {
@@ -944,7 +965,7 @@ static void usb_setup_task(void *) {
   setvbuf(stdin, nullptr, _IONBF, 0);
   fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
   std::string line; bool overflow = false;
-  while (!configured) {
+  while (setup_state == SetupState::waiting) {
     char bytes[256]; int size = read(STDIN_FILENO, bytes, sizeof bytes);
     for (int i=0; i<size; ++i) {
       if (bytes[i] == '\r') continue;
@@ -966,6 +987,8 @@ static void usb_setup_task(void *) {
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
           } else if (cmd == "setup_wifi") {
             usb_setup_wifi(out);
+          } else if (cmd == "arm_boot_debug") {
+            usb_arm_boot_debug(out);
           } else if (cmd == "test_measurement") {
             usb_test_measurement(out);
           } else if (cmd == "sign") {
@@ -987,10 +1010,10 @@ static void usb_setup_task(void *) {
   }
   vTaskDelete(nullptr);
 }
-static void setup_ap() {
+static bool setup_ap(bool provisioned) {
   if (!start_wifi(true)) {
     puts("SETUP: Wi-Fi initialization failed or charging is active.");
-    return;
+    return false;
   }
   auto rnd = hex64(((uint64_t)esp_random() << 32) | esp_random());
   std::string apname = "Termokontur-" + rnd.substr(12),
@@ -1006,9 +1029,8 @@ static void setup_ap() {
   const esp_err_t wifi_status = esp_wifi_start();
   if (wifi_status != ESP_OK) {
     printf("SETUP: Wi-Fi start failed: %s\n", esp_err_to_name(wifi_status));
-    return;
+    return false;
   }
-  xTaskCreate(usb_setup_task, "usb_setup", 16384, nullptr, 4, nullptr);
   printf("\nSETUP Wi-Fi: %s\nSETUP password: %s\nOpen http://192.168.4.1\n",
          apname.c_str(), pass.c_str());
   httpd_handle_t h = nullptr;
@@ -1018,7 +1040,7 @@ static void setup_ap() {
   const esp_err_t http_status = httpd_start(&h, &hc);
   if (http_status != ESP_OK) {
     printf("SETUP: HTTP server start failed: %s\n", esp_err_to_name(http_status));
-    return;
+    return false;
   }
   httpd_uri_t root{};
   root.uri = "/";
@@ -1030,8 +1052,10 @@ static void setup_ap() {
   save.method = HTTP_POST;
   save.handler = setup_save;
   httpd_register_uri_handler(h, &save);
+  setup_provisioned = provisioned;
+  xTaskCreate(usb_setup_task, "usb_setup", 16384, nullptr, 4, nullptr);
   int64_t end = esp_timer_get_time() + 600000000;
-  while (!configured && esp_timer_get_time() < end) {
+  while (setup_state == SetupState::waiting && esp_timer_get_time() < end) {
     if (charging()) {
       rt.charging = true;
       puts("SETUP stopped: charger input GPIO4 is LOW.");
@@ -1039,16 +1063,61 @@ static void setup_ap() {
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
-  if (!configured && !rt.charging) puts("SETUP stopped: timeout.");
-  if (configured)
+  SetupState outcome;
+  {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    outcome = setup_state.exchange(SetupState::closed);
+  }
+  if (outcome == SetupState::waiting && !rt.charging) puts("SETUP stopped: timeout.");
+  if (outcome == SetupState::saved || outcome == SetupState::boot_debug)
     vTaskDelay(pdMS_TO_TICKS(500));
   httpd_stop(h);
   stop_network();
-  if (configured) {
+  if (outcome == SetupState::saved) {
     if (usb_serial_jtag_is_connected()) sleep_for(cfg.measure_s);
     esp_restart();
   }
+  return outcome == SetupState::boot_debug;
 }
+
+static bool wait_for_boot_debug() {
+  if (charging()) return false;
+  const int64_t end = esp_timer_get_time() + BOOT_DEBUG_WINDOW_S * 1000000LL;
+  const bool wake_enabled = gpio_wakeup_enable(BOOT_PIN, GPIO_INTR_LOW_LEVEL) == ESP_OK &&
+      gpio_wakeup_enable(CHARGE_PIN, GPIO_INTR_LOW_LEVEL) == ESP_OK &&
+      esp_sleep_enable_gpio_wakeup() == ESP_OK;
+  puts("BOOT: ждём короткого нажатия для замера и отправки.");
+  // Wait for release if BOOT was already held during setup.
+  while (!gpio_get_level(BOOT_PIN) && !charging() && esp_timer_get_time() < end)
+    vTaskDelay(pdMS_TO_TICKS(20));
+  bool pressed = false;
+  while (!charging() && esp_timer_get_time() < end) {
+    if (!gpio_get_level(BOOT_PIN)) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+      if (!gpio_get_level(BOOT_PIN) && !charging()) {
+        pressed = true;
+        break;
+      }
+    }
+    const int64_t remaining = end - esp_timer_get_time();
+    // Keep the USB Serial/JTAG connection alive when the host is watching.
+    if (wake_enabled && !usb_serial_jtag_is_connected() && remaining > 0 &&
+        esp_sleep_enable_timer_wakeup(remaining) == ESP_OK && esp_light_sleep_start() == ESP_OK)
+      continue;
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  gpio_wakeup_disable(BOOT_PIN);
+  gpio_wakeup_disable(CHARGE_PIN);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+  return pressed && !charging();
+}
+
+static void boot_debug_result(const std::string &message) {
+  printf("BOOT: %s\n", message.c_str());
+  fflush(stdout);
+  if (usb_serial_jtag_is_connected()) vTaskDelay(pdMS_TO_TICKS(300));
+}
+
 extern "C" void app_main() {
   gpio_config_t g{};
   g.pin_bit_mask = 1ULL << CHARGE_PIN;
@@ -1111,16 +1180,23 @@ extern "C" void app_main() {
     sleep_for(
         std::min((int64_t)cfg.measure_s, rt.cool_until - (int64_t)rt.uptime));
   bool provisioned = load_provision();
-  gpio_set_direction(GPIO_NUM_9, GPIO_MODE_INPUT);
-  gpio_set_pull_mode(GPIO_NUM_9, GPIO_PULLUP_ONLY);
+  gpio_set_direction(BOOT_PIN, GPIO_MODE_INPUT);
+  gpio_set_pull_mode(BOOT_PIN, GPIO_PULLUP_ONLY);
   bool physical = false;
-  if (gpio_get_level(GPIO_NUM_9) == 0) {
+  if (gpio_get_level(BOOT_PIN) == 0) {
     vTaskDelay(pdMS_TO_TICKS(3000));
-    physical = gpio_get_level(GPIO_NUM_9) == 0;
+    physical = gpio_get_level(BOOT_PIN) == 0;
   }
+  bool boot_debug = false;
   if (!provisioned || physical || usb_serial_jtag_is_connected()) {
-    setup_ap();
-    sleep_for(1800);
+    if (!setup_ap(provisioned)) sleep_for(1800);
+    if (!wait_for_boot_debug()) {
+      boot_debug_result(charging() ? "Отладка прервана зарядкой." : "Время ожидания нажатия истекло.");
+      sleep_for(cfg.measure_s);
+    }
+    boot_debug = true;
+    last_error.clear();
+    puts("BOOT: нажатие принято, выполняем пробную отправку.");
   }
   // Stored time is a lower bound for TLS bootstrap, not a recovered measurement
   // time.
@@ -1147,13 +1223,22 @@ extern "C" void app_main() {
     sleep_for(3600);
   vTaskDelay(pdMS_TO_TICKS(500));
   uint16_t mv = battery_mv();
+  bool usb_without_battery = false;
   if (mv < 2000 || mv > 5000) {
-    printf("ADC/divider check required\n");
-    sleep_for(3600);
+    usb_without_battery = boot_debug && usb_serial_jtag_is_connected();
+    if (!usb_without_battery) {
+      if (boot_debug) boot_debug_result("Напряжение аккумулятора недоступно. Подключите USB к компьютеру для пробы.");
+      else puts("ADC/divider check required");
+      sleep_for(3600);
+    }
+    mv = 0;
   }
-  if (mv < cfg.cutoff_mv)
+  if (!usb_without_battery && mv < cfg.cutoff_mv) {
+    if (boot_debug) boot_debug_result("Напряжение аккумулятора ниже порога работы.");
     sleep_for(21600);
+  }
   if (charging()) {
+    if (boot_debug) boot_debug_result("Отладка прервана зарядкой.");
     rt.charging = true;
     sleep_for(cfg.measure_s);
   }
@@ -1174,13 +1259,13 @@ extern "C" void app_main() {
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
-      cfg.enabled &&
-      rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure;
+      cfg.enabled && (boot_debug || rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
   // Hardware RESET and power loss invalidate RTC time. Obtain a validated
   // HTTPS server timestamp before sampling so the first reading has a date.
   // If offline or below the Wi-Fi threshold, preserve the untimed reading.
-  const bool clock_preflight = sensor::needs_clock_preflight(
-      time_quality != 0, measurement_due, mv >= cfg.wifi_min_mv);
+  const bool wifi_allowed = usb_without_battery || mv >= cfg.wifi_min_mv;
+  const bool clock_preflight = usb_without_battery || sensor::needs_clock_preflight(
+      time_quality != 0, measurement_due, wifi_allowed);
   bool time_prepared = false;
   if (clock_preflight) {
     deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
@@ -1189,6 +1274,12 @@ extern "C" void app_main() {
     } else {
       stop_network();
     }
+  }
+  // Check compatibility before placing a USB-powered reading in the journal.
+  if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
+    boot_debug_result(time_prepared ? "Обновите сервер для отправки по USB без аккумулятора."
+                                    : "Не удалось связаться с сервером. Проверьте Wi-Fi и адрес панели.");
+    sleep_for(cfg.measure_s);
   }
   Record measurement{};
   measurement.boot = rt.boot;
@@ -1227,12 +1318,12 @@ extern "C" void app_main() {
     rt.pending = false;
   }
   auto now = time(nullptr);
-  if ((rt.next_send == 0 || now >= rt.next_send) && mv >= cfg.wifi_min_mv) {
+  if ((boot_debug || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed) {
     if (!clock_preflight)
       deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
     // Do not start another full Wi-Fi session if the time preflight failed.
     bool ok = (!clock_preflight || time_prepared) &&
-              sync(journal, mv, time_prepared);
+              sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
     now = time(nullptr);
     if (ok) {
@@ -1247,6 +1338,18 @@ extern "C" void app_main() {
     }
   } else if (clock_preflight) {
     stop_network();
+  }
+  if (boot_debug) {
+    if (measured && state.ack > measurement.seq) {
+      boot_debug_result(measurement.error ? "Сервер подтвердил получение ошибки датчика."
+                                          : "Сервер подтвердил получение замера.");
+    } else if (!wifi_allowed) {
+      boot_debug_result("Замер сохранён на плате. Напряжение ниже порога Wi-Fi.");
+    } else if (last_error.empty()) {
+      boot_debug_result("Замер сохранён на плате. Подтверждение сервера не получено.");
+    } else {
+      boot_debug_result("Замер сохранён на плате. Ошибка отправки — " + last_error + ".");
+    }
   }
   if (charging())
     rt.charging = true;

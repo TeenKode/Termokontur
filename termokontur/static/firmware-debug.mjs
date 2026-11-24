@@ -15,13 +15,13 @@ const measurementErrors = {
 let serial = null;
 let connecting = false;
 let checking = false;
+let bootArmed = false;
 
 function controls() {
   field("connect").disabled = !supported || connecting || Boolean(serial);
   field("disconnect").disabled = !serial;
-  field("identify").disabled = !serial || checking;
-  field("measure").disabled = !serial || checking;
-  field("wifi").disabled = !serial || checking;
+  const queriesDisabled = !serial || checking || bootArmed;
+  for (const name of ["identify", "measure", "wifi", "boot"]) field(name).disabled = queriesDisabled;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
 }
@@ -38,6 +38,7 @@ function appendLog(line) {
 function serialLog(line) {
   const clean = line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
   appendLog(clean.replace(/^\s*SETUP password:.*$/i, "SETUP password: [скрыт]"));
+  if (bootArmed && clean.startsWith("BOOT: ")) field("result").textContent = clean.slice(6);
 }
 
 function showIdentity(hello) {
@@ -92,6 +93,12 @@ async function checkBoard(command) {
       if (!reply.ssid || !reply.password) throw Error("Плата не вернула данные точки Wi-Fi.");
       setSetupWifi(reply);
       message = "Получены данные точки настройки.";
+    } else if (command === "arm_boot_debug") {
+      const seconds = reply.duration_s;
+      if (!Number.isInteger(seconds) || seconds <= 0) throw Error("Плата не подтвердила отладку по BOOT.");
+      bootArmed = true;
+      setSetupWifi(null);
+      message = "Дождитесь приглашения в журнале и коротко нажмите BOOT в течение " + number.format(seconds / 60) + " мин.";
     } else {
       message = showMeasurement(reply);
     }
@@ -113,6 +120,7 @@ async function closePort(connection, message) {
   serial = null;
   checking = false;
   connecting = true;
+  bootArmed = false;
   setSetupWifi(null);
   controls();
   await connection.close();
@@ -149,6 +157,7 @@ field("disconnect").addEventListener("click", () => {
 });
 field("identify").addEventListener("click", () => checkBoard("hello"));
 field("measure").addEventListener("click", () => checkBoard("test_measurement"));
+field("boot").addEventListener("click", () => checkBoard("arm_boot_debug"));
 field("wifi").addEventListener("click", () => {
   if (field("wifi-details").hidden) void checkBoard("setup_wifi");
   else setSetupWifi(null);
