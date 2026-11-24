@@ -12,6 +12,20 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      debian: ${{ steps.plan.outputs.debian }}
+      firmware: ${{ steps.plan.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Plan heavy checks
+        id: plan
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci-plan.py
   python:
     runs-on: ubuntu-latest
     strategy:
@@ -40,6 +54,8 @@ jobs:
         run: python -m pytest -q
 
   native-debian:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.debian == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
