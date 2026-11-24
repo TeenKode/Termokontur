@@ -54,6 +54,34 @@ def save_settings(payload: SettingsIn):
     return settings.public()
 
 
+@router.get("/tls/sensor-ca")
+def get_sensor_ca():
+    return tls.sensor_ca_state()
+
+
+@router.post("/tls/sensor-ca")
+async def upload_sensor_ca(certificates: list[UploadFile] = File(...)):
+    if not 1 <= len(certificates) <= 8:
+        raise HTTPException(422, "Выберите от одного до восьми сертификатов.")
+    parts = []
+    total = 0
+    for file in certificates:
+        raw = await file.read(tls.MAX_UPLOAD - total + 1)
+        total += len(raw)
+        if total > tls.MAX_UPLOAD:
+            raise HTTPException(413, "Максимум 256 КБ на все файлы.")
+        parts.append(raw)
+    try:
+        return tls.upload_sensor_ca(parts)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/tls/sensor-ca")
+def remove_sensor_ca():
+    return tls.remove_sensor_ca()
+
+
 @router.get("/tls/status")
 def get_tls_status():
     return tls.state()

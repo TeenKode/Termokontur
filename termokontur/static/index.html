@@ -625,6 +625,21 @@
                 <p id="tls-next" class="hint" hidden>После перезапуска откройте сайт: <a id="tls-next-link" href="#" rel="noopener"></a>. Для внутреннего УЦ понадобится доверие к нему на компьютерах.</p>
                 <p class="hint">HTTP: порт 8092. HTTPS: порт 443. Перед переключением убедитесь, что порт 443 свободен; при внешнем прокси проверьте его настройки.</p>
               </article>
+              <article class="panel settings-panel">
+                <h3>Сертификаты для датчиков</h3>
+                <p class="hint">Для собственного центра сертификации загрузите его корневой сертификат и, если есть, промежуточные сертификаты. Закрытый ключ не нужен. Настройка не изменяет HTTPS панели и не требует перезапуска.</p>
+                <p id="sensor-ca-status" role="status" aria-live="polite">Проверяем…</p>
+                <div id="sensor-ca-details" class="tls-details"></div>
+                <form id="sensor-ca-form" class="settings-form" enctype="multipart/form-data">
+                  <label>Корневой и промежуточные сертификаты (PEM, CER, CRT, DER)
+                    <input id="sensor-ca-files" name="certificates" type="file" accept=".pem,.cer,.crt,.der" multiple required>
+                  </label>
+                  <p class="hint">Выберите сразу всю нужную цепочку. Новая загрузка заменяет предыдущую. Лимит после преобразования в PEM — 8000 байт.</p>
+                  <div class="settings-save"><span class="settings-save-feedback" role="status" aria-live="polite"></span><button class="btn primary" type="submit">Загрузить и проверить CA</button></div>
+                </form>
+                <button class="btn secondary" id="sensor-ca-remove" type="button" disabled>Удалить загруженные CA</button>
+                <p class="hint">Новые платы получат CA при прошивке. Уже настроенные платы, которые не доверяют серверу, настройте по USB без стирания памяти.</p>
+              </article>
             </div>
             <div class="settings-pane" data-settings-view="updates" hidden>
               <div class="settings-section-heading"><h2>Обновление системы</h2><p>Установленная версия, GitHub и журнал установки.</p></div>
