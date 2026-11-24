@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import ssl
 import sys
@@ -59,6 +60,7 @@ def run_https(options: dict) -> None:
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--healthcheck":
         sys.exit(healthcheck())
+    os.environ.setdefault("TERMOKONTUR_FETCH_FIRMWARE", "1")
     # The managed launcher needs the settings table before binding TLS sockets.
     db.initialize()
     options = tls.server_kwargs()

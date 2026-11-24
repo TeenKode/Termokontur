@@ -49,13 +49,16 @@ async def scheduled_maintenance() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(application: FastAPI):
     await asyncio.to_thread(bootstrap)
-    retry_firmware = os.getenv("TERMOKONTUR_FETCH_FIRMWARE") == "1" and not await sensor_firmware.fetch_current()
+    download_lock = asyncio.Lock()
+    application.state.firmware_download = download_lock
     async with asyncio.TaskGroup() as tasks:
         maintenance_task = tasks.create_task(scheduled_maintenance())
         mqtt_task = tasks.create_task(sensor_mqtt.worker())
-        firmware_task = tasks.create_task(sensor_firmware.retry_fetch()) if retry_firmware else None
+        firmware_task = None
+        if os.getenv("TERMOKONTUR_FETCH_FIRMWARE") == "1":
+            firmware_task = tasks.create_task(sensor_firmware.retry_fetch(download_lock))
         try:
             yield
         finally:
@@ -86,6 +89,7 @@ def html_page(path: Path) -> HTMLResponse:
     html = path.read_text(encoding="utf-8")
     html = html.replace("__ASSET_FINGERPRINT__", _ASSET_FINGERPRINT)
     html = html.replace("__APP_VERSION__", __version__)
+    html = html.replace("__FIRMWARE_RELEASE_URL__", sensor_firmware.RELEASE_URL)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 

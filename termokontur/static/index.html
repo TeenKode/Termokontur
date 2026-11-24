@@ -180,12 +180,16 @@
             <h2>Прошивки</h2><a class="btn secondary" href="/sensors/firmware-debug">Отладка прошивки</a>
           </div>
           <p id="sensor-bundled-status" role="status">Проверяем наличие прошивок…</p>
+          <div id="sensor-firmware-recovery" class="heading-actions" hidden>
+            <button id="sensor-firmware-retry" class="btn secondary" type="button">Скачать на сервер</button>
+            <a class="btn secondary" href="__FIRMWARE_RELEASE_URL__" target="_blank" rel="noopener">Скачать ZIP с GitHub</a>
+          </div>
           <ul id="sensor-firmware-downloads" hidden>
             <li><a id="sensor-c3-ota-file" class="btn secondary" download>ESP32-C3 · образ для OTA (.bin)</a></li>
             <li><a id="sensor-c3-factory-file" class="btn secondary" download>ESP32-C3 · полный образ для USB (.bin)</a></li>
           </ul>
           <details>
-            <summary>Загрузить свой комплект USB для ESP32-C3</summary>
+            <summary>Загрузить комплект ZIP для ESP32-C3</summary>
             <p id="sensor-installer-status"></p>
             <form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form>
           </details>

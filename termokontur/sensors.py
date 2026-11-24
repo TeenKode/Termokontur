@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -391,6 +391,17 @@ def router(require_admin):
             "factory": {"sha256": bundle.factory.sha256, "size": len(bundle.factory.image)},
             "esp32": {"sha256": bundle.esp32_sha256, "size": len(bundle.esp32)},
         }
+
+    @r.post("/firmware/bundled/retry", dependencies=admin)
+    async def retry_bundle(request: Request):
+        lock = request.app.state.firmware_download
+        if lock.locked():
+            return {"status": "loading"}
+        async with lock:
+            available = await sensor_firmware.fetch_current()
+        if not available:
+            raise HTTPException(502, "Сервер не получил комплект. Скачайте ZIP с GitHub и загрузите его в панель.")
+        return {"status": "ready"}
 
     @r.get("/firmware/bundled/{version}/{target}.bin", dependencies=admin)
     def bundled_image(version: str, target: Literal["esp32-c3", "esp32-c3-factory"]):
