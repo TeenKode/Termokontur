@@ -7,6 +7,7 @@ const vm=require("node:vm");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
 const source=fs.readFileSync(path.join(root,"termokontur/static/app.js"),"utf8");
+const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
 const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
 
 function extractFunction(name){
@@ -64,7 +65,8 @@ function harness(){
     drawChart:()=>calls.chart++,
     loadBackups:()=>calls.backups++,
     loadUpdateStatus:()=>calls.updates++,
-    loadMaxDiagnostics:()=>calls.max++
+    loadMaxDiagnostics:()=>calls.max++,
+    loadAudit:()=>{}
   });
   vm.runInContext('let selectedTab="overview",selectedSettingsCategory="summary";\n'+
     ["scrollToSectionStart","setTab","setSettingsCategory"].map(extractFunction).join("\n"),ctx);
@@ -226,9 +228,9 @@ test("clearing a report hides its table and disables both exports",()=>{
 // and a single measurement; humidity must always keep its physical scale.
 test("trend scale and label spacing",()=>{
   const vm=require("node:vm");
-  const start=source.indexOf("function trendScale("),end=source.indexOf("function renderTrend(");
+  const start=chartSource.indexOf("function trendScale("),end=chartSource.indexOf("function renderTrend(");
   assert.ok(start>=0&&end>start);
-  const {trendScale,trendTicks}=vm.runInNewContext(source.slice(start,end)+";({trendScale,trendTicks})");
+  const {trendScale,trendTicks}=vm.runInNewContext(chartSource.slice(start,end)+";({trendScale,trendTicks})");
   for(const values of [[21],[21,22],[-12,-3],[16.3,38.4],[0]]){
     const a=trendScale(values);
     assert.ok(a.min<Math.min(...values)&&a.max>Math.max(...values));

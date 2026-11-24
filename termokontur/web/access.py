@@ -89,6 +89,7 @@ def require_admin(request: Request):
     if not authenticated(request):
         raise HTTPException(401, "Войдите как администратор")
     _verify_origin(request)
+    request.state.audit_admin = True
 
 
 def scoped_access(request: Request) -> str:
