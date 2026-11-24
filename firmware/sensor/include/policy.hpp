@@ -15,6 +15,15 @@ inline bool valid_ack(double value, uint64_t first, uint64_t sent_end) {
 inline uint32_t retry_delay(uint32_t send_s, uint32_t failures) {
   return std::min<uint32_t>(send_s, 3600u << std::min<uint32_t>(failures, 4));
 }
+// Per-operation timeout may not exceed the shared radio budget.
+inline int http_timeout_ms(int64_t remaining_us) {
+  return static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(15000, remaining_us / 1000)));
+}
+inline bool http_retryable(int status, bool open_failed, bool replay_safe, bool certificate_error) {
+  if (certificate_error) return false;
+  return (status <= 0 && (open_failed || replay_safe)) ||
+         (replay_safe && (status == 200 || status == 502 || status == 503 || status == 504));
+}
 // Only spend radio energy on a clock preflight when a measurement is due,
 // the RTC time is not trusted and the battery permits Wi-Fi.
 inline bool needs_clock_preflight(bool trusted_clock, bool measurement_due,

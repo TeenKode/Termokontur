@@ -42,6 +42,15 @@ int main() {
   assert(sensor::next_sleep_s(1800, 1500, true, 1010, 1000) == 10);
   assert(sensor::next_sleep_s(1800, 1500, false, 1010, 1000) == 1500);
   assert(sensor::next_sleep_s(1, 0, true, 1000, 1000) == 1);
+  assert(sensor::http_timeout_ms(20000000) == 15000);
+  assert(sensor::http_timeout_ms(3250000) == 3250);
+  assert(sensor::http_timeout_ms(-1) == 1);
+  assert(sensor::http_retryable(-1, true, false, false));
+  assert(!sensor::http_retryable(-1, false, false, false));
+  assert(sensor::http_retryable(200, false, true, false));
+  assert(sensor::http_retryable(503, false, true, false));
+  assert(!sensor::http_retryable(401, false, true, false));
+  assert(!sensor::http_retryable(-1, true, true, true));
   std::cout << "Policy: charging/cooling, 3996 ACK boundaries and retry "
                "budgets passed\n";
 }

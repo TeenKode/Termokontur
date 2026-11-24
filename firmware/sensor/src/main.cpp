@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <mutex>
-#include "driver/i2c.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -59,6 +58,7 @@ static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
 static bool net_started = false;
+static bool debug_radio = false;
 static EventGroupHandle_t events;
 static esp_netif_t *ap_netif = nullptr, *sta_netif = nullptr;
 static int64_t deadline = 0;
@@ -467,6 +467,8 @@ static bool wifi_up() {
   if (esp_wifi_start() != ESP_OK)
     return false;
   esp_wifi_set_max_tx_power(cfg.tx_qdbm);
+  if (debug_radio && esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK)
+    puts("WIFI: could not disable modem sleep for debug");
   for (int tries = 0; tries < 3 && available(); tries++) {
     esp_wifi_connect();
     int64_t attempt = esp_timer_get_time() + 10000000;
@@ -480,17 +482,19 @@ static bool wifi_up() {
   return false;
 }
 static int timeout_ms() {
-  return std::max(
-      1, std::min(3000, (int)((deadline - esp_timer_get_time()) / 1000)));
+  return sensor::http_timeout_ms(deadline - esp_timer_get_time());
 }
 // ESP-IDF 5.3 supplies the transport TLS error handle through these
 // synchronous callbacks, including on failure of esp_http_client_open().
+struct HttpDiagnostic { int verify_flags = 0; };
 static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
   if ((event->event_id == HTTP_EVENT_ERROR ||
        event->event_id == HTTP_EVENT_DISCONNECTED) && event->data) {
     int tls_code = 0, tls_flags = 0;
     const auto error = esp_tls_get_and_clear_last_error(
         static_cast<esp_tls_error_handle_t>(event->data), &tls_code, &tls_flags);
+    if (event->user_data)
+      static_cast<HttpDiagnostic *>(event->user_data)->verify_flags |= tls_flags;
     if (error != ESP_OK || tls_code || tls_flags) {
       printf("TLS: transport=%s error=0x%x verify_flags=0x%x\n",
              esp_err_to_name(error), (unsigned)tls_code, (unsigned)tls_flags);
@@ -503,7 +507,7 @@ static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
   }
   return ESP_OK;
 }
-static esp_http_client_handle_t http(const std::string &path) {
+static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *diagnostic = nullptr) {
   esp_http_client_config_t h{};
   std::string url = server + path;
   h.url = url.c_str();
@@ -511,19 +515,21 @@ static esp_http_client_handle_t http(const std::string &path) {
   h.disable_auto_redirect = true;
   h.buffer_size = 2048;
   h.event_handler = http_diagnostic;
+  h.user_data = diagnostic;
   if (ca.empty())
     h.crt_bundle_attach = esp_crt_bundle_attach;
   else
     h.cert_pem = ca.c_str();
   return esp_http_client_init(&h);
 }
-static std::string post(const std::string &path, const std::string &body,
-                        bool auth = true) {
+static std::string post_once(const std::string &path, const std::string &body,
+                             bool auth, bool &retryable, bool replay_safe) {
+  retryable = false;
+  HttpDiagnostic diagnostic;
   if (!available())
     return "";
-  auto h = http(path);
-  if (!h)
-    return "";
+  auto h = http(path, &diagnostic);
+  if (!h) { last_error = "https_client_init_failed"; return ""; }
   esp_http_client_set_method(h, HTTP_METHOD_POST);
   esp_http_client_set_header(h, "Content-Type", "application/json");
   std::string bearer = "Bearer " + token;
@@ -570,11 +576,16 @@ static std::string post(const std::string &path, const std::string &body,
     }
   }
   int status = esp_http_client_get_status_code(h);
+  // A partial HTTP body must never be interpreted as an ACK.
+  if (!esp_http_client_is_complete_data_received(h)) result.clear();
   esp_http_client_close(h);
   esp_http_client_cleanup(h);
   if (auth && status == 401) { token.clear(); save_provision(); }
   if (result.empty()) {
-    if (status > 0) {
+    retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, diagnostic.verify_flags != 0);
+    if (diagnostic.verify_flags) {
+      last_error = "tls_certificate_failed";
+    } else if (status > 0) {
       printf("HTTPS: %s HTTP %d\n", path.c_str(), status);
       last_error = "http_" + std::to_string(status);
     } else {
@@ -583,6 +594,33 @@ static std::string post(const std::string &path, const std::string &body,
     }
   }
   return result;
+}
+static std::string post(const std::string &path, const std::string &body,
+                        bool auth = true) {
+  // Bootstrap is read-only; sync deduplicates immutable records by device+seq.
+  // Never replay an ambiguous enrollment/proof after the body could be sent.
+  const bool replay_safe = path == "/api/sensors/bootstrap" ||
+      (path.rfind("/api/sensors/devices/", 0) == 0 &&
+       path.size() >= 5 && path.compare(path.size()-5, 5, "/sync") == 0);
+  for (unsigned attempt = 1; attempt <= 3 && available(); ++attempt) {
+    bool retryable = false;
+    auto response = post_once(path, body, auth, retryable, replay_safe);
+    if (!response.empty() || !retryable || attempt == 3) return response;
+    const int64_t remaining = deadline - esp_timer_get_time();
+    if (remaining < 2000000 || charging()) break;
+    printf("HTTPS: retry %u/3 for %s, remaining=%lld ms\n", attempt+1,
+           path.c_str(), (long long)(remaining/1000));
+    vTaskDelay(pdMS_TO_TICKS(attempt * 250));
+    if (!available()) break;
+    // Reconnect after losing the IP or after repeated connection failure,
+    // without resetting the shared radio deadline or the journal cursor.
+    if (!(xEventGroupGetBits(events) & 1) ||
+        (attempt == 2 && deadline - esp_timer_get_time() >= 10000000)) {
+      stop_network();
+      if (!wifi_up()) break;
+    }
+  }
+  return "";
 }
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
@@ -734,6 +772,7 @@ static bool identity_authenticate() {
   if (!factory_ticket.empty()) add(j, "setup_ticket", factory_ticket);
   body = stringify(j); cJSON_Delete(j);
   response = post("/api/sensors/auth/prove", body, false);
+  if (response.empty()) return false;
   j = cJSON_Parse(response.c_str());
   auto status = text(j, "status"), id = text(j, "device_id"), credential = text(j, "token");
   cJSON_Delete(j);
@@ -1057,6 +1096,8 @@ static void usb_test_measurement(cJSON *out) {
   add(out, "sensor_error", sensor_error_name(sample.error));
   num(out, "battery_mv", sample.battery);
   num(out, "attempts", attempts);
+  if (sample.error && sensor::is_i2c(sensor_type.c_str()) && !charging())
+    sensor::scan_i2c([] { return charging(); });
 }
 
 static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = false) {
@@ -1459,6 +1500,7 @@ extern "C" void app_main() {
       sleep_for(cfg.measure_s);
     }
     boot_debug = true;
+    debug_radio = true;
     last_error.clear();
     puts("BOOT: нажатие принято, выполняем пробную отправку.");
   }
