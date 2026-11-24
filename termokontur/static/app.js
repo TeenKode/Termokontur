@@ -334,6 +334,7 @@ function renderHistory(){
   const hasReadings=series.some(x=>x.average!=null);
   show("history-empty",!hasReadings);
   show("history-chart-frame",hasReadings);
+  show("history-legend",hasReadings);
   renderHistoryTable();
   renderBuildingSummary();
   renderBuildingMatrix();
@@ -341,8 +342,9 @@ function renderHistory(){
   renderHeatmap();
   if(hasReadings)drawHistoryChart();
 }
-const buildingPalette=["#0f9e83","#4d79c7","#e08b3f","#8768c3","#c55a83","#3f9da5","#a0763d","#78883f","#b45855","#6479a2"];
-function buildingColor(index){return buildingPalette[index%buildingPalette.length];}
+const buildingPalette=["#087b65","#356bad","#ad591d","#7951af","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
+const darkBuildingPalette=["#5bdac1","#87b7fc","#f6ae68","#bfa0f6","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
+function buildingColor(index){const palette=document.documentElement.dataset.theme==="dark"?darkBuildingPalette:buildingPalette;return palette[index%palette.length];}
 function renderHistoryLegend(){
   const legend=$("history-legend");legend.replaceChildren();
   if(!historyData)return;
@@ -353,7 +355,7 @@ function renderHistoryLegend(){
     item.append(line,document.createTextNode(building.name));
     legend.append(item);
   });
-  if(buildings.length>1){
+  if(buildings.length!==1){
     const item=el("span","history-key");
     item.append(el("i","history-key-school"),document.createTextNode("Вся школа"));
     legend.append(item);
@@ -414,78 +416,152 @@ function renderBuildingMatrix(){
   }
   show("building-matrix-empty",buildings.length===0);
 }
+/* Shared canvas trends: one layout, readable scales, and gap-aware series. */
+function trendScale(values,percent=false){
+  if(percent)return {min:0,max:100,step:25};
+  const lo=Math.min(...values),hi=Math.max(...values);
+  const span=Math.max(4,hi-lo+1);
+  const target=span/4,power=10**Math.floor(Math.log10(target));
+  const steps=[1,2,2.5,5,10,20].map(v=>v*power);
+  for(const step of steps){
+    if(step<target)continue;
+    const min=Math.floor((lo-.5)/step)*step;
+    if(min+4*step>=hi+.5)return {min,max:min+4*step,step};
+  }
+  return {min:lo-1,max:hi+1,step:(hi-lo+2)/4};
+}
+function trendTicks(positions,width,labelWidth){
+  if(!positions.length)return [];
+  if(positions.length===1)return [0];
+  const last=positions.length-1,available=Math.max(1,Math.floor(width/labelWidth));
+  if(width<labelWidth)return [last];
+  const chosen=[0];
+  for(let i=1;i<last;i++){
+    if(chosen.length>=available)break;
+    if((positions[i]-positions[chosen.at(-1)])*width>=labelWidth&&
+       (positions[last]-positions[i])*width>=labelWidth)chosen.push(i);
+  }
+  if((positions[last]-positions[chosen.at(-1)])*width>=labelWidth)chosen.push(last);
+  return chosen;
+}
+function renderTrend(canvas,options){
+  const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
+  if(!width||!height)return;
+  const ctx=canvas.getContext("2d");if(!ctx)return;
+  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const dark=document.documentElement.dataset.theme==="dark";
+  const ink=dark?"#b9c9dc":"#465d73",grid=dark?"#35465b":"#e0e8ef",surface=dark?"#18283b":"#fff";
+  const frame=canvas.parentElement;
+  let tooltip=frame.querySelector(".trend-tooltip")||frame.querySelector("#history-tooltip");
+  if(!tooltip){tooltip=el("div","trend-tooltip");frame.append(tooltip);}
+  tooltip.classList.add("trend-tooltip");tooltip.hidden=true;
+  canvas.onpointermove=canvas.onpointerleave=canvas.onpointerdown=canvas.onkeydown=canvas.onblur=null;
+  const data=options.points,series=options.series.filter(s=>s.values.some(Number.isFinite));
+  const primary=series.filter(s=>s.unit!=="%"),humidity=series.filter(s=>s.unit==="%");
+  const dual=primary.length>0&&humidity.length>0;
+  const scale=trendScale(primary.flatMap(s=>s.values.filter(Number.isFinite)),!primary.length);
+  const secondary=trendScale([],true);
+  const left=width<320?47:58,right=width-(dual?47:20),top=29,bottom=height-35;
+  const plotWidth=right-left,plotHeight=bottom-top;
+  const times=data.map((p,i)=>Number.isFinite(p.time)?p.time:i);
+  const first=Math.min(...times),last=Math.max(...times);
+  const positions=times.map(t=>last===first?.5:(t-first)/(last-first));
+  const x=i=>left+positions[i]*plotWidth;
+  const y=(v,s)=>{const a=dual&&s.unit==="%"?secondary:scale;return bottom-(v-a.min)/(a.max-a.min)*plotHeight;};
+  const format=v=>Number(v.toFixed(2)).toLocaleString("ru-RU",{maximumFractionDigits:2});
+  function draw(active=-1){
+    ctx.clearRect(0,0,width,height);
+    ctx.font="12px system-ui";ctx.fillStyle=ink;ctx.textBaseline="middle";
+    if(!series.length||plotWidth<=0||plotHeight<=0){
+      ctx.textAlign="center";ctx.fillText(options.empty||"Нет данных за выбранный период",width/2,height/2,Math.max(1,width-24));return;
+    }
+    ctx.font="600 11px system-ui";ctx.textAlign="left";ctx.fillStyle=primary.length&&dual?primary[0].color:ink;
+    ctx.fillText(primary.length?"Температура, °C":"Влажность, %",left,12);
+    if(dual){ctx.textAlign="right";ctx.fillStyle=humidity[0].color;ctx.fillText(width<360?"%":"Влажность, %",right,12);}
+    ctx.font="11px system-ui";
+    for(let i=0;i<=4;i++){
+      const yy=bottom-i*plotHeight/4;
+      ctx.strokeStyle=grid;ctx.lineWidth=1;ctx.setLineDash(i===0?[]:[3,4]);
+      ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();
+      ctx.fillStyle=ink;ctx.textAlign="right";ctx.fillText(format(scale.min+i*scale.step),left-8,yy);
+      if(dual){ctx.textAlign="left";ctx.fillText(String(i*25)+"%",right+7,yy);}
+    }
+    ctx.setLineDash([]);
+    const labelWidth=Math.max(44,...data.map(p=>ctx.measureText(p.label).width+15));
+    ctx.fillStyle=ink;
+    for(const i of trendTicks(positions,plotWidth,labelWidth)){
+      ctx.textAlign=positions[i]<.01?"left":positions[i]>.99?"right":"center";
+      ctx.fillText(data[i].label,x(i),height-13);
+    }
+    for(const s of series){
+      ctx.strokeStyle=s.color;ctx.lineWidth=s.dash?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
+      ctx.setLineDash(s.dash||[]);ctx.beginPath();
+      const connected=i=>i>0&&Number.isFinite(s.values[i-1])&&Number.isFinite(s.values[i])&&(!options.contiguous||options.contiguous(i));
+      for(let i=0;i<data.length;i++){
+        if(!Number.isFinite(s.values[i]))continue;
+        if(connected(i))ctx.lineTo(x(i),y(s.values[i],s));else ctx.moveTo(x(i),y(s.values[i],s));
+      }
+      ctx.stroke();ctx.setLineDash([]);
+      for(let i=0;i<data.length;i++){
+        if(!Number.isFinite(s.values[i]))continue;
+        const isolated=!connected(i)&&!connected(i+1);
+        if(!isolated&&active!==i&&data.length>Math.max(24,plotWidth/17))continue;
+        ctx.beginPath();ctx.arc(x(i),y(s.values[i],s),active===i?4.5:3,0,Math.PI*2);
+        ctx.fillStyle=surface;ctx.fill();ctx.strokeStyle=s.color;ctx.lineWidth=2;ctx.stroke();
+      }
+    }
+    if(active>=0){
+      ctx.strokeStyle=ink;ctx.globalAlpha=.5;ctx.lineWidth=1;ctx.setLineDash([3,4]);
+      ctx.beginPath();ctx.moveTo(x(active),top);ctx.lineTo(x(active),bottom);ctx.stroke();
+      ctx.setLineDash([]);ctx.globalAlpha=1;
+    }
+  }
+  draw();
+  if(!series.length||plotWidth<=0||plotHeight<=0){canvas.removeAttribute("tabindex");return;}
+  let active=-1;
+  function select(i){
+    active=i;draw(i);tooltip.replaceChildren();
+    tooltip.append(el("strong","trend-tooltip-date",data[i].title||data[i].label));
+    for(const s of series){
+      const row=el("div","trend-tooltip-row"),key=el("span","trend-tooltip-key"),dot=el("i","trend-tooltip-dot");
+      dot.style.background=s.color;key.append(dot,document.createTextNode(s.name));
+      const v=s.values[i];row.append(key,el("b","",Number.isFinite(v)?format(v)+(s.unit==="%"?" %":" °C"):"Нет данных"));
+      tooltip.append(row);
+    }
+    tooltip.hidden=false;
+    const rect=canvas.getBoundingClientRect(),parent=frame.getBoundingClientRect();
+    const offset=rect.left-parent.left,half=tooltip.offsetWidth/2;
+    tooltip.style.left=Math.max(half+6,Math.min(frame.clientWidth-half-6,offset+x(i)))+"px";
+    tooltip.style.top=(rect.top-parent.top+4)+"px";
+    tooltip.style.transform="translateX(-50%)";
+  }
+  function clear(){active=-1;tooltip.hidden=true;draw();}
+  function pointer(event){
+    const rect=canvas.getBoundingClientRect(),px=event.clientX-rect.left;
+    if(px<left-10||px>right+10){clear();return;}
+    let best=0;
+    for(let i=1;i<data.length;i++)if(Math.abs(x(i)-px)<Math.abs(x(best)-px))best=i;
+    if(best!==active)select(best);
+  }
+  canvas.tabIndex=0;
+  canvas.onpointermove=pointer;canvas.onpointerdown=pointer;canvas.onpointerleave=clear;canvas.onblur=clear;
+  canvas.onkeydown=event=>{
+    if(event.key==="Escape"){clear();return;}
+    if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
+    event.preventDefault();
+    select(event.key==="Home"?0:event.key==="End"?data.length-1:Math.max(0,Math.min(data.length-1,active<0?0:active+(event.key==="ArrowRight"?1:-1))));
+  };
+}
 function drawHistoryChart(){
   const canvas=$("history-chart");
   if(!historyData||selectedTab!=="overview"||$("history-content").hidden||$("history-chart-frame").hidden)return;
-  const series=historyData.series,buildings=historyData.buildings||[];
-  const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
-  if(!width||!height)return;
-  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
-  const ctx=canvas.getContext("2d");if(!ctx)return;
-  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
-  const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
-  const observed=[...series,...buildings.flatMap(x=>x.series)].map(x=>x.average).filter(v=>v!==null);
-  if(!observed.length)return;
-  let minimum=Math.floor(Math.min(...observed)-1),maximum=Math.ceil(Math.max(...observed)+1);
-  if(maximum-minimum<4){const mid=(minimum+maximum)/2;minimum=mid-2;maximum=mid+2;}
-  const px=i=>left+(series.length===1?graphWidth/2:graphWidth*i/(series.length-1));
-  const py=v=>top+(maximum-v)/(maximum-minimum)*graphHeight;
-  const dark=document.documentElement.dataset.theme==="dark";
-  const historyGrid=dark?"#354961":"#eaf0f4",historyText=dark?"#b4c5da":"#5d7187";
-  ctx.font="12px system-ui";ctx.strokeStyle=historyGrid;ctx.fillStyle=historyText;ctx.textAlign="right";ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const value=minimum+(maximum-minimum)*(4-i)/4,y=top+graphHeight*i/4;
-    ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();
-    ctx.fillText(value.toLocaleString("ru-RU",{maximumFractionDigits:1})+"°",left-8,y+4);
-  }
-  function line(points,color,dashed=false){
-    ctx.strokeStyle=color;ctx.lineWidth=dashed?2:2.6;ctx.lineJoin="round";ctx.lineCap="round";
-    ctx.setLineDash(dashed?[7,5]:[]);
-    // Each segment is drawn separately, so missing calendar dates never bridge.
-    for(let i=0;i<points.length-1;i++){
-      if(points[i].average==null||points[i+1].average==null)continue;
-      ctx.beginPath();ctx.moveTo(px(i),py(points[i].average));
-      ctx.lineTo(px(i+1),py(points[i+1].average));ctx.stroke();
-    }
-    ctx.setLineDash([]);
-    for(let i=0;i<points.length;i++){
-      if(points[i].average==null)continue;
-      ctx.beginPath();ctx.arc(px(i),py(points[i].average),dashed?2.3:3.3,0,Math.PI*2);
-      ctx.fillStyle=dashed?color:(dark?"#152438":"#fff");ctx.fill();
-      if(!dashed){ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();}
-    }
-  }
-  // On the school-wide view prioritize building lines, with the school mean
-  // as a restrained dashed reference. When one building is selected, draw only it.
-  if(buildings.length>1)line(series,dark?"#a5bacc":"#6a7b8d",true);
-  buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
-  ctx.textAlign="center";ctx.fillStyle=historyText;ctx.font="11px system-ui";
-  const ticks=Math.max(1,Math.min(7,series.length-1,Math.floor(graphWidth/44)));
-  for(let tick=0;tick<=ticks;tick++){
-    const i=Math.round(tick*(series.length-1)/ticks);
-    ctx.fillText(shortDay(series[i].date),px(i),height-15);
-  }
+  const {series,buildings=[]}=historyData,dark=document.documentElement.dataset.theme==="dark";
+  const lines=buildings.map((b,i)=>({name:b.name,color:buildingColor(i),unit:"°C",values:b.series.map(d=>d.average)}));
+  if(buildings.length!==1)lines.unshift({name:"Вся школа",color:dark?"#b8c8da":"#63768a",unit:"°C",dash:[7,5],values:series.map(d=>d.average)});
+  renderTrend(canvas,{points:series.map(d=>({label:shortDay(d.date),title:fullDay(d.date)})),series:lines});
 }
-function hoverHistoryChart(event){
-  const canvas=$("history-chart"),tooltip=$("history-tooltip");
-  if(!historyData||$("history-chart-frame").hidden)return;
-  const rect=canvas.getBoundingClientRect(),width=rect.width,left=51,right=18;
-  const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
-  const index=Math.round(ratio*(historyData.series.length-1));
-  const day=historyData.series[index];if(!day)return;
-  const buildings=historyData.buildings||[];
-  const lines=[fullDay(day.date)];
-  for(const building of buildings.slice(0,8)){
-    const value=building.series[index];
-    lines.push(building.name+": "+temperature(value.average)+" ("+value.rooms_measured+"/"+value.rooms_total+")");
-  }
-  if(buildings.length>8)lines.push("Ещё зданий: "+(buildings.length-8));
-  if(buildings.length>1)lines.push("Общая: "+temperature(day.average));
-  tooltip.textContent=lines.join(" · ");
-  tooltip.hidden=false;
-  tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
-  tooltip.style.top="6px";
-}
+
 function resetHistorySummary(){
   historyData=null;
   for(const id of ["avg-today","today-coverage"])$(id).textContent="—";
@@ -532,59 +608,15 @@ function exportHistory(){
 function drawReportTrend(){
   const section=selectedReportSection;
   if(!reportsData||!["temperature","humidity"].includes(section)||$("report-pane-"+section).hidden)return;
-  const humidity=section==="humidity";
-  const canvas=$("report-"+section+"-chart"),days=reportsData.daily;
-  const metric=humidity?"humidity_average":"average",unit=humidity?"%":"°";
-  const color=humidity?"#5289dc":document.documentElement.dataset.theme==="dark"?"#66d7b7":"#0d997d";
-  const width=Math.max(240,Math.round(canvas.parentElement.clientWidth-2));
-  const height=260,dpr=window.devicePixelRatio||1;
-  canvas.width=Math.round(width*dpr);
-  canvas.height=Math.round(height*dpr);
-  const ctx=canvas.getContext("2d");
-  ctx.scale(dpr,dpr);
-  const vals=days.map(row=>row[metric]).filter(value=>value!=null);
-  const dark=document.documentElement.dataset.theme==="dark";
-  const text=dark?"#b7cad6":"#627385";
-  const grid=dark?"#385364":"#dce6e9";
-  ctx.font="12px sans-serif";ctx.textBaseline="middle";
-  if(!vals.length){
-    ctx.fillStyle=text;ctx.fillText(humidity?"Нет замеров влажности":"Нет замеров температуры",20,height/2);
-    return;
-  }
-  const margin={left:56,right:20,top:18,bottom:36};
-  const min=humidity?0:Math.floor(Math.min(...vals)-1),max=humidity?100:Math.ceil(Math.max(...vals)+1);
-  const delta=Math.max(1,max-min);
-  const x=i=>margin.left+(width-margin.left-margin.right)*i/Math.max(1,days.length-1);
-  const y=v=>margin.top+(max-v)/delta*(height-margin.top-margin.bottom);
-  for(let n=0;n<=4;n++){
-    const value=min+(max-min)*n/4,yy=y(value);
-    ctx.strokeStyle=grid;ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(margin.left,yy);ctx.lineTo(width-margin.right,yy);ctx.stroke();
-    ctx.fillStyle=text;ctx.textAlign="right";
-    ctx.fillText(value.toFixed(humidity?0:1)+unit,margin.left-9,yy);
-  }
-  ctx.strokeStyle=color;ctx.lineWidth=2.5;
-  let connected=false;
-  for(let i=0;i<days.length;i++){
-    const v=days[i][metric];
-    if(v==null){connected=false;continue;}
-    if(!connected){ctx.beginPath();ctx.moveTo(x(i),y(v));connected=true;}
-    else ctx.lineTo(x(i),y(v));
-    // Broken periods remain visually distinct.
-    if(i===days.length-1||days[i+1][metric]==null){ctx.stroke();connected=false;}
-  }
-  if(days.length<=45){
-    for(let i=0;i<days.length;i++){
-      const v=days[i][metric];if(v==null)continue;
-      ctx.beginPath();ctx.arc(x(i),y(v),2.5,0,2*Math.PI);
-      ctx.fillStyle=color;ctx.fill();
-    }
-  }
-  ctx.textAlign="left";ctx.fillStyle=text;ctx.textBaseline="bottom";
-  ctx.fillText(fullDay(days[0].date),margin.left,height-8);
-  ctx.textAlign="right";
-  ctx.fillText(fullDay(days[days.length-1].date),width-margin.right,height-8);
+  const humidity=section==="humidity",days=reportsData.daily,dark=document.documentElement.dataset.theme==="dark";
+  const name=humidity?"Средняя влажность":"Средняя температура";
+  renderTrend($("report-"+section+"-chart"),{
+    points:days.map(d=>({label:shortDay(d.date),title:fullDay(d.date)})),
+    series:[{name,unit:humidity?"%":"°C",color:humidity?(dark?"#87b7fc":"#356bad"):(dark?"#5bdac1":"#087b65"),values:days.map(d=>d[humidity?"humidity_average":"average"])}],
+    empty:humidity?"Нет замеров влажности":"Нет замеров температуры"
+  });
 }
+
 function reportNumber(value,suffix=""){
   return value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:2})+suffix;
 }
@@ -1016,35 +1048,14 @@ $("reading-history-done").addEventListener("click",()=>$("reading-history-dialog
 function drawChart(){
   const filter=$("reading-filter").value;
   if(!filter||$("view-readings").hidden)return;
-  const canvas=$("reading-chart"), parent=canvas.parentElement;
-  const rectWidth=Math.max(200,parent.clientWidth-46), dpr=window.devicePixelRatio||1;
-  const height=200;
-  canvas.width=rectWidth*dpr;canvas.height=height*dpr;
-  const ctx=canvas.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,rectWidth,height);
   const data=readings.filter(r=>String(r.room_id)===filter).slice(0,40).reverse();
-  const left=44,right=15,top=18,bottom=30,w=rectWidth-left-right,h=height-top-bottom;
-  const values=data.map(x=>Number(x.value));
-  const min=values.length?Math.floor(Math.min(...values)-1):16;
-  const max=values.length?Math.ceil(Math.max(...values)+1):26;
-  const span=Math.max(1,max-min);
   const dark=document.documentElement.dataset.theme==="dark";
-  const chartGrid=dark?"#354961":"#e5ebf1",chartText=dark?"#b4c4d9":"#5d7187";
-  ctx.font="11px system-ui";ctx.textAlign="right";ctx.strokeStyle=chartGrid;ctx.fillStyle=chartText;ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const y=top+h*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(rectWidth-right,y);ctx.stroke();
-    ctx.fillText((max-span*i/4).toFixed(1),left-8,y+4);
-  }
-  if(!data.length){ctx.textAlign="center";ctx.fillText("Нет данных для графика",rectWidth/2,top+h/2);return;}
-  const px=i=>left+(data.length===1?w/2:i*w/(data.length-1));
-  const py=v=>top+h-(v-min)/span*h;
-  ctx.beginPath();data.forEach((x,i)=>{if(i===0)ctx.moveTo(px(i),py(x.value));else ctx.lineTo(px(i),py(x.value));});
-  ctx.strokeStyle="#14a786";ctx.lineWidth=2.5;ctx.stroke();
-  data.forEach((x,i)=>{ctx.beginPath();ctx.arc(px(i),py(x.value),3,0,Math.PI*2);ctx.fillStyle="#14a786";ctx.fill();});
-  ctx.fillStyle=chartText;ctx.textAlign="center";
-  ctx.fillText(when(data[0].observed_at),left+55,height-8);
-  if(data.length>1)ctx.fillText(when(data[data.length-1].observed_at),rectWidth-right-55,height-8);
+  renderTrend($("reading-chart"),{
+    points:data.map(r=>({label:when(r.observed_at),title:when(r.observed_at),time:Date.parse(r.observed_at)})),
+    series:[{name:"Температура",unit:"°C",color:dark?"#5bdac1":"#087b65",values:data.map(r=>r.value==null?null:Number(r.value))}]
+  });
 }
+
 async function refresh() {
   if(refreshBusy)return;
   refreshBusy=true;
@@ -1164,8 +1175,6 @@ $("building-filter").addEventListener("change",()=>{renderOverview();renderDaily
 $("history-period").addEventListener("change",refreshHistory);
 $("heatmap-search").addEventListener("input",renderHeatmap);
 $("history-export").addEventListener("click",exportHistory);
-$("history-chart").addEventListener("pointermove",hoverHistoryChart);
-$("history-chart").addEventListener("pointerleave",()=>{$("history-tooltip").hidden=true;});
 $("reading-filter").addEventListener("change",()=>{
   readings=[];
   renderReadings();
@@ -1266,7 +1275,9 @@ $("reading-form").addEventListener("submit",async event=>{
     $("reading-dialog").close();await refresh();toast("Показание записано");}
   catch(error){toast(error.message,true);}
 });
+function redrawPanelTrends(){if(selectedTab==="readings")drawChart();if(selectedTab==="overview"){renderHistoryLegend();renderBuildingSummary();drawHistoryChart();}if(selectedTab==="reports")drawReportTrend();}
 window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();if(selectedTab==="reports")drawReportTrend();});
+document.addEventListener("termokontur:themechange",redrawPanelTrends);
 (async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp(result);await refresh();}else enterLogin();}catch{enterLogin();}})();
 
 /* Accessible settings workspace: categories, overview and independent saves. */

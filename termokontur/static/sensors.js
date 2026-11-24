@@ -83,58 +83,21 @@ async function openSensor(id,reveal=false){
 function drawSensorChart(){
   const canvas=$("sensor-chart");
   if(!sensorSelected||$("view-sensors").hidden)return;
-  const width=canvas.clientWidth,height=canvas.clientHeight,ratio=window.devicePixelRatio||1;
-  if(!width||!height)return;
-  canvas.width=width*ratio;canvas.height=height*ratio;
-  const ctx=canvas.getContext("2d"), colors=getComputedStyle(canvas);
-  ctx.scale(ratio,ratio);ctx.clearRect(0,0,width,height);
-  const dark=document.documentElement.dataset.theme==="dark";
-  ctx.fillStyle=dark?"#bbcad5":"#526271";ctx.font="12px system-ui";
-
-  const points=sensorRecords.filter(r=>r.measured_at&&!r.error).reverse();
-  const temperatures=points.map(sample=>sample.temperature).filter(Number.isFinite);
-  const hasTemperature=temperatures.length>0;
-  const hasHumidity=points.some(sample=>Number.isFinite(sample.humidity));
-  show("sensor-temperature-key",hasTemperature);
-  show("sensor-humidity-key",hasHumidity);
-  if(!hasTemperature&&!hasHumidity){ctx.fillText("Нет измерений с точной датой",20,40);return;}
-
-  const first=points[0].measured_at,last=points.at(-1).measured_at;
-  const left=45,right=width-42,top=25,bottom=height-40;
-  const series=[];
-  if(hasTemperature){
-    const min=Math.floor(Math.min(...temperatures)-1),max=Math.ceil(Math.max(...temperatures)+1);
-    ctx.fillText(min+" °C",2,bottom);ctx.fillText(max+" °C",2,top);
-    series.push(["temperature",colors.getPropertyValue("--sensor-temperature").trim(),min,max,[]]);
-  }
-  if(hasHumidity){
-    ctx.fillText("100%",right+3,top);ctx.fillText("0%",right+3,bottom);
-    series.push(["humidity",colors.getPropertyValue("--sensor-humidity").trim(),0,100,[7,4]]);
-  }
-  ctx.fillText(sensorWhen(first),left,height-12);
-  if(last!==first)ctx.fillText(sensorWhen(last),Math.max(left,right-110),height-12);
-
-  const xFor=sample=>last===first?(left+right)/2:left+(sample.measured_at-first)/(last-first)*(right-left);
-  const contiguous=(from,to)=>from&&to&&to.seq===from.seq+1&&to.measured_at-from.measured_at<=2*to.interval_s;
-  for(const [key,color,min,max,dashes] of series){
-    const samples=points.map(sample=>Number.isFinite(sample[key])?sample:null);
-    const yFor=sample=>bottom-(sample[key]-min)/(max-min)*(bottom-top);
-    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash(dashes);ctx.beginPath();
-    for(const [i,sample] of samples.entries()){
-      if(!sample)continue;
-      if(contiguous(samples[i-1],sample))ctx.lineTo(xFor(sample),yFor(sample));
-      else ctx.moveTo(xFor(sample),yFor(sample));
-    }
-    ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle=color;ctx.beginPath();
-    for(const [i,sample] of samples.entries()){
-      if(!sample||contiguous(samples[i-1],sample)||contiguous(sample,samples[i+1]))continue;
-      const x=xFor(sample),y=yFor(sample);
-      ctx.moveTo(x+4,y);ctx.arc(x,y,4,0,2*Math.PI);
-    }
-    ctx.fill();
-  }
+  const points=sensorRecords.filter(r=>r.measured_at&&!r.error).slice().sort((a,b)=>a.measured_at-b.measured_at||a.seq-b.seq);
+  const colors=getComputedStyle(canvas);
+  const hasTemperature=points.some(p=>Number.isFinite(p.temperature)),hasHumidity=points.some(p=>Number.isFinite(p.humidity));
+  show("sensor-temperature-key",hasTemperature);show("sensor-humidity-key",hasHumidity);
+  renderTrend(canvas,{
+    points:points.map(p=>({time:p.measured_at,label:sensorWhen(p.measured_at),title:sensorWhen(p.measured_at)})),
+    series:[
+      {name:"Температура",unit:"°C",color:colors.getPropertyValue("--sensor-temperature").trim(),values:points.map(p=>p.temperature)},
+      {name:"Влажность",unit:"%",color:colors.getPropertyValue("--sensor-humidity").trim(),dash:[7,4],values:points.map(p=>p.humidity)}
+    ],
+    contiguous:i=>{const from=points[i-1],to=points[i];return Boolean(from&&to&&to.seq===from.seq+1&&to.measured_at-from.measured_at<=2*to.interval_s);},
+    empty:"Нет измерений с точной датой"
+  });
 }
+
 function revealSensorCode(reply){$("sensor-code-help").textContent="Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.";$("sensor-code-id").value=reply.device_id;$("sensor-code-value").value=reply.code;$("sensor-code-dialog").showModal();}
 $("sensor-add").addEventListener("click",()=>{
   $("sensor-add-form").reset();

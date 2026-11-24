@@ -192,3 +192,23 @@ test("clearing a report hides its table and disables both exports",()=>{
   assert.equal(fields["report-export-pdf"].disabled,true);
   assert.equal(fields["report-status"].textContent,"Не удалось сформировать отчёт.");
 });
+
+
+// Shared trend axes must remain meaningful for constant/negative temperatures
+// and a single measurement; humidity must always keep its physical scale.
+test("trend scale and label spacing",()=>{
+  const vm=require("node:vm");
+  const start=source.indexOf("function trendScale("),end=source.indexOf("function renderTrend(");
+  assert.ok(start>=0&&end>start);
+  const {trendScale,trendTicks}=vm.runInNewContext(source.slice(start,end)+";({trendScale,trendTicks})");
+  for(const values of [[21],[21,22],[-12,-3],[16.3,38.4],[0]]){
+    const a=trendScale(values);
+    assert.ok(a.min<Math.min(...values)&&a.max>Math.max(...values));
+    assert.ok(a.max-a.min>=4&&a.step>0);
+  }
+  const h=trendScale([],true);
+  assert.equal(h.min,0);assert.equal(h.max,100);assert.equal(h.step,25);
+  assert.equal(JSON.stringify(trendTicks([.5],200,60)),"[0]");
+  assert.equal(JSON.stringify(trendTicks([0,.1,.2,.3,1],100,60)),"[0,4]");
+  assert.equal(JSON.stringify(trendTicks([],100,60)),"[]");
+});
