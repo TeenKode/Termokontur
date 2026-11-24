@@ -113,7 +113,7 @@ function usbSettings(){
   if(!$("usb-setup-random").checked&&$("usb-setup-password").value!==$("usb-setup-confirm").value)throw Error("Пароли сети настройки не совпадают");
   const config={...usbDefaults,enabled:$("usb-measure-enabled").checked};
   for(const [key] of sensorConfigFields)config[key]=Number(form.elements[key].value);
-  if(config.send_s<config.measure_s||config.cutoff_mv>config.wifi_min_mv||config.wifi_min_mv>config.ota_min_mv)throw Error("Передача должна быть не чаще измерений. Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление.");
+  if((config.wifi_min_mv!==0&&config.cutoff_mv>config.wifi_min_mv)||config.cutoff_mv>config.ota_min_mv)throw Error("Пороги Wi-Fi и OTA должны быть не ниже отключения. Для Wi-Fi можно указать 0.");
   return {name:$("usb-name").value.trim(),room_id:Number($("usb-room").value),sensor_type:$("usb-type").value,config,
     settings:{ssid:$("usb-ssid").value,password,server:url.origin,dns_primary:dnsPrimary,dns_secondary:dnsSecondary,
       setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked}};

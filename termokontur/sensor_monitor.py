@@ -18,7 +18,7 @@ def upload_times(device: dict, *, complete: bool = False) -> tuple[int, int]:
 
 def battery_warning(device: dict) -> bool:
     battery = device["battery_mv"]
-    return bool(battery and battery <= min(4200, device["config"]["wifi_min_mv"] + 150))
+    return bool(battery and battery <= min(4200, max(device["config"]["cutoff_mv"], device["config"]["wifi_min_mv"]) + 150))
 
 
 def by_room(conn, building="") -> dict[int, list[dict]]:

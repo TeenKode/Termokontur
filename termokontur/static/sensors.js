@@ -4,10 +4,10 @@ const sensorFirmwareBase="/api/sensors/firmware/bundled";
 const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив",rejected:"Доступ отклонён",authorization_pending:"Требуется разрешение"};
 const sensorTime={unknown:"Дата неизвестна",sntp:"Сервер времени",server:"Сервер",rtc:"Часы устройства"};
 const sensorConfigFields=[
-  ["measure_s","Интервал измерений, с",60,86400],["send_s","Интервал передачи, с",600,604800],
-  ["cool_s","Пауза после зарядки, с",300,86400],["wifi_budget_s","Время на подключение Wi-Fi, с",15,120],
-  ["cutoff_mv","Порог отключения, мВ",3100,3800],["wifi_min_mv","Минимум для Wi-Fi, мВ",3300,4100],
-  ["ota_min_mv","Минимум для обновления, мВ",3600,4200],["tx_qdbm","Мощность Wi-Fi, четверти dBm",8,78],
+  ["measure_s","Интервал измерений, с",1,604800],["send_s","Интервал передачи, с",1,604800],
+  ["cool_s","Пауза после зарядки, с (0 — без паузы)",0,86400],["wifi_budget_s","Время на подключение Wi-Fi, с",1,600],
+  ["cutoff_mv","Порог отключения, мВ",3000,4200],["wifi_min_mv","Минимум для Wi-Fi, мВ (0 — без отдельного порога)",0,4200],
+  ["ota_min_mv","Минимум для обновления, мВ",3300,4200],["tx_qdbm","Мощность Wi-Fi, четверти dBm",8,78],
   ["adc_scale_ppm","Коэффициент делителя АЦП, ppm",1600000,2400000]
 ];
 function sensorWhen(epoch){return epoch?when(new Date(epoch*1000).toISOString()):"—";}
