@@ -466,3 +466,18 @@ def test_relaxed_intervals_and_voltage_limits():
                    {"wifi_min_mv":4201}, {"ota_min_mv":-1}):
         with pytest.raises(ValueError):
             sensors.Config(**kwargs)
+
+
+def test_sensor_history_cursor_and_full_csv(admin, client):
+    import csv
+    d, _, headers, _ = setup_sensor(admin)
+    records = [record(i) for i in range(1, 6)]
+    assert sync(admin, d, headers, batch(records, next_seq=6)).status_code == 200
+    path = "/api/sensors/devices/" + d["device_id"] + "/records"
+    assert [r["seq"] for r in admin.get(path+"?limit=2").json()] == [5, 4]
+    assert [r["seq"] for r in admin.get(path+"?limit=2&before_seq=4").json()] == [3, 2]
+    export = admin.get(path+".csv")
+    assert export.status_code == 200 and "attachment" in export.headers["content-disposition"]
+    assert [int(r["seq"]) for r in csv.DictReader(export.content.decode("utf-8-sig").splitlines())] == [5,4,3,2,1]
+    admin.post("/api/logout")
+    assert client.get(path+".csv").status_code == 401
