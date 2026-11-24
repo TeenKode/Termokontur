@@ -5,3 +5,8 @@ PRs into main run Python 3.11/3.13, Node/Bash checks and browser integration on 
 Pushes to main and manual runs always run the complete suite, including the real firmware bundle browser test. Publication remains push-to-main only, and waits for firmware validation and both browser jobs. Each release bundle is rebuilt for the exact main commit; no binary artifact is reused across revisions. PlatformIO's content-based build cache reuses derived objects instead of restoring a stale build tree. Python, Playwright browser downloads, and npm downloads are cached. Browser OS dependencies are still installed/verified on each runner.
 
 Timing depends on runner availability, cache warmth, and changed files. Check the Actions job durations to measure improvement; a cold cache may be slower. Hardware testing remains separate.
+
+
+## Воспроизводимые зависимости
+
+Версии Python-зависимостей зафиксированы по успешной матрице CI (3.11 и 3.13). При обновлении меняйте связанные пакеты вместе и проверяйте тесты Python, браузера и штатного установщика Debian. Это фиксирует версии, но не является проверкой подписи или хешей каждого дистрибутива. Dependabot предлагает обновления еженедельно; их не следует сливать без CI.
