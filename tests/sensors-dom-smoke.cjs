@@ -23,6 +23,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   const html=await(await fetch(base)).text();const console=new VirtualConsole();console.on("jsdomError",e=>errors.push(String(e)));
   dom=new JSDOM(html,{url:base,runScripts:"outside-only",pretendToBeVisual:true,virtualConsole:console});
   const w=dom.window,d=w.document;w.fetch=fetchWithCookies;w.confirm=()=>true;w.scrollTo=()=>{};w.matchMedia=()=>({matches:false,addEventListener(){}});
+  w.HTMLElement.prototype.scrollIntoView=()=>{};
   const ctx=new Proxy({measureText:()=>({width:50})},{get:(o,k)=>k in o?o[k]:()=>{}});w.HTMLCanvasElement.prototype.getContext=()=>ctx;
   w.addEventListener("error",e=>errors.push(String(e.error)));
   const code=["theme.js","app.js","school-calendar.js","building-accounts.js","sensors.js"].map(f=>fs.readFileSync(path.join(root,"termokontur/static",f),"utf8")).join("\n");w.eval(code);
@@ -30,10 +31,14 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   d.getElementById("password").value="dom-test-password";
   d.getElementById("login-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>!d.getElementById("app-root").hidden);
-  await until(()=>d.getElementById("reading-room").options.length===1);
+  await until(()=>d.getElementById("reading-room").options.length===2);
+  assert.equal(d.getElementById("reading-room").options[0].value,"");
   d.querySelector('[data-tab="sensors"]').click();await until(()=>d.getElementById("sensor-state").textContent.includes("Подключите первый датчик"));
   // jsdom has no native modal rendering; implement only dialog open state.
-  for(const dialog of d.querySelectorAll("dialog")){dialog.showModal=()=>dialog.setAttribute("open","");dialog.close=()=>dialog.removeAttribute("open");}
+  for(const dialog of d.querySelectorAll("dialog")){
+    dialog.showModal=()=>dialog.setAttribute("open","");
+    dialog.close=()=>{dialog.removeAttribute("open");dialog.dispatchEvent(new w.Event("close"));};
+  }
   d.getElementById("sensor-add").click();d.getElementById("sensor-new-name").value="Датчик <тест>";
   d.getElementById("sensor-add-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>d.getElementById("sensor-code-value").value.length>30);

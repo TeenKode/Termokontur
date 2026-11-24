@@ -139,3 +139,56 @@ test("global feedback and busy indicators never change layout size",()=>{
   assert.doesNotMatch(styles,/transform:translateY\(4px\)/);
   assert.match(source,/button\.matches\("\[data-tab\], \[data-settings-target\]"\)/);
 });
+
+test("refresh keeps the selected room in the manual reading form",()=>{
+  function select(options,value){
+    return {
+      options,
+      get value(){return value;},
+      set value(next){value=this.options.includes(next)?next:"";},
+      replaceChildren(){this.options=[];value="";}
+    };
+  }
+  const fields={
+    "building-filter":select(["","Школа"],"Школа"),
+    "reading-filter":select(["","1","2"],"2"),
+    "reading-room":select(["","1","2"],"2"),
+    "reading-room-hint":{},
+    "reading-save":{}
+  };
+  const rooms=[{id:1,building:"Школа",name:"101"},{id:2,building:"Школа",name:"102"}];
+  const context=vm.createContext({
+    rooms,
+    buildingScope:"",
+    $:id=>fields[id],
+    show:(id,visible)=>{fields[id].hidden=!visible;},
+    option:(field,value)=>{field.options.push(value);}
+  });
+  vm.runInContext(extractFunction("renderFilters")+"\nrenderFilters();",context);
+  assert.equal(fields["reading-room"].value,"2");
+  assert.equal(fields["reading-filter"].value,"2");
+  rooms.pop();
+  vm.runInContext("renderFilters()",context);
+  assert.equal(fields["reading-room"].value,"");
+  assert.equal(fields["reading-filter"].value,"");
+});
+
+test("clearing a report hides its table and disables both exports",()=>{
+  const fields=Object.fromEntries([
+    "report-results","report-kpis","report-export-excel","report-export-pdf","report-status"
+  ].map(id=>[id,{}]));
+  const context=vm.createContext({
+    reportsData:{from:"2026-11-01",to:"2026-11-07"},
+    $:id=>fields[id],
+    show:(id,visible)=>{fields[id].hidden=!visible;}
+  });
+  vm.runInContext(
+    [extractFunction("clearReport"),extractFunction("renderReport"),
+      'clearReport("Не удалось сформировать отчёт.");'].join("\n"),context
+  );
+  assert.equal(fields["report-results"].hidden,true);
+  assert.equal(fields["report-kpis"].hidden,true);
+  assert.equal(fields["report-export-excel"].disabled,true);
+  assert.equal(fields["report-export-pdf"].disabled,true);
+  assert.equal(fields["report-status"].textContent,"Не удалось сформировать отчёт.");
+});

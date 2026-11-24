@@ -23,8 +23,11 @@
       <h1>Контроль температуры</h1>
       <p>Температура помещений и история измерений.</p>
       <form id="login-form">
-        <label for="login-name">Логин ответственного (для администратора оставьте пустым)</label>
-        <input id="login-name" type="text" maxlength="32" autocomplete="username" autocapitalize="none">
+        <div class="login-user">
+          <label for="login-name">Логин ответственного</label>
+          <input id="login-name" type="text" maxlength="32" autocomplete="username" autocapitalize="none" aria-describedby="login-name-hint">
+          <small id="login-name-hint" class="muted">Администратор входит только с паролем.</small>
+        </div>
         <label for="password">Пароль</label>
         <div class="password-field"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
         <button type="submit" class="btn primary full">Войти</button>
@@ -128,7 +131,7 @@
             <p id="history-empty" class="history-empty" hidden>За этот период нет показаний.</p>
             <details class="history-details">
               <summary>Средняя по школе за день</summary>
-              <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинеты</th><th>Отклонения</th><th>Измерений</th></tr></thead><tbody id="history-table"></tbody></table></div>
+              <div class="table-scroll" tabindex="0" role="region" aria-label="Средняя температура за день"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинеты</th><th>Отклонения</th><th>Измерений</th></tr></thead><tbody id="history-table"></tbody></table></div>
             </details>
           </div>
         </div>
@@ -139,7 +142,7 @@
           </div>
           <div id="building-summary" class="building-summary-grid" aria-live="polite"></div>
           <div class="building-matrix-heading"><h3>Средняя температура зданий по дням</h3><p>Цвет показывает пропуски измерений и отклонения от нормы.</p></div>
-          <div class="table-scroll building-matrix-scroll"><table class="building-matrix-table">
+          <div class="table-scroll building-matrix-scroll" tabindex="0" role="region" aria-label="Температура зданий по дням"><table class="building-matrix-table">
             <thead id="building-matrix-head"></thead><tbody id="building-matrix-body"></tbody>
           </table></div>
           <p id="building-matrix-empty" class="empty" hidden>Добавьте здания и показания для сравнения.</p>
@@ -153,7 +156,7 @@
               <input id="heatmap-search" type="search" placeholder="Найти кабинет" aria-label="Поиск кабинета в таблице средних температур">
             </div>
             <div class="heatmap-guide"><span class="heatmap-guide-normal">В норме</span><span class="heatmap-guide-low">Ниже нормы</span><span class="heatmap-guide-high">Выше нормы</span><span class="heatmap-guide-empty">Нет показаний</span></div>
-            <div class="table-scroll heatmap-scroll"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
+            <div class="table-scroll heatmap-scroll" tabindex="0" role="region" aria-label="Температура кабинетов по дням"><table class="heatmap-table"><thead id="heatmap-head"></thead><tbody id="heatmap-body"></tbody></table></div>
             <p id="heatmap-empty" class="empty" hidden>Кабинеты не найдены.</p>
           </div>
         </details>
@@ -170,7 +173,7 @@
               </select>
             </div>
           </div>
-          <div class="table-scroll"><table class="latest-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Статус</th><th scope="col">Норма</th><th scope="col">Получено</th></tr></thead><tbody id="overview-table"></tbody></table></div>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Последние показания"><table class="latest-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Статус</th><th scope="col">Норма</th><th scope="col">Получено</th></tr></thead><tbody id="overview-table"></tbody></table></div>
           <p id="overview-empty" class="empty" role="status" hidden></p>
         </section>
       </section>
@@ -178,9 +181,9 @@
       <section id="view-readings" class="view" hidden>
         <div class="heading"><div><h1>Журнал измерений</h1><p>История показаний от сотрудников и датчиков.</p></div><div class="heading-actions"><button type="button" id="export-csv" class="btn secondary">↓ Скачать CSV</button><button type="button" id="add-reading" class="btn primary">+ Новое измерение</button></div></div>
         <div class="panel">
-          <div class="panel-heading"><h2>Последние измерения</h2><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
-          <div class="chart-container"><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График последних измерений"></canvas><p class="chart-note">Последние показания выбранного помещения, °C</p></div>
-          <div class="table-scroll"><table><thead><tr><th>Дата и время</th><th>Корпус</th><th>Кабинет</th><th>°C</th><th>Источник</th><th>Автор</th><th>Изменения</th></tr></thead><tbody id="readings-table"></tbody></table></div>
+          <div class="panel-heading"><div><h2>Последние измерения</h2><p id="reading-chart-hint">Выберите помещение, чтобы увидеть его график.</p></div><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
+          <div class="chart-container" id="reading-chart-panel" hidden><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График температуры выбранного помещения"></canvas></div>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Журнал измерений"><table class="readings-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Дата и время</th><th scope="col">Источник</th><th scope="col">Автор</th><th scope="col">История</th></tr></thead><tbody id="readings-table"></tbody></table></div>
           <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
         </div>
       </section>
@@ -207,27 +210,27 @@
             <form id="sensor-installer-form" class="sensor-form"><label>Комплект прошивки ZIP<input id="sensor-installer-file" type="file" accept=".zip" required></label><button class="btn secondary">Загрузить комплект</button></form>
           </details>
         </div>
-        <article class="panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
+        <article class="panel sensor-claims-panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
         <div id="sensor-cards" class="sensor-cards"></div>
-        <details id="sensor-archive" class="panel" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
-        <details id="sensor-rejected-panel" class="panel" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
+        <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
+        <details id="sensor-rejected-panel" class="panel sensor-disclosure" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
         <div id="sensor-detail" class="panel" hidden>
-          <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
+          <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
           <div class="chart-container"><canvas id="sensor-chart" width="900" height="260" role="img" aria-label="Температура и влажность датчика"></canvas><p class="chart-note">Зелёная линия — температура (°C), синяя — влажность (%). Измерения без точной даты есть только в таблице.</p></div>
           <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Пороги напряжения проверьте на своей плате.</p><form id="sensor-config-form" class="sensor-form"></form></details>
-          <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware"></select></label><button class="btn secondary">Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary">Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
-          <details open><summary>Последние измерения</summary><div class="table-scroll"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
+          <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
+          <details open><summary>Последние измерения</summary><div class="table-scroll sensor-record-scroll" tabindex="0" role="region" aria-label="Измерения датчика"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
         </div>
-        <details class="panel"><summary>Home Assistant / MQTT</summary><p>В Home Assistant передаётся последнее измерение. Полная история хранится в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
+        <details class="panel sensor-disclosure"><summary>Home Assistant / MQTT</summary><p>В Home Assistant передаётся последнее измерение. Полная история хранится в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
       </section>
 
       <section id="view-rooms" class="view" hidden>
-        <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и привязки MAX.</p></div><div class="heading-actions"><button type="button" id="open-staff" class="btn secondary">Сотрудники MAX</button><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="add-room" class="btn primary">+ Добавить помещение</button></div></div>
+        <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и привязки MAX.</p></div><div class="heading-actions"><button type="button" id="add-room" class="btn primary">Добавить помещение</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="open-staff" class="btn secondary">Сотрудники MAX</button></div></div>
         <div class="panel">
-          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус или сотрудник MAX" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Скачать CSV</button></div>
-          <div class="table-scroll"><table><thead><tr><th>Название</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Допустимо</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table"></tbody></table></div>
+          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус, сотрудник" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Скачать CSV</button></div>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Список помещений"><table class="rooms-table" role="table"><thead role="rowgroup"><tr role="row"><th scope="col">Название</th><th scope="col">Корпус</th><th scope="col">Этаж</th><th>Тип</th><th>Допустимо</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table" role="rowgroup"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
       </section>
@@ -237,13 +240,10 @@
           <button type="button" id="staff-refresh" class="btn secondary">↻ Обновить список</button>
         </div>
         <div class="panel max-staff-panel">
-          <div class="panel-heading">
-            <div><h2>Сотрудники MAX</h2><p>Все пользователи, которые обращались к боту. Назначайте помещения без кодов подключения.</p></div>
-            <span class="muted" id="max-users-count">—</span>
-          </div>
           <div class="max-staff-toolbar">
-            <input id="max-users-search" type="search" placeholder="Поиск по имени, фамилии, MAX ID или кабинету" aria-label="Поиск пользователей MAX">
+            <input id="max-users-search" type="search" placeholder="Имя, MAX ID или кабинет" aria-label="Поиск пользователей MAX">
             <label class="archive-toggle"><input id="max-users-unassigned" type="checkbox"> Только без кабинетов</label>
+            <span class="muted" id="max-users-count">—</span>
           </div>
           <div id="max-users-list" class="max-staff-list" aria-live="polite"></div>
           <p class="hint">Пользователь появляется после первого сообщения или нажатия «Начать» в боте. MAX не предоставляет список людей, которые ещё не обращались к боту.</p>
@@ -255,11 +255,11 @@
         <div class="heading">
           <div><h1>Отчёты</h1><p>Сдача показаний, температурный режим, здания и сотрудники.</p></div>
           <div class="heading-actions">
-            <button type="button" class="btn secondary" id="report-export-excel">↓ Excel</button>
-            <button type="button" class="btn secondary" id="report-export-pdf">↓ PDF</button>
+            <button type="button" class="btn secondary" id="report-export-excel" disabled>↓ Excel</button>
+            <button type="button" class="btn secondary" id="report-export-pdf" disabled>↓ PDF</button>
           </div>
         </div>
-        <div class="panel">
+        <div class="panel report-filter-panel">
           <form id="report-filter-form" class="report-filters">
             <label>С даты<input id="report-start" type="date" required></label>
             <label>По дату<input id="report-end" type="date" required></label>
@@ -270,23 +270,23 @@
           <div class="report-kpis" id="report-kpis" hidden></div>
           <p class="hint">Охват считается по дням замеров в школьном календаре. Температурная статистика включает все полученные показания.</p>
         </div>
-        <div class="panel">
+        <div id="report-results" class="panel report-results" hidden>
           <div class="report-switches" role="group" aria-label="Разделы отчёта">
-            <button type="button" class="btn secondary active" data-report-section="coverage">Сдача показаний</button>
-            <button type="button" class="btn secondary" data-report-section="temperature">Температура</button>
-            <button type="button" class="btn secondary" data-report-section="humidity">Влажность</button>
-            <button type="button" class="btn secondary" data-report-section="buildings">По зданиям</button>
-            <button type="button" class="btn secondary" data-report-section="staff">По сотрудникам</button>
+            <button type="button" class="btn secondary active" data-report-section="coverage" aria-controls="report-pane-coverage" aria-pressed="true">Сдача показаний</button>
+            <button type="button" class="btn secondary" data-report-section="temperature" aria-controls="report-pane-temperature" aria-pressed="false">Температура</button>
+            <button type="button" class="btn secondary" data-report-section="humidity" aria-controls="report-pane-humidity" aria-pressed="false">Влажность</button>
+            <button type="button" class="btn secondary" data-report-section="buildings" aria-controls="report-pane-buildings" aria-pressed="false">По зданиям</button>
+            <button type="button" class="btn secondary" data-report-section="staff" aria-controls="report-pane-staff" aria-pressed="false">По сотрудникам</button>
           </div>
           <section id="report-pane-coverage">
             <h2>Сдача показаний по дням</h2>
-            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Ждут выгрузку</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Сдача показаний по дням"><table><thead><tr><th>Дата</th><th>Кабинетов</th><th>Измерено</th><th>Пропущено</th><th>Ждут выгрузку</th><th>Охват</th><th>Отклонений</th></tr></thead><tbody id="report-coverage-body"></tbody></table></div>
             <details class="report-missing"><summary>Кто передал показания (<span id="report-submitted-count">0</span>)</summary>
-              <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th><th>Температура</th><th>Передал</th><th>Когда</th></tr></thead><tbody id="report-submitted-body"></tbody></table></div>
+              <div class="table-scroll report-missing-scroll" tabindex="0" role="region" aria-label="Кто передал показания"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th><th>Температура</th><th>Передал</th><th>Когда</th></tr></thead><tbody id="report-submitted-body"></tbody></table></div>
               <p class="hint">Показаны последние 300 измеренных кабинето-дней. Полная история — в Excel.</p>
             </details>
             <details class="report-missing"><summary>Кабинеты без показаний (<span id="report-missing-count">0</span>)</summary>
-              <div class="table-scroll report-missing-scroll"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th></tr></thead><tbody id="report-missing-body"></tbody></table></div>
+              <div class="table-scroll report-missing-scroll" tabindex="0" role="region" aria-label="Кабинеты без показаний"><table><thead><tr><th>Дата</th><th>Здание</th><th>Кабинет</th></tr></thead><tbody id="report-missing-body"></tbody></table></div>
               <p class="hint">В таблице показаны первые 300 пропусков. Полный список доступен в Excel.</p>
             </details>
           </section>
@@ -296,31 +296,31 @@
               <canvas id="report-temperature-chart" width="920" height="260" role="img" aria-label="График средней температуры по дням"></canvas>
             </div>
             <p class="hint">Линия показывает среднюю температуру по кабинетам с данными. Пропуски не приравниваются к 0 °C.</p>
-            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-trend-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Температура по дням"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-trend-body"></tbody></table></div>
             <h2>Температура по кабинетам</h2>
-            <div class="table-scroll"><table><thead><tr><th>Здание / кабинет</th><th>Дней с данными</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-temperature-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Температура по кабинетам"><table><thead><tr><th>Здание / кабинет</th><th>Дней с данными</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Дней вне порогов</th></tr></thead><tbody id="report-temperature-body"></tbody></table></div>
           </section>
           <section id="report-pane-humidity" hidden>
             <h2>Относительная влажность по дням</h2>
             <div class="report-temp-chart-frame">
               <canvas id="report-humidity-chart" width="920" height="260" role="img" aria-label="График средней влажности по дням"></canvas>
             </div>
-            <div class="table-scroll"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинетов с данными</th></tr></thead><tbody id="report-humidity-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Влажность по дням"><table><thead><tr><th>Дата</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Кабинетов с данными</th></tr></thead><tbody id="report-humidity-body"></tbody></table></div>
             <h2>Влажность по зданиям</h2>
-            <div class="table-scroll"><table><thead><tr><th>Здание</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Замеров</th></tr></thead><tbody id="report-humidity-buildings"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Влажность по зданиям"><table><thead><tr><th>Здание</th><th>Средняя</th><th>Минимум</th><th>Максимум</th><th>Замеров</th></tr></thead><tbody id="report-humidity-buildings"></tbody></table></div>
           </section>
           <section id="report-pane-buildings" hidden>
             <h2>Сравнение зданий</h2>
             <div id="report-building-bars" class="report-building-bars"></div>
-            <div class="table-scroll"><table><thead><tr><th>Здание</th><th>Кабинетов</th><th>Охват</th><th>Средняя температура</th><th>Пропусков</th><th>Отклонений</th></tr></thead><tbody id="report-buildings-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Показатели зданий"><table><thead><tr><th>Здание</th><th>Кабинетов</th><th>Охват</th><th>Средняя температура</th><th>Пропусков</th><th>Отклонений</th></tr></thead><tbody id="report-buildings-body"></tbody></table></div>
           </section>
           <section id="report-pane-staff" hidden>
             <h2>Сотрудники MAX</h2>
             <p id="report-staff-note" class="hint"></p>
-            <div class="table-scroll"><table><thead><tr><th>Сотрудник</th><th>Закреплено кабинетов</th><th>Охват</th><th>Пропуски кабинетов</th><th>Личных показаний</th><th>Дней с личным вводом</th></tr></thead><tbody id="report-staff-body"></tbody></table></div>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Показатели сотрудников"><table><thead><tr><th>Сотрудник</th><th>Закреплено кабинетов</th><th>Охват</th><th>Пропуски кабинетов</th><th>Личных показаний</th><th>Дней с личным вводом</th></tr></thead><tbody id="report-staff-body"></tbody></table></div>
           </section>
         </div>
-        <div class="panel" id="report-schedule-panel" data-admin-only>
+        <div class="panel report-schedule-panel" id="report-schedule-panel" data-admin-only>
           <div class="panel-heading">
             <div><h2>Автоматические отчёты через MAX</h2><p>Краткая ежедневная или еженедельная сводка ответственному по выбранному зданию.</p></div>
           </div>
@@ -660,7 +660,6 @@
             <div class="settings-pane" data-settings-view="updates" hidden>
               <div class="settings-section-heading"><h2>Обновление системы</h2><p>Установленная версия, GitHub и журнал установки.</p></div>
           <article class="panel settings-panel">
-            <h2>Обновление системы</h2>
             <p class="settings-section-intro">Проверьте и установите новую версию.</p>
             <div class="update-versions">
               <div class="update-version-item">
@@ -713,7 +712,7 @@
     </main>
   </div>
 
-  <dialog id="room-dialog">
+  <dialog id="room-dialog" aria-labelledby="room-dialog-title">
     <form method="dialog" id="room-form" class="dialog-form">
       <div class="dialog-head"><div><h2 id="room-dialog-title">Новое помещение</h2><p>Укажите корпус, название и норму температуры.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
       <input id="edit-room-id" type="hidden">
@@ -726,9 +725,9 @@
     </form>
   </dialog>
 
-  <dialog id="bulk-dialog">
+  <dialog id="bulk-dialog" aria-labelledby="bulk-dialog-title">
     <form id="bulk-form" class="dialog-form">
-      <div class="dialog-head"><div><h2>Добавить кабинеты списком</h2><p>Вставьте список номеров, диапазон или данные из Excel.</p></div><button type="button" id="close-bulk" class="x-button" aria-label="Закрыть">×</button></div>
+      <div class="dialog-head"><div><h2 id="bulk-dialog-title">Добавить кабинеты списком</h2><p>Вставьте список номеров, диапазон или данные из Excel.</p></div><button type="button" id="close-bulk" class="x-button" aria-label="Закрыть">×</button></div>
       <label>Корпус<input id="bulk-building" list="building-options" required placeholder="Старшая школа"></label><datalist id="building-options"></datalist>
       <div class="field-grid"><label>Этаж<input id="bulk-floor" maxlength="30" placeholder="2"></label><label>Тип помещения<input id="bulk-kind" value="Кабинет" required></label></div>
       <label>Префикс номера<input id="bulk-prefix" value="Кабинет "></label>
@@ -739,27 +738,28 @@
     </form>
   </dialog>
 
-  <dialog id="reading-dialog">
+  <dialog id="reading-dialog" aria-labelledby="reading-dialog-title">
     <form method="dialog" id="reading-form" class="dialog-form">
-      <div class="dialog-head"><div><h2>Новое измерение</h2><p>Ручная запись температуры в журнал.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
+      <div class="dialog-head"><div><h2 id="reading-dialog-title">Новое измерение</h2><p>Ручная запись температуры в журнал.</p></div><button value="cancel" class="x-button" aria-label="Закрыть" formnovalidate>×</button></div>
       <label>Помещение <select id="reading-room" required></select></label>
+      <p class="hint" id="reading-room-hint" hidden>Сначала добавьте помещение в разделе «Помещения».</p>
       <label>Температура, °C <input id="reading-value" type="number" min="-40" max="60" step="0.1" placeholder="21.5" required></label>
-      <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button type="submit" value="save" class="btn primary">Записать показание</button></div>
+      <div class="dialog-actions"><button class="btn secondary" value="cancel" formnovalidate>Отмена</button><button type="submit" id="reading-save" value="save" class="btn primary" disabled>Записать показание</button></div>
     </form>
   </dialog>
 
-  <dialog id="reading-history-dialog">
+  <dialog id="reading-history-dialog" aria-labelledby="reading-history-title">
     <div class="dialog-form">
-      <div class="dialog-head"><div><h2>История показания</h2><p id="reading-history-subtitle">Первое измерение и исправления.</p></div><button type="button" id="reading-history-close" class="x-button" aria-label="Закрыть">×</button></div>
+      <div class="dialog-head"><div><h2 id="reading-history-title">История показания</h2><p id="reading-history-subtitle">Первое измерение и исправления.</p></div><button type="button" id="reading-history-close" class="x-button" aria-label="Закрыть">×</button></div>
       <div id="reading-history-content" class="reading-history-list" aria-live="polite"></div>
       <div class="dialog-actions"><button type="button" class="btn secondary" id="reading-history-done">Закрыть</button></div>
     </div>
   </dialog>
 
-  <dialog id="max-user-rooms-dialog" class="max-assignment-dialog">
+  <dialog id="max-user-rooms-dialog" class="max-assignment-dialog" aria-labelledby="max-assignment-title">
     <form id="max-user-rooms-form" class="dialog-form">
       <div class="dialog-head">
-        <div><h2>Назначить кабинеты</h2><p id="max-assignment-profile"></p></div>
+        <div><h2 id="max-assignment-title">Назначить кабинеты</h2><p id="max-assignment-profile"></p></div>
         <button type="button" id="max-assignment-close" class="x-button" aria-label="Закрыть">×</button>
       </div>
       <label>Найти кабинет<input id="max-assignment-search" type="search" placeholder="Корпус или номер кабинета"></label>
@@ -777,10 +777,10 @@
     </form>
   </dialog>
 
-  <dialog id="max-codes-dialog">
+  <dialog id="max-codes-dialog" aria-labelledby="max-codes-title">
     <form id="max-codes-form" class="dialog-form">
       <div class="dialog-head">
-        <div><h2>Коды подключения MAX</h2><p>Выдайте сотрудникам коды для подключения кабинетов.</p></div>
+        <div><h2 id="max-codes-title">Коды подключения MAX</h2><p>Выдайте сотрудникам коды для подключения кабинетов.</p></div>
         <button type="button" id="close-max-codes" class="x-button" aria-label="Закрыть">×</button>
       </div>
       <section class="max-code-section" aria-labelledby="max-new-heading">
@@ -825,9 +825,9 @@
     </form>
   </dialog>
 
-  <dialog id="restore-dialog">
+  <dialog id="restore-dialog" aria-labelledby="restore-dialog-title">
     <form id="restore-form" class="dialog-form">
-      <div class="dialog-head"><div><h2>Восстановление базы</h2><p>Все текущие данные будут заменены выбранной копией.</p></div><button type="button" id="restore-close" class="x-button" aria-label="Закрыть">×</button></div>
+      <div class="dialog-head"><div><h2 id="restore-dialog-title">Восстановление базы</h2><p>Все текущие данные будут заменены выбранной копией.</p></div><button type="button" id="restore-close" class="x-button" aria-label="Закрыть">×</button></div>
       <p id="restore-name" class="hint"></p>
       <input id="restore-filename" type="hidden">
       <label>Пароль администратора<input id="restore-password" type="password" autocomplete="current-password" required></label>
@@ -837,19 +837,35 @@
     </form>
   </dialog>
 
-  <dialog id="pairing-dialog">
+  <dialog id="pairing-dialog" aria-labelledby="pairing-dialog-title">
     <div class="dialog-form">
-      <div class="dialog-head"><div><h2>Код подключения MAX</h2><p>Передайте код сотруднику лично.</p></div><button class="x-button" id="close-pairing" aria-label="Закрыть">×</button></div>
+      <div class="dialog-head"><div><h2 id="pairing-dialog-title">Код подключения MAX</h2><p>Передайте код сотруднику лично.</p></div><button class="x-button" id="close-pairing" aria-label="Закрыть">×</button></div>
       <div class="pairing-code" id="pairing-code"></div>
       <p class="hint">Сотрудник отправляет боту команду <code>/bind КОД</code>. Код одноразовый, действует 30 минут.</p>
       <button type="button" id="copy-pairing" class="btn primary full">Скопировать команду</button>
     </div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<dialog id="sensor-add-dialog"><form id="sensor-add-form"><h2>Подключить датчик ESP32-C3</h2><p>Код для одной платы. Действует 7 дней, используется один раз.</p><label>Название<input id="sensor-new-name" required maxlength="100"></label><label>Помещение<select id="sensor-new-room" required></select></label><div class="heading-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button class="btn primary">Создать код</button></div></form></dialog>
-<dialog id="sensor-code-dialog"><h2>Подключение датчика</h2><p id="sensor-code-help">Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.</p><label>Идентификатор<input id="sensor-code-id" readonly></label><label>Код подключения<input id="sensor-code-value" readonly></label><p>Код показывается только сейчас. Сохраните его до завершения настройки.</p><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button></dialog>
-<dialog id="sensor-usb-dialog" class="sensor-usb-dialog"><form id="sensor-usb-form" class="dialog-form">
-<h2>Прошивка и подключение по USB</h2><p>Укажите параметры и подключите плату. Доступ будет выдан автоматически.</p>
+<dialog id="sensor-add-dialog" aria-labelledby="sensor-add-title">
+  <form id="sensor-add-form" class="dialog-form">
+    <div class="dialog-head"><div><h2 id="sensor-add-title">Подключить датчик ESP32-C3</h2><p>Одноразовый код для одной платы, действует 7 дней.</p></div></div>
+    <label>Название<input id="sensor-new-name" required maxlength="100"></label>
+    <label>Помещение<select id="sensor-new-room" required></select></label>
+    <p class="hint" id="sensor-new-room-hint" hidden>Сначала добавьте помещение в разделе «Помещения».</p>
+    <div class="dialog-actions"><button type="button" id="sensor-add-close" class="btn secondary">Отмена</button><button type="submit" id="sensor-add-submit" class="btn primary">Создать код</button></div>
+  </form>
+</dialog>
+<dialog id="sensor-code-dialog" aria-labelledby="sensor-code-title">
+  <div class="dialog-form">
+    <div class="dialog-head"><div><h2 id="sensor-code-title">Подключение датчика</h2><p id="sensor-code-help"></p></div></div>
+    <label>Идентификатор<input id="sensor-code-id" readonly></label>
+    <label>Код подключения<input id="sensor-code-value" readonly></label>
+    <p class="hint">Код показывается один раз. Сохраните его до завершения настройки.</p>
+    <div class="dialog-actions"><button id="sensor-code-close" type="button" class="btn secondary">Закрыть</button><button id="sensor-code-copy" type="button" class="btn primary">Скопировать</button></div>
+  </div>
+</dialog>
+<dialog id="sensor-usb-dialog" class="sensor-usb-dialog" aria-labelledby="sensor-usb-title"><form id="sensor-usb-form" class="dialog-form">
+<h2 id="sensor-usb-title">Прошивка и подключение по USB</h2><p>Укажите параметры и подключите плату. Доступ будет выдан автоматически.</p>
 <p id="sensor-usb-support" class="hint"></p>
 <label id="usb-firmware-choice" hidden>Прошивка ESP32-C3<select id="usb-firmware"></select></label>
 <div class="field-grid"><label>Название датчика<input id="usb-name" maxlength="100" required></label><label>Помещение<select id="usb-room" required></select></label>
