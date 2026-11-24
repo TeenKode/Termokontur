@@ -95,6 +95,15 @@ static int64_t wall_time_us() {
   return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 static bool charging() { return gpio_get_level(CHARGE_PIN) == 0; }
+static bool usb_host_for_setup(bool after_reset) {
+  if (after_reset) {
+    // Let the host enumerate the native port after power-on or RESET.
+    const int64_t end = esp_timer_get_time() + 2000000;
+    while (!usb_serial_jtag_is_connected() && !charging() && esp_timer_get_time() < end)
+      vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  return usb_serial_jtag_is_connected();
+}
 static bool available() {
   return !charging() && esp_timer_get_time() < deadline;
 }
@@ -1128,9 +1137,10 @@ extern "C" void app_main() {
   gpio_config(&g);
   gpio_set_direction(GPIO_NUM_8, GPIO_MODE_OUTPUT);
   gpio_set_level(GPIO_NUM_8, 1);
+  const bool after_reset = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;
   if (rt.magic != RTC_MAGIC ||
       rt.crc != sensor::crc32(&rt, offsetof(Runtime, crc)) ||
-      esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+      after_reset) {
     rt = {};
     rt.magic = RTC_MAGIC;
     rt.boot = ((uint64_t)esp_random() << 32) | esp_random();
@@ -1187,8 +1197,10 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     physical = gpio_get_level(BOOT_PIN) == 0;
   }
+  const bool setup_requested = !provisioned || physical || usb_host_for_setup(after_reset);
+  if (charging()) sleep_for(cfg.measure_s);
   bool boot_debug = false;
-  if (!provisioned || physical || usb_serial_jtag_is_connected()) {
+  if (setup_requested) {
     if (!setup_ap(provisioned)) sleep_for(1800);
     if (!wait_for_boot_debug()) {
       boot_debug_result(charging() ? "Отладка прервана зарядкой." : "Время ожидания нажатия истекло.");

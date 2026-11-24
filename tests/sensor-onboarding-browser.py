@@ -141,6 +141,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     page.click('#usb-flash')
                 assert image.value.ok
                 expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
+                expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
                 assert page.evaluate('window.simFlashed') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
