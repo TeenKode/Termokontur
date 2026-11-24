@@ -113,6 +113,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#usb-firmware')).to_have_value(f'{firmware_url}/esp32-c3-factory.bin')
                 expect(page.locator('#usb-firmware option')).to_have_count(2)
                 page.fill('#usb-name','Демо: USB-датчик');page.select_option('#usb-type','ds18b20');page.fill('#usb-ssid','School-IoT-2.4G');page.fill('#usb-wifi-password','SchoolPassDemo2026')
+                page.fill('#usb-dns-primary','10.1.1.10');page.fill('#usb-dns-secondary','10.1.1.11')
                 page.locator('#sensor-usb-form details summary').click()
                 page.fill('#sensor-usb-form input[name="measure_s"]','60');page.fill('#sensor-usb-form input[name="send_s"]','600');page.fill('#sensor-usb-form input[name="cool_s"]','300')
                 page.locator('#sensor-usb-form details summary').click()
@@ -152,6 +153,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert page.evaluate('window.simFlashed && !window.simFinished') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
+                assert saved['dns_primary']=='10.1.1.10' and saved['dns_secondary']=='10.1.1.11'
                 page.evaluate('Date.now=window.originalDateNow')
                 assert saved['sensor_type']=='ds18b20' and saved['config']['measure_s']==60
                 assert page.input_value('#usb-wifi-password')==''
