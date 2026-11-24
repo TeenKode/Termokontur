@@ -28,6 +28,18 @@ int main() {
     assert(!read_sensor(name,r) && r.error == 1);
   }
   mock::clear();
+  mock::samples[0x44] = {0xbe,0xef,0x92,0xbe,0xef,0x92};
+  mock::fail_reads = 1;
+  Record retry{};
+  unsigned attempts = 0;
+  assert(read_sensor_retry("sht4x", retry, [] { return false; }, &attempts));
+  assert(retry.error == 0 && attempts == 2);
+  mock::clear();
+  assert(read_sensor_retry("sht4x", retry, [] { return false; }, &attempts));
+  assert(retry.error == 2 && attempts == 3);
+  assert(!read_sensor_retry("sht4x", retry, [] { return true; }, &attempts));
+  assert(attempts == 0);
+  mock::clear();
   // AHT20 calibrated, not busy, both 20-bit ADCs at half-scale.
   std::vector<uint8_t> aht = {0x08,0x80,0,0x08,0,0};
   aht.push_back(crc8(aht.data(),aht.size()));

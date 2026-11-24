@@ -15,12 +15,22 @@ const measurementErrors = {
 let serial = null;
 let connecting = false;
 let checking = false;
+let auto = false, timer = null, successes = 0, failures = 0;
+function stats() { field("stats").textContent = "Успешно: "+successes+" · Ошибок: "+failures; }
+function stopAuto() { auto = false; clearTimeout(timer); timer = null; controls(); }
+function scheduleAuto() {
+  clearTimeout(timer);
+  if (auto && serial) timer = setTimeout(() => void checkBoard("test_measurement"), Number(field("interval").value)*1000);
+}
 
 function controls() {
   field("connect").disabled = !supported || connecting || Boolean(serial);
   field("disconnect").disabled = !serial;
   field("identify").disabled = !serial || checking;
-  field("measure").disabled = !serial || checking;
+  field("measure").disabled = !serial || checking || auto;
+  field("auto").disabled = !serial || (checking && !auto);
+  field("auto").textContent = auto ? "Остановить автозамер" : "Запустить автозамер";
+  field("interval").disabled = auto;
   field("wifi").disabled = !serial || checking;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
@@ -58,9 +68,10 @@ function showMeasurement(sample) {
   field("humidity").textContent = format(sample.humidity, "%");
   const voltage = sample.battery_mv >= 2000 && sample.battery_mv <= 5000 ? sample.battery_mv / 1000 : null;
   field("battery").textContent = format(voltage, "В");
-  if (sample.sensor_error) return measurementErrors[sample.sensor_error] || "Датчик сообщил об ошибке измерения.";
+  const attempts = Number.isInteger(sample.attempts) ? " · попыток: "+sample.attempts : "";
+  if (sample.sensor_error) return (measurementErrors[sample.sensor_error] || "Датчик сообщил об ошибке измерения.") + attempts;
   return "Пробный замер · " + field("temperature").textContent + " · влажность " +
-    field("humidity").textContent + " · аккумулятор " + field("battery").textContent + ".";
+    field("humidity").textContent + " · аккумулятор " + field("battery").textContent + attempts + ".";
 }
 
 function setSetupWifi(reply) {
@@ -74,7 +85,7 @@ function setSetupWifi(reply) {
 
 async function checkBoard(command) {
   const connection = serial;
-  if (!connection || checking) return;
+  if (!connection || checking) { if (auto) scheduleAuto(); return; }
   checking = true;
   controls();
   field("result").textContent = "Ждём ответа платы…";
@@ -94,10 +105,13 @@ async function checkBoard(command) {
       message = "Получены данные точки настройки.";
     } else {
       message = showMeasurement(reply);
+      if (reply.sensor_error || !Number.isFinite(reply.temperature)) failures++; else successes++;
+      stats();
     }
   } catch (error) {
     if (serial !== connection) return;
     message = error.message;
+    if (command === "test_measurement") { failures++; stats(); }
   } finally {
     if (serial === connection) {
       checking = false;
@@ -106,11 +120,13 @@ async function checkBoard(command) {
   }
   field("result").textContent = message;
   appendLog(message);
+  if (auto) scheduleAuto();
 }
 
 async function closePort(connection, message) {
   if (serial !== connection) return;
   serial = null;
+  stopAuto();
   checking = false;
   connecting = true;
   setSetupWifi(null);
@@ -127,9 +143,10 @@ field("connect").addEventListener("click", async () => {
   controls();
   try {
     const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x303a}]});
-    const connection = new SensorSerial(port, 4000, serialLog);
+    const connection = new SensorSerial(port, 15000, serialLog);
     await connection.open();
     serial = connection;
+    successes = failures = 0; stats();
     for (const name of diagnostics) field(name).textContent = "—";
     field("connection").textContent = "Плата подключена · 115200 бод.";
     appendLog(field("connection").textContent);
@@ -149,6 +166,11 @@ field("disconnect").addEventListener("click", () => {
 });
 field("identify").addEventListener("click", () => checkBoard("hello"));
 field("measure").addEventListener("click", () => checkBoard("test_measurement"));
+field("auto").addEventListener("click", () => {
+  if (auto) { stopAuto(); return; }
+  if (!serial || checking) return;
+  auto = true; controls(); void checkBoard("test_measurement");
+});
 field("wifi").addEventListener("click", () => {
   if (field("wifi-details").hidden) void checkBoard("setup_wifi");
   else setSetupWifi(null);

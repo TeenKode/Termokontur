@@ -47,6 +47,11 @@
         <button type="button" id="debug-measure" class="btn primary" disabled>Пробный замер</button>
         <button type="button" id="debug-wifi" class="btn secondary" aria-expanded="false" aria-controls="debug-wifi-details" disabled>Показать пароль точки Wi-Fi</button>
       </div>
+      <div class="heading-actions">
+        <label>Интервал <select id="debug-interval"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="30">30 с</option></select></label>
+        <button type="button" id="debug-auto" class="btn secondary" disabled>Запустить автозамер</button>
+      </div>
+      <p id="debug-stats" role="status">Успешно: 0 · Ошибок: 0</p>
       <div id="debug-wifi-details" hidden>
         <dl class="firmware-debug-values">
           <div><dt>Сеть настройки</dt><dd id="debug-wifi-ssid"></dd></div>
