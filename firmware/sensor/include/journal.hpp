@@ -51,6 +51,11 @@ class Journal {
   Flash &flash;
   std::vector<Entry> entries_;
   size_t free_offset = SIZE_MAX;
+  bool scanned = false;
+  static bool blank(const Slot &s) {
+    const auto *p = reinterpret_cast<const uint8_t *>(&s);
+    return std::all_of(p, p + sizeof s, [](uint8_t b) { return b == 255; });
+  }
 
 public:
   explicit Journal(Flash &f) : flash(f) {
@@ -58,6 +63,7 @@ public:
   }
   const std::vector<Entry> &entries() const { return entries_; }
   bool scan() {
+    scanned = false;
     entries_.clear();
     free_offset = SIZE_MAX;
     for (size_t off = 0; off + sizeof(Slot) <= flash.size();
@@ -65,14 +71,7 @@ public:
       Slot s;
       if (!flash.read(off, &s, sizeof s))
         return false;
-      const auto *p = reinterpret_cast<const uint8_t *>(&s);
-      bool blank = true;
-      for (size_t i = 0; i < sizeof s; i++)
-        if (p[i] != 255) {
-          blank = false;
-          break;
-        }
-      if (blank) {
+      if (blank(s)) {
         if (free_offset == SIZE_MAX)
           free_offset = off;
       } else if (s.commit == 0x544b434d && s.record.seq &&
@@ -85,6 +84,7 @@ public:
     for (size_t i = 1; i < entries_.size(); i++)
       if (entries_[i - 1].seq == entries_[i].seq)
         return false;
+    scanned = true;
     return true;
   }
   bool read(const Entry &e, Record &r) {
@@ -103,7 +103,7 @@ public:
     return end >= first && end - first >= count ? end - first - count : 0;
   }
   bool append(const Record &r) {
-    if (!r.seq || !scan())
+    if (!r.seq || (!scanned && !scan()))
       return false;
     for (auto e : entries_)
       if (e.seq == r.seq) {
@@ -125,6 +125,7 @@ public:
           sector = off;
         }
       }
+      scanned = false;
       if (!flash.erase(sector, 4096) || !scan() || free_offset == SIZE_MAX)
         return false;
     }
@@ -133,6 +134,9 @@ public:
     s.crc = crc32(&r, sizeof r);
     s.commit = 0xffffffff;
     size_t off = free_offset;
+    // Any interrupted write invalidates the in-memory index. Retry scans Flash
+    // before choosing a slot; partially programmed slots are never reused.
+    scanned = false;
     if (!flash.write(off, &s, sizeof(s) - 4))
       return false;
     uint32_t commit = 0x544b434d;
@@ -140,9 +144,25 @@ public:
       return false;
     Slot verify;
     if (!flash.read(off, &verify, sizeof verify) || verify.commit != commit ||
-        verify.crc != crc32(&verify.record, sizeof verify.record))
+        verify.crc != crc32(&verify.record, sizeof verify.record) ||
+        memcmp(&verify.record, &r, sizeof r))
       return false;
-    return scan();
+    auto pos = std::lower_bound(entries_.begin(), entries_.end(), r.seq,
+        [](const Entry &entry, uint64_t seq) { return entry.seq < seq; });
+    entries_.insert(pos, {r.seq, static_cast<uint32_t>(off)});
+    free_offset = SIZE_MAX;
+    // The previous scan found the first empty slot. Only inspect later slots.
+    for (size_t next = off + sizeof(Slot); next + sizeof(Slot) <= flash.size(); next += sizeof(Slot)) {
+      Slot candidate;
+      if (!flash.read(next, &candidate, sizeof candidate))
+        return false;
+      if (blank(candidate)) {
+        free_offset = next;
+        break;
+      }
+    }
+    scanned = true;
+    return true;
   }
 };
 } // namespace sensor

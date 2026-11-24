@@ -930,9 +930,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     return false;
   uint64_t cursor = state.ack;
   bool replaying = false;
+  // The journal is scanned before measurement and maintained by its sole
+  // writer. Each transmitted record is still checked against its Flash CRC.
   for (int page = 0; page < 64 && available(); page++) {
-    if (!journal.scan())
-      return false;
     uint64_t lost = state.lost_base + journal.missing(state.ack, state.next);
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
