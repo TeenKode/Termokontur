@@ -345,3 +345,17 @@ def test_reading_corrections_api_and_authentication(client):
     assert changes[0]["old_value"] == 21
     assert changes[0]["new_value"] == 22
     assert client.get("/api/readings/999999/corrections").status_code == 404
+
+
+def test_settings_patch_does_not_overwrite_other_fields(admin):
+    base = admin.get("/api/settings").json()
+    def patch(key, value):
+        return admin.patch("/api/settings", json={"changes": {key: value}, "expected": {key: base[key]}})
+    assert patch("organization_name", "Новая школа").status_code == 200
+    assert patch("stale_hours", 48).status_code == 200
+    assert patch("organization_name", "Старое окно").status_code == 409
+    final = admin.get("/api/settings").json()
+    assert final["organization_name"] == "Новая школа"
+    assert final["stale_hours"] == 48
+    assert patch("stale_hours", 0).status_code == 409
+    assert admin.patch("/api/settings",json={"changes":{"max_token":"secret"},"expected":{"max_token":None}}).status_code == 422
