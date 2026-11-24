@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101d31">
+  <title>Отладка прошивки — Термоконтур</title>
+  <link rel="icon" href="/static/icon-32.png?v=__ASSET_FINGERPRINT__">
+  <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
+  <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
+  <script type="module" src="/static/firmware-debug.mjs?v=__ASSET_FINGERPRINT__"></script>
+</head>
+<body>
+  <main class="firmware-debug-page">
+    <header class="heading">
+      <div>
+        <a href="/">← В панель</a>
+        <h1>Отладка прошивки</h1>
+        <p>ESP32-C3 · версия панели <strong id="debug-panel-version">__APP_VERSION__</strong></p>
+      </div>
+      <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
+    </header>
+
+    <section class="panel firmware-debug-panel">
+      <h2>USB-подключение</h2>
+      <p class="hint">Подключите плату кабелем с передачей данных. Если плата молчит, кратко нажмите RESET.</p>
+      <div class="heading-actions">
+        <button type="button" id="debug-connect" class="btn primary" disabled>Подключить USB</button>
+        <button type="button" id="debug-disconnect" class="btn secondary" disabled>Отключить</button>
+      </div>
+      <p id="debug-connection" role="status">Ожидаем подключения платы.</p>
+    </section>
+
+    <section class="panel firmware-debug-panel">
+      <h2>Диагностика платы</h2>
+      <dl class="firmware-debug-values">
+        <div><dt>Прошивка платы</dt><dd id="debug-firmware">—</dd></div>
+        <div><dt>Идентификатор платы</dt><dd id="debug-hardware">—</dd></div>
+        <div><dt>Тип датчика</dt><dd id="debug-sensor-type">—</dd></div>
+        <div><dt>Журнал на плате</dt><dd id="debug-pending">—</dd></div>
+        <div><dt>Температура</dt><dd id="debug-temperature">—</dd></div>
+        <div><dt>Влажность</dt><dd id="debug-humidity">—</dd></div>
+        <div><dt>Напряжение аккумулятора</dt><dd id="debug-battery">—</dd></div>
+      </dl>
+      <div class="heading-actions">
+        <button type="button" id="debug-identify" class="btn secondary" disabled>Прочитать данные платы</button>
+        <button type="button" id="debug-measure" class="btn primary" disabled>Пробный замер</button>
+      </div>
+      <p id="debug-result" class="hint" role="status"></p>
+    </section>
+
+    <section class="panel firmware-debug-panel">
+      <div class="sensor-firmware-heading">
+        <h2>Журнал USB</h2>
+        <div class="heading-actions">
+          <button type="button" id="debug-clear" class="btn secondary" disabled>Очистить</button>
+          <button type="button" id="debug-save" class="btn secondary" disabled>Скачать .txt</button>
+        </div>
+      </div>
+      <pre id="debug-log" tabindex="0" aria-label="Журнал платы"></pre>
+    </section>
+  </main>
+</body>
+</html>

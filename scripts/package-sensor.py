@@ -82,3 +82,12 @@ with zipfile.ZipFile(output) as archive:
         sha, name = line.split(maxsplit=1)
         assert hashlib.sha256(archive.read(name)).hexdigest() == sha, name
 print(f'{output}\nSHA256: {hashlib.sha256(output.read_bytes()).hexdigest()}')
+
+# The installed panel needs only the factory image. Its app region is also
+# the byte-for-byte OTA image verified above.
+panel_output = output.with_name('termokontur-firmware.zip')
+panel_manifest = {**manifest, 'files': {'factory.bin': manifest['files']['factory.bin']}}
+with zipfile.ZipFile(panel_output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr('manifest.json', json.dumps(panel_manifest))
+    archive.writestr('factory.bin', factory)
+print(panel_output)

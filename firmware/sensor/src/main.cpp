@@ -514,6 +514,23 @@ static bool sensor_read(Record &r) {
   sensor::read_sensor(sensor_type.c_str(), r);
   return !charging();
 }
+static void add_measurement(cJSON *out, const Record &r) {
+  if (r.error) {
+    cJSON_AddNullToObject(out, "temperature");
+    cJSON_AddNullToObject(out, "humidity");
+  } else {
+    num(out, "temperature", r.temperature / 1000.0);
+    if (r.humidity == sensor::NO_HUMIDITY)
+      cJSON_AddNullToObject(out, "humidity");
+    else
+      num(out, "humidity", r.humidity / 1000.0);
+  }
+}
+static const char *sensor_error_name(uint8_t error) {
+  if (error == 1) return "sensor_crc";
+  if (error == 2) return "sensor_io";
+  return "";
+}
 static bool config_from(cJSON *j, bool local = false) {
   if (!cJSON_IsObject(j))
     return false;
@@ -758,21 +775,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv,
           cJSON_AddNullToObject(x, "measured_at");
         static const char *qualities[] = {"unknown", "sntp", "server", "rtc"};
         add(x, "time_quality", qualities[std::min((int)r.quality, 3)]);
-        if (r.error) {
-          cJSON_AddNullToObject(x, "temperature");
-          cJSON_AddNullToObject(x, "humidity");
-        } else {
-          num(x, "temperature", r.temperature / 1000.0);
-          if (r.humidity == sensor::NO_HUMIDITY)
-            cJSON_AddNullToObject(x, "humidity");
-          else num(x, "humidity", r.humidity / 1000.0);
-        }
+        add_measurement(x, r);
         num(x, "battery_mv", r.battery);
         num(x, "interval_s", r.interval);
-        add(x, "error",
-            r.error == 1   ? "sensor_crc"
-            : r.error == 2 ? "sensor_io"
-                           : "");
+        add(x, "error", sensor_error_name(r.error));
         cJSON_AddItemToArray(array, x);
         count++;
         max_sent = r.seq + 1;
@@ -847,6 +853,23 @@ static esp_err_t setup_page(httpd_req_t *req) {
   return httpd_resp_send(req, html.c_str(), html.size());
 }
 static std::mutex provision_mutex;
+static void usb_test_measurement(cJSON *out) {
+  std::lock_guard<std::mutex> lock(provision_mutex);
+  if (configured || charging()) {
+    add(out, "error", "Для пробного замера откройте режим настройки и отключите USB зарядки.");
+    return;
+  }
+  Record sample{};
+  sample.battery = battery_mv();
+  if (!sensor_read(sample)) {
+    add(out, "error", "Пробный замер прерван зарядкой.");
+    return;
+  }
+  add_measurement(out, sample);
+  add(out, "sensor_error", sensor_error_name(sample.error));
+  num(out, "battery_mv", sample.battery);
+}
+
 static std::string provision_apply(cJSON *j, bool require_nonce) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (configured || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
@@ -929,6 +952,8 @@ static void usb_setup_task(void *) {
             add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
             add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
+          } else if (cmd == "test_measurement") {
+            usb_test_measurement(out);
           } else if (cmd == "sign") {
             auto signature=identity_sign(text(j,"message"));
             if (signature.empty()) add(out,"error","Не удалось подтвердить плату. Повторите подключение.");

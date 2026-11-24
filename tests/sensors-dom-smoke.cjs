@@ -58,26 +58,8 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   await until(()=>d.getElementById("sensor-detail-state").textContent.includes("DS18B20"));
   assert.equal(d.querySelectorAll("#sensor-records tr").length,2);
   assert.equal(d.querySelector("#sensor-records tr").children[3].textContent,"—");
-  // ESP-01S 1 MiB: model-specific settings and unknown battery state.
-  const roomList=await api("/api/rooms");
-  const ec=await api("/api/sensors/devices",{name:"ESP-01S test",room_id:roomList[0].id,model:"esp01-sht40-v1"});
-  const ee=await api("/api/sensors/enroll",{device_id:ec.device_id,code:ec.code,
-    hardware_id:"aabbccddeeff",model:"esp01-sht40-v1",sensor_type:"sht4x"});
-  const ep={...payload,model:"esp01-sht40-v1",battery_mv:0,
-    records:[{...payload.records[0],battery_mv:0}]};
-  const er=await fetchWithCookies("/api/sensors/devices/"+ec.device_id+"/sync",
-    {method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+ee.token},
-     body:JSON.stringify(ep)});
-  assert.ok(er.ok,await er.clone().text());
-  d.getElementById("sensor-refresh").click();
-  await until(()=>[...d.querySelectorAll(".sensor-card h2")].some(x=>x.textContent==="ESP-01S test"));
-  const espCard=[...d.querySelectorAll(".sensor-card")].find(x=>x.querySelector("h2").textContent==="ESP-01S test");
-  espCard.querySelector("button").click();
-  await until(()=>d.getElementById("sensor-detail-state").textContent.includes("ESP-01S (1 МБ)"));
-  assert.equal(d.querySelector("#sensor-records tr").children[4].textContent,"—");
-  assert.equal(d.getElementById("sensor-ota-form").hidden,true);
-  assert.equal(d.getElementById("sensor-upload-form").hidden,true);
-  assert.equal(d.querySelector('#sensor-config-form input[name="cutoff_mv"]'),null);
+  assert.equal(d.querySelector("#sensor-new-model"),null);
+  assert.ok(d.querySelector('#view-sensors a[href="/sensors/firmware-debug"]'));
   w.termokonturTheme.setPreference("dark");assert.equal(d.documentElement.dataset.theme,"dark");
   d.querySelector('[data-tab="settings"]').click();
   d.querySelector('.settings-nav-button[data-settings-target="calendar"]').click();

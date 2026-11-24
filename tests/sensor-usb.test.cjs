@@ -8,8 +8,10 @@ function port(handler){
  let out;const p={closed:false,readable:new ReadableStream({start(c){out=c;}}),writable:new WritableStream({write(bytes){handler(JSON.parse(new TextDecoder().decode(bytes).trim().slice(6)),reply=>{const b=enc.encode('boot log\nTKRPC invalid-json\nTKRPC '+JSON.stringify(reply)+'\n');out.enqueue(b.slice(0,17));out.enqueue(b.slice(17));});}}),async open(){},async setSignals(){},async close(){this.closed=true;}};return p;
 }
 test('USB framing tolerates logs and fragmented responses, and releases the port',async()=>{
- const {SensorSerial}=await module_();const p=port((req,send)=>send({id:req.id,protocol:1}));const serial=new SensorSerial(p,100);
- await serial.open();assert.equal((await serial.request('hello')).protocol,1);await serial.close();assert.equal(p.closed,true);
+ const {SensorSerial}=await module_();const p=port((req,send)=>send({id:req.id,protocol:1}));
+ const logs=[];const serial=new SensorSerial(p,100,line=>logs.push(line));
+ await serial.open();assert.equal((await serial.request('hello')).protocol,1);assert.deepEqual(logs,['boot log']);
+ await serial.close();assert.equal(p.closed,true);
 });
 test('USB errors and timeout do not report successful configuration',async()=>{
  const {SensorSerial}=await module_();let p=port((req,send)=>send({id:req.id,error:'write failed'}));let s=new SensorSerial(p,20);await s.open();await assert.rejects(s.request('configure'),/write failed/);await s.close();

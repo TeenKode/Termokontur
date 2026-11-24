@@ -8,6 +8,8 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,9 +35,23 @@ jobs:
         run: |
           python -m pip install platformio==6.1.18 esptool==4.5.1
           python scripts/package-sensor.py
+      - name: Validate the panel firmware bundle
+        id: package
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from pathlib import Path
+          from termokontur import sensor_firmware
+
+          archive = Path("dist") / sensor_firmware.RELEASE_FILE
+          bundle = sensor_firmware.read_release(archive.read_bytes())
+          assert bundle.factory.source_commit == os.environ["GITHUB_SHA"]
+          print(f"version={bundle.factory.version}")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: termokontur-sensor-esp32c3
+          if-no-files-found: error
           include-hidden-files: true
           path: |
             dist/termokontur-sensor-*-bench.zip
@@ -44,14 +60,57 @@ jobs:
             firmware/sensor/.pio/build/esp32-c3-supermini/partitions.bin
             firmware/sensor/.pio/build/esp32-c3-supermini/ota_data_initial.bin
             firmware/sensor/sdkconfig.esp32-c3-supermini
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termokontur-panel-firmware
+          path: dist/termokontur-firmware.zip
+          if-no-files-found: error
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: firmware
+    concurrency: firmware-release-${{ needs.firmware.outputs.version }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: termokontur-panel-firmware
+      - name: Publish versioned firmware bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.firmware.outputs.version }}
+        run: |
+          tag="firmware-v$VERSION"
+          asset="termokontur-firmware.zip"
+          if release=$(gh release view "$tag" --json isDraft,targetCommitish,assets 2>/dev/null); then
+            if jq -e '.isDraft' <<< "$release" >/dev/null; then
+              jq -e --arg sha "$GITHUB_SHA" '.targetCommitish == $sha' <<< "$release" >/dev/null
+              gh release upload "$tag" "$asset" --clobber
+              gh release edit "$tag" --draft=false --latest=false
+            else
+              test "$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha')" = "$GITHUB_SHA"
+              jq -e --arg asset "$asset" 'any(.assets[]; .name == $asset)' <<< "$release" >/dev/null
+            fi
+          else
+            gh release create "$tag" "$asset" --target "$GITHUB_SHA" --latest=false \
+              --title "Прошивки Термоконтура $VERSION" \
+              --notes "Заводской образ и обновление OTA для ESP32-C3 в панели $VERSION."
+          fi
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: firmware
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: termokontur-panel-firmware
+          path: dist
       - name: Install browser test dependencies
         run: |
           python -m pip install -r requirements-dev.txt playwright
@@ -63,6 +122,8 @@ jobs:
       - name: Sensor setup, history and configuration at desktop and mobile sizes
         run: python tests/sensors-browser-smoke.py
       - name: USB onboarding and automatic authorization (simulated board)
+        env:
+          TEST_FIRMWARE_BUNDLE: dist/termokontur-firmware.zip
         run: python tests/sensor-onboarding-browser.py
       - uses: actions/upload-artifact@v4
         if: always()
