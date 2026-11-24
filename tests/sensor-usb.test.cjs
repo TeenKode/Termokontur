@@ -84,5 +84,7 @@ test('factory seed changes only reserved partition and contains CRC-protected JS
  const length=head.getUint32(0x12004,true),payload=out.slice(0x1200c,0x1200c+length);
  assert.deepEqual(JSON.parse(new TextDecoder().decode(payload)),settings);
  assert.deepEqual(out.slice(0,0x12000),bytes.slice(0,0x12000));assert.deepEqual(out.slice(0x16000),bytes.slice(0x16000));
+ let crc=0xffffffff;for(const b of payload){crc^=b;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}
+ assert.equal(head.getUint32(0x12008,true),(crc^0xffffffff)>>>0);
  assert.equal(bytes[0x12000],255);assert.throws(()=>factorySeedImage(out,settings),/чистый раздел/);
 });

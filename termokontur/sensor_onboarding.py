@@ -260,6 +260,8 @@ def router(require_admin):
 
     @r.post('/usb/prepare', dependencies=admin)
     def prepare_factory(payload: FactoryPrepare):
+        if not payload.name.strip():
+            raise HTTPException(422, "Укажите название датчика")
         ticket = secrets.token_hex(32)
         with db.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')

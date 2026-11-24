@@ -1310,6 +1310,10 @@ extern "C" void app_main() {
   }
   const bool usb_host = usb_host_for_setup(after_reset);
   if (provisioned && !factory_ticket.empty() && !physical) {
+    if (!time_quality && state.saved_time >= 1700000000) {
+      timeval tv{(time_t)state.saved_time, 0};
+      settimeofday(&tv, nullptr);
+    }
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
     uint16_t mv = battery_mv();

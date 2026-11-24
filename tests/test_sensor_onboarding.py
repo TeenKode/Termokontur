@@ -394,3 +394,16 @@ def test_factory_ticket_is_bound_and_idempotent(admin):
 def test_factory_bundle_cannot_contain_personal_seed():
     with pytest.raises(ValueError, match='персональные'):
         sensor_firmware.read_kit(kit('1.1.5', lambda image: image.__setitem__(0x12000, 1)))
+
+
+def test_factory_ticket_expiry_and_revocation(admin, monkeypatch):
+    private, ident = identity()
+    r = room()
+    payload = {'hardware_id':ident['hardware_id'],'name':'Factory','room_id':r['id'],'sensor_type':ident['sensor_type']}
+    first = admin.post('/api/sensors/usb/prepare',json=payload).json()['ticket']
+    second = admin.post('/api/sensors/usb/prepare',json=payload).json()['ticket']
+    assert admin.post('/api/sensors/auth/prove',json={**proof(admin,private,ident),'setup_ticket':first}).status_code == 403
+    with db.connect() as conn:
+        conn.execute('UPDATE sensor_factory_tickets SET expires=0')
+    assert admin.post('/api/sensors/auth/prove',json={**proof(admin,private,ident),'setup_ticket':second}).status_code == 403
+    assert admin.get('/api/sensors/devices').json() == []
