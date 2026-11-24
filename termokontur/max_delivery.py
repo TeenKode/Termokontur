@@ -114,7 +114,9 @@ def diagnostics() -> dict:
                 SUM(CASE WHEN attempts >= 10 THEN 1 ELSE 0 END) AS repeatedly_failed,
                 SUM(CASE WHEN next_retry_at <= ? THEN 1 ELSE 0 END) AS ready
             FROM max_outbox WHERE delivered_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=max_outbox.event_id)
         """, (db.utc_now(),)).fetchone()
+        terminal = conn.execute("SELECT count(*) FROM max_delivery_failures").fetchone()[0]
         stuck = conn.execute("""
             SELECT COUNT(*) FROM max_inbox
             WHERE state='processing' AND updated_at < ?
@@ -124,6 +126,7 @@ def diagnostics() -> dict:
         "repeatedly_failed": outbox["repeatedly_failed"] or 0,
         "ready": outbox["ready"] or 0,
         "stalled_events": stuck,
+        "permanently_failed": terminal,
     }
 
 
@@ -137,8 +140,17 @@ def pending(limit: int = 20) -> list[dict]:
             FROM max_outbox o
             LEFT JOIN max_outbox_ui u ON u.event_id=o.event_id
             WHERE o.delivered_at IS NULL AND o.next_retry_at<=?
-            ORDER BY o.next_retry_at, o.event_id LIMIT ?
-        """, (db.utc_now(), limit))
+              AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=o.event_id)
+              AND (COALESCE(u.delivery_mode,'menu') <> 'menu' OR NOT EXISTS (
+                  SELECT 1 FROM max_outbox earlier
+                  LEFT JOIN max_outbox_ui eu ON eu.event_id=earlier.event_id
+                  WHERE earlier.user_id=o.user_id AND earlier.rowid<o.rowid
+                    AND earlier.delivered_at IS NULL AND earlier.next_retry_at>?
+                    AND COALESCE(eu.delivery_mode,'menu')='menu'
+                    AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=earlier.event_id)
+              ))
+            ORDER BY o.rowid LIMIT ?
+        """, (db.utc_now(), db.utc_now(), limit))
         return [dict(row) for row in rows]
 
 def mark_sent(key: str) -> None:
@@ -163,6 +175,12 @@ def mark_failed(key: str, attempts: int) -> None:
             UPDATE max_outbox SET attempts=attempts+1, next_retry_at=?
             WHERE event_id=? AND delivered_at IS NULL
         """, (next_time, key))
+
+def mark_permanent_failure(key: str, status: int) -> None:
+    with db.connect() as conn:
+        conn.execute("UPDATE max_outbox SET attempts=attempts+1 WHERE event_id=? AND delivered_at IS NULL", (key,))
+        conn.execute("INSERT OR IGNORE INTO max_delivery_failures VALUES(?,?,?)", (key, status, db.utc_now()))
+
 
 def menu_message_id(uid: str) -> str | None:
     """The last bot message containing the reusable menu for this user."""
@@ -246,7 +264,10 @@ async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> N
 
 async def drain(client: httpx.AsyncClient) -> None:
     from .max_ui import keyboard
+    blocked_users = set()
     for item in pending():
+        if item["delivery_mode"] == "menu" and item["user_id"] in blocked_users:
+            continue
         if item["delivery_mode"] == "notice":
             message = {"text": item["text"]}
         else:
@@ -286,7 +307,15 @@ async def drain(client: httpx.AsyncClient) -> None:
             else:
                 await _edit_or_post(client, item["user_id"], message)
         except httpx.HTTPError as exc:
-            mark_failed(item["event_id"], item["attempts"])
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            if status in (400, 403, 404, 410):
+                # Final rejection, after any supported edit/callback fallback.
+                # Preserve an undelivered status and expose it to administrators.
+                mark_permanent_failure(item["event_id"], status)
+            else:
+                mark_failed(item["event_id"], item["attempts"])
+                if item["delivery_mode"] == "menu":
+                    blocked_users.add(item["user_id"])
             logger.warning("MAX message delivery failed for %s: %s", item["event_id"], exc)
         else:
             mark_sent(item["event_id"])
@@ -412,5 +441,6 @@ def prune(days: int = 30) -> dict:
         # Keep aggregated history for six months, even after queue rows
         # have been pruned, without retaining message texts indefinitely.
         history_cutoff = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat(timespec="seconds")
+        conn.execute("DELETE FROM max_outbox WHERE event_id IN (SELECT event_id FROM max_delivery_failures WHERE failed_at<?)", (history_cutoff,))
         conn.execute("DELETE FROM notification_batches WHERE created_at<?", (history_cutoff,))
     return {"outbox": sent, "inbox": inbox}

@@ -2315,6 +2315,7 @@ async function loadMaxDiagnostics() {
     }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
+    if(state.permanently_failed) lines.push("Окончательно отклонено MAX: "+state.permanently_failed+". Проверьте доступность получателей.");
     if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");
     target.textContent=lines.join(" ");
   }catch(error) { target.textContent="Ошибка диагностики MAX: "+error.message; }

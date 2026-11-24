@@ -76,7 +76,13 @@ def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
     )""")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets)
+def _max_delivery_failures(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS max_delivery_failures (
+        event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
+        status_code INTEGER NOT NULL, failed_at TEXT NOT NULL)""")
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _max_delivery_failures)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
