@@ -61,6 +61,23 @@ def test_enroll_retry_and_consumption(admin):
     assert "token_hash" not in listing and "enrollment_hash" not in listing
 
 
+def test_usb_diagnostic_sync_accepts_missing_voltage(admin):
+    device, _, headers, _ = setup_sensor(admin)
+    record_without_battery = record(battery_mv=0)
+    assert sync(admin, device, headers, batch([record_without_battery], battery_mv=1)).status_code == 422
+    assert sync(admin, device, headers, batch([record(battery_mv=1999)], battery_mv=0)).status_code == 422
+    payload = batch([record_without_battery], battery_mv=0)
+    for _ in range(2):
+        response = sync(admin, device, headers, payload)
+        assert response.status_code == 200, response.text
+        assert response.json()["ack_seq"] == 2
+    listing = admin.get("/api/sensors/devices").json()[0]
+    assert listing["battery_mv"] == 0 and listing["status"] == "recent"
+    with db.connect() as conn:
+        rows = conn.execute("SELECT temperature,battery_mv FROM sensor_records").fetchall()
+        assert [tuple(row) for row in rows] == [(21.5, 0)]
+
+
 def test_idempotent_history_and_conflicting_replay(admin):
     d,enroll,headers,room=setup_sensor(admin)
     payload=batch()

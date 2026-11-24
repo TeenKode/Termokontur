@@ -23,7 +23,7 @@
 
     <section class="panel firmware-debug-panel">
       <h2>USB-подключение</h2>
-      <p class="hint">Подключите плату кабелем с передачей данных. Если плата молчит, кратко нажмите RESET.</p>
+      <p class="hint">Подключите ESP32‑C3 к компьютеру кабелем с передачей данных. Если плата спит, коротко нажмите RESET и затем выберите порт.</p>
       <div class="heading-actions">
         <button type="button" id="debug-connect" class="btn primary" disabled>Подключить USB</button>
         <button type="button" id="debug-disconnect" class="btn secondary" disabled>Отключить</button>
@@ -46,7 +46,13 @@
         <button type="button" id="debug-identify" class="btn secondary" disabled>Прочитать данные платы</button>
         <button type="button" id="debug-measure" class="btn primary" disabled>Пробный замер</button>
         <button type="button" id="debug-wifi" class="btn secondary" aria-expanded="false" aria-controls="debug-wifi-details" disabled>Показать пароль точки Wi-Fi</button>
+        <button type="button" id="debug-boot" class="btn secondary" disabled>Отправить замер по BOOT</button>
       </div>
+      <div class="heading-actions">
+        <label>Интервал <select id="debug-interval"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="30">30 с</option></select></label>
+        <button type="button" id="debug-auto" class="btn secondary" disabled>Запустить автозамер</button>
+      </div>
+      <p id="debug-stats" role="status">Успешно: 0 · Ошибок: 0</p>
       <div id="debug-wifi-details" hidden>
         <dl class="firmware-debug-values">
           <div><dt>Сеть настройки</dt><dd id="debug-wifi-ssid"></dd></div>

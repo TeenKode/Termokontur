@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -20,6 +20,8 @@ from . import __version__, db, sensor_firmware, sensor_monitor
 MODEL = "c3-sht40-v1"
 SensorModel = Literal["c3-sht40-v1"]
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
+# Zero denotes a missing battery reading during USB diagnostics.
+BatteryMV = Annotated[int, Field(ge=0, le=0)] | Annotated[int, Field(ge=2000, le=5000)]
 
 
 class Strict(BaseModel):
@@ -76,7 +78,7 @@ class Record(Strict):
     time_quality: Literal["unknown", "sntp", "server", "rtc"]
     temperature: float | None = Field(default=None, ge=-55, le=125, allow_inf_nan=False)
     humidity: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: BatteryMV
     interval_s: int = Field(ge=60, le=86400)
     error: Literal["", "sensor_crc", "sensor_io"] = ""
 
@@ -99,7 +101,7 @@ class Sync(Strict):
     next_seq: int = Field(ge=1, le=9007199254740991)
     lost: int = Field(ge=0, le=9007199254740991)
     rssi: int = Field(ge=-127, le=0)
-    battery_mv: int = Field(ge=2000, le=5000)
+    battery_mv: BatteryMV
     config_version: int = Field(ge=0)
     boots: int = Field(ge=0)
     ota_failures: int = Field(default=0, ge=0)

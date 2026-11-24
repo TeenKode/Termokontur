@@ -131,7 +131,7 @@ async function usbRun(flash){
     const saved=await serial.request("configure",{...data.settings,device:approval.device_id,code:"",sensor_type:data.sensor_type,config:approval.config});
     if(!saved.saved)throw Error("Датчик не подтвердил сохранение настроек");
     usbClearSecrets();await refreshSensors();
-    usbStatus("Готово. Отключите USB SuperMini и USB зарядки TP4056, включите питание от аккумулятора. Проверьте первые данные в карточке.");
+    usbStatus("Готово. Для отладки закройте мастер, оставьте USB платы подключённым и коротко нажмите RESET. Для автономной работы отсоедините USB платы и зарядки, включите питание от аккумулятора и проверьте первые данные в карточке.");
   }catch(error){usbStatus(error.name==="NotFoundError"?"Порт не выбран или изменился после перезапуска. Нажмите «Настроить без прошивки» и выберите его снова.":error.message+(flashed?" Если USB переопределился после записи, продолжите кнопкой «Настроить без прошивки».":""));}
   finally{if(serial)await serial.close();usbSetBusy(false);}
 }

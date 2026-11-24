@@ -30,9 +30,15 @@ SIMULATED_USB=r'''(() => {
    else if(req.cmd==='configure'){window.savedUSB=req;response.saved=true;}
    else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
    else if(req.cmd==='setup_wifi')Object.assign(response,{ssid:'Termokontur-1234',password:' Wi-Fi <demo> & pass  '});
+   else if(req.cmd==='arm_boot_debug'){response.duration_s=300;window.simBootArmed=true;}
    const bytes=new TextEncoder().encode('startup log\nSETUP password: masked-test-password\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
+ window.simPressBoot=()=>{
+  if(!window.simBootArmed)throw Error('BOOT debug is inactive');
+  window.simBootArmed=false;
+  port.rx.enqueue(new TextEncoder().encode('BOOT: Сервер подтвердил получение замера.\n'));
+ };
  window.radioConnect=async()=>{
   const pair=await key;const raw=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const ident={public_key:hex(raw),hardware_id:'0123456789ab',sensor_type:window.savedUSB.sensor_type,firmware:'0.1.5'};
   const post=async(path,body)=>{const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json();};
@@ -135,6 +141,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     page.click('#usb-flash')
                 assert image.value.ok
                 expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
+                expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
                 assert page.evaluate('window.simFlashed') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
@@ -179,6 +186,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-temperature')).to_have_text('21,5 °C')
                 expect(page.locator('#debug-humidity')).to_have_text('44,2 %')
                 expect(page.locator('#debug-battery')).to_have_text('3,95 В')
+                expect(page.locator('#debug-stats')).to_contain_text('Успешно: 1')
+                page.click('#debug-auto')
+                expect(page.locator('#debug-stats')).to_contain_text('Успешно: 2')
+                expect(page.locator('#debug-boot')).to_be_disabled()
+                page.click('#debug-auto')
+                expect(page.locator('#debug-auto')).to_have_text('Запустить автозамер')
                 expect(page.locator('#debug-wifi-details')).to_be_hidden()
                 page.click('#debug-wifi')
                 expect(page.locator('#debug-wifi-details')).to_be_visible()
@@ -197,6 +210,14 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-wifi-password')).to_be_empty()
                 page.click('#debug-wifi')
                 expect(page.locator('#debug-wifi-details')).to_be_visible()
+                page.click('#debug-boot')
+                expect(page.locator('#debug-result')).to_contain_text('коротко нажмите BOOT в течение 5 мин.')
+                expect(page.locator('#debug-measure')).to_be_disabled()
+                expect(page.locator('#debug-auto')).to_be_disabled()
+                expect(page.locator('#debug-wifi-details')).to_be_hidden()
+                page.evaluate('window.simPressBoot()')
+                expect(page.locator('#debug-result')).to_have_text('Сервер подтвердил получение замера.')
+                expect(page.locator('#debug-log')).to_contain_text('BOOT: Сервер подтвердил получение замера.')
                 page.click('#debug-disconnect')
                 expect(page.locator('#debug-connect')).to_be_enabled()
                 expect(page.locator('#debug-wifi-details')).to_be_hidden()

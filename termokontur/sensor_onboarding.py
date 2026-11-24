@@ -154,7 +154,8 @@ def router(require_admin):
             raise HTTPException(503, "Проверьте сертификат сервера для датчиков") from None
         if len(certificate.encode("utf-8")) > 8000:
             raise HTTPException(503, "Цепочка сертификатов превышает 8000 байт")
-        return JSONResponse({'time': int(time.time()), 'ca': certificate, 'sync_replay': True}, headers={
+        return JSONResponse({'time': int(time.time()), 'ca': certificate, 'sync_replay': True,
+                             'usb_powered_sync': True}, headers={
             'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
         })
 
