@@ -116,14 +116,24 @@ def prune_data(retention_days: int) -> dict:
         return {"readings": 0, "receipts": 0}
     if not 30 <= retention_days <= 3650:
         raise ValueError("Недопустимый срок хранения")
-    cutoff=(datetime.now(timezone.utc)-timedelta(days=retention_days)).isoformat(timespec="seconds")
+    cutoff_time = datetime.now(timezone.utc)-timedelta(days=retention_days)
+    cutoff = cutoff_time.isoformat(timespec="seconds")
+    cutoff_epoch = int(cutoff_time.timestamp())
     with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         readings=conn.execute("DELETE FROM readings WHERE observed_at<?", (cutoff,)).rowcount
+        # Keep only opaque sequence receipts, so a retransmission cannot
+        # recreate expired readings or poison the device's ACK.
+        conn.execute("""INSERT OR IGNORE INTO sensor_record_receipts
+            SELECT device_id,seq,fingerprint FROM sensor_records
+            WHERE COALESCE(measured_at,received_at)<?""", (cutoff_epoch,))
+        sensor_records = conn.execute("DELETE FROM sensor_records WHERE COALESCE(measured_at,received_at)<?",
+                                      (cutoff_epoch,)).rowcount
     # Replays must remain idempotent at least while the corresponding
     # message receipts are retained for 30 days.
     from . import max_delivery
     max_delivery.prune(min(retention_days,30))
-    return {"readings":readings}
+    return {"readings":readings, "sensor_records": sensor_records}
 
 def schedule() -> dict:
     days=int(settings.get("backup_interval_days", "1"))

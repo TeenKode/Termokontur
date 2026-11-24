@@ -222,8 +222,14 @@ def router(require_admin):
     @r.patch("/devices/{device}", dependencies=admin)
     def update_device(device: str, payload: DevicePatch):
         with db.connect() as conn:
-            get_supported_device(conn, device)
+            conn.execute("BEGIN IMMEDIATE")
+            current = get_supported_device(conn, device)
             check_room(conn, payload.room_id)
+            if current["room_id"] != payload.room_id:
+                conn.execute("INSERT OR IGNORE INTO sensor_room_history VALUES(?,0,?)", (device, current["room_id"]))
+                conn.execute("""INSERT INTO sensor_room_history VALUES(?,?,?)
+                    ON CONFLICT(device_id,starts_at) DO UPDATE SET room_id=excluded.room_id""",
+                    (device, int(time.time()), payload.room_id))
             conn.execute("UPDATE sensor_devices SET name=?,room_id=?,enabled=? WHERE id=?",
                          (payload.name.strip(), payload.room_id, payload.enabled, device))
             event(conn, device, "updated", "Изменены имя, помещение или доступ")
@@ -305,8 +311,9 @@ def router(require_admin):
                 if rec.measured_at and rec.measured_at > now + 300:
                     raise HTTPException(422, "Измерение датировано будущим")
                 fingerprint = digest(rec.model_dump_json())
-                old = conn.execute("SELECT fingerprint FROM sensor_records WHERE device_id=? AND seq=?",
-                                   (device, rec.seq)).fetchone()
+                old = conn.execute("""SELECT fingerprint FROM sensor_records WHERE device_id=? AND seq=?
+                    UNION ALL SELECT fingerprint FROM sensor_record_receipts WHERE device_id=? AND seq=?""",
+                    (device, rec.seq, device, rec.seq)).fetchone()
                 if old:
                     if old["fingerprint"] != fingerprint:
                         raise HTTPException(409, "Содержимое существующего seq изменилось")
@@ -330,14 +337,21 @@ def router(require_admin):
                     else:
                         event(conn, device, "gap", f"Нет записей [{gap_from},{rec.seq})")
                         lost_confirmed += gap
+                room_id = d["room_id"]
+                if rec.measured_at is not None:
+                    assigned = conn.execute("""SELECT room_id FROM sensor_room_history
+                        WHERE device_id=? AND starts_at<=? ORDER BY starts_at DESC LIMIT 1""",
+                        (device, rec.measured_at)).fetchone()
+                    if assigned:
+                        room_id = assigned["room_id"]
                 conn.execute("""INSERT INTO sensor_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                             (device, rec.seq, d["room_id"], rec.measured_at, now, rec.boot_id, rec.uptime_s,
+                             (device, rec.seq, room_id, rec.measured_at, now, rec.boot_id, rec.uptime_s,
                               rec.time_quality, rec.temperature, rec.humidity, rec.battery_mv, rec.interval_s,
                               rec.error, fingerprint))
                 if rec.measured_at and not rec.error and -40 <= rec.temperature <= 60:
                     observed = datetime.fromtimestamp(rec.measured_at, timezone.utc).isoformat(timespec="seconds")
                     conn.execute("INSERT INTO readings(room_id,value,source,reporter,observed_at,external_id) "
-                                 "VALUES(?,?,'ha',?,?,?)", (d["room_id"], rec.temperature, "Датчик "+device,
+                                 "VALUES(?,?,'ha',?,?,?)", (room_id, rec.temperature, "Датчик "+device,
                                                         observed, f"sensor:{device}:{rec.seq}"))
                 ack = rec.seq + 1
             if replay_until is not None and not payload.records and ack < replay_until:
