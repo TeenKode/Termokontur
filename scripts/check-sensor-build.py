@@ -18,6 +18,7 @@ assert image[80:112].split(b'\0',1)[0]==b'termokontur-sensor'
 version=run_path(str(root/'termokontur/__init__.py'))['__version__']
 assert image[48:80].split(b'\0',1)[0].decode()==version
 assert 'CONFIG_PARTITION_TABLE_CUSTOM=y' in config
+assert 'CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y' not in config
 actual={}
 table=(folder/'.pio/build/esp32-c3-supermini/partitions.bin').read_bytes()
 for pos in range(0,len(table)-31,32):

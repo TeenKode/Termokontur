@@ -99,6 +99,14 @@ function usbSettings(){
   if(url.origin!==location.origin)throw Error("Для настройки откройте панель на указанном HTTPS-сервере");
   if(!$("usb-name").value.trim())throw Error("Укажите название датчика");
   const encoder=new TextEncoder(),password=$("usb-wifi-password").value;
+  const dnsPrimary=$("usb-dns-primary").value.trim(),dnsSecondary=$("usb-dns-secondary").value.trim();
+  const validDNS=value=>{
+    if(!value)return true;
+    const parts=value.split(".");
+    return parts.length===4&&parts.every(p=>/^(0|[1-9][0-9]{0,2})$/.test(p)&&Number(p)<=255)&&
+      Number(parts[0])<224&&Number(parts[0])!==127&&value!=="0.0.0.0";
+  };
+  if(!validDNS(dnsPrimary)||!validDNS(dnsSecondary))throw Error("DNS: укажите корректный IPv4-адрес или оставьте поле пустым.");
   const length=encoder.encode(password).length;
   if(password&&(length<8||length>63))throw Error("Проверьте длину пароля Wi-Fi: 8–63 байта");
   if(encoder.encode($("usb-ssid").value).length>32)throw Error("Название Wi-Fi превышает 32 байта");
@@ -107,7 +115,7 @@ function usbSettings(){
   for(const [key] of sensorConfigFields)config[key]=Number(form.elements[key].value);
   if(config.send_s<config.measure_s||config.cutoff_mv>config.wifi_min_mv||config.wifi_min_mv>config.ota_min_mv)throw Error("Передача должна быть не чаще измерений. Пороги напряжения: отключение ≤ Wi-Fi ≤ обновление.");
   return {name:$("usb-name").value.trim(),room_id:Number($("usb-room").value),sensor_type:$("usb-type").value,config,
-    settings:{ssid:$("usb-ssid").value,password,server:url.origin,
+    settings:{ssid:$("usb-ssid").value,password,server:url.origin,dns_primary:dnsPrimary,dns_secondary:dnsSecondary,
       setup_password:$("usb-setup-password").value,setup_password_confirm:$("usb-setup-confirm").value,random_setup_password:$("usb-setup-random").checked}};
 }
 async function usbRun(flash){

@@ -20,6 +20,8 @@
 #include "esp_http_server.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "lwip/inet.h"
+#include "lwip/netdb.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_random.h"
@@ -76,7 +78,7 @@ static std::string identity_public, identity_fingerprint;
 static Config cfg;
 static State state;
 static std::string ssid, password, server, device, code, token, ca,
-    sensor_type = "sht4x", setup_password, factory_ticket;
+    sensor_type = "sht4x", setup_password, factory_ticket, dns_primary, dns_secondary;
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
@@ -238,6 +240,8 @@ static std::string provision_json() {
   add(j, "sensor_type", sensor_type);
   add(j, "setup_password", setup_password);
   add(j, "factory_ticket", factory_ticket);
+  add(j, "dns_primary", dns_primary);
+  add(j, "dns_secondary", dns_secondary);
   auto s = stringify(j);
   cJSON_Delete(j);
   return s;
@@ -294,6 +298,8 @@ static bool load_provision() {
   if (sensor_type.empty()) sensor_type = "sht4x";
   setup_password = text(j, "setup_password");
   factory_ticket = text(j, "factory_ticket");
+  dns_primary = text(j, "dns_primary");
+  dns_secondary = text(j, "dns_secondary");
   cJSON_Delete(j);
   if (!setup_password.empty() && !sensor::valid_setup_password(setup_password)) {
     setup_password.clear();
@@ -371,6 +377,82 @@ static bool start_wifi(bool ap = false) {
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   return esp_wifi_set_mode(ap ? WIFI_MODE_AP : WIFI_MODE_STA) == ESP_OK;
 }
+static bool valid_dns_address(const std::string &value) {
+  if (value.empty()) return true;
+  in_addr address{};
+  if (inet_pton(AF_INET, value.c_str(), &address) != 1) return false;
+  uint32_t host = ntohl(address.s_addr);
+  return host != 0 && host != 0xffffffff && (host >> 24) != 127 &&
+         (host >> 28) < 14;
+}
+static void log_dns(const char *source, esp_netif_dns_type_t type) {
+  esp_netif_dns_info_t info{};
+  char addr[48]{};
+  if (esp_netif_get_dns_info(sta_netif, type, &info) == ESP_OK) {
+    if (info.ip.type == ESP_IPADDR_TYPE_V4)
+      inet_ntop(AF_INET, &info.ip.u_addr.ip4, addr, sizeof addr);
+    else if (info.ip.type == ESP_IPADDR_TYPE_V6)
+      inet_ntop(AF_INET6, &info.ip.u_addr.ip6, addr, sizeof addr);
+  }
+  printf("DNS: %s %s = %s\n", source,
+         type == ESP_NETIF_DNS_MAIN ? "primary" : "secondary", addr[0] ? addr : "unset");
+}
+static bool apply_dns(const std::string &value, esp_netif_dns_type_t type) {
+  if (value.empty()) return true;
+  in_addr address{};
+  if (!valid_dns_address(value) || inet_pton(AF_INET, value.c_str(), &address) != 1) return false;
+  esp_netif_dns_info_t info{};
+  info.ip.type = ESP_IPADDR_TYPE_V4;
+  info.ip.u_addr.ip4.addr = address.s_addr;
+  return esp_netif_set_dns_info(sta_netif, type, &info) == ESP_OK;
+}
+static std::string server_hostname() {
+  if (server.rfind("https://", 0) != 0) return "";
+  auto authority = server.substr(8, server.find('/', 8) == std::string::npos ?
+                                     std::string::npos : server.find('/', 8)-8);
+  if (!authority.empty() && authority.front() == '[') {
+    auto end = authority.find(']');
+    return end == std::string::npos ? "" : authority.substr(1,end-1);
+  }
+  return authority.substr(0, authority.find(':'));
+}
+static bool prepare_dns() {
+  log_dns("DHCP", ESP_NETIF_DNS_MAIN);
+  log_dns("DHCP", ESP_NETIF_DNS_BACKUP);
+  if (!apply_dns(dns_primary, ESP_NETIF_DNS_MAIN) ||
+      !apply_dns(dns_secondary, ESP_NETIF_DNS_BACKUP)) {
+    last_error = "dns_configuration_failed";
+    puts("DNS: manual DNS configuration failed");
+    return false;
+  }
+  log_dns("active", ESP_NETIF_DNS_MAIN);
+  log_dns("active", ESP_NETIF_DNS_BACKUP);
+  auto host = server_hostname();
+  if (host.empty()) { last_error = "invalid_server_hostname"; return false; }
+  // Preserve the original hostname for SNI and certificate validation.
+  for (unsigned i = 0; i < 2 && available(); ++i) {
+    addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+    addrinfo *answer = nullptr;
+    const int error = getaddrinfo(host.c_str(), nullptr, &hints, &answer);
+    if (error == 0 && answer) {
+      char ip[48]{};
+      if (answer->ai_family == AF_INET)
+        inet_ntop(AF_INET, &reinterpret_cast<sockaddr_in *>(answer->ai_addr)->sin_addr, ip, sizeof ip);
+      else if (answer->ai_family == AF_INET6)
+        inet_ntop(AF_INET6, &reinterpret_cast<sockaddr_in6 *>(answer->ai_addr)->sin6_addr, ip, sizeof ip);
+      printf("DNS: %s -> %s\n", host.c_str(), ip);
+      freeaddrinfo(answer);
+      if (available()) return true;
+      break;
+    }
+    if (answer) freeaddrinfo(answer);
+    printf("DNS: lookup %s failed: %d (attempt %u/2)\n", host.c_str(), error, i+1);
+    if (deadline - esp_timer_get_time() < 15000000 || charging()) break;
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+  last_error = "dns_resolution_failed";
+  return false;
+}
 static bool wifi_up() {
   if (!start_wifi())
     return false;
@@ -389,7 +471,7 @@ static bool wifi_up() {
     int64_t attempt = esp_timer_get_time() + 10000000;
     while (available() && esp_timer_get_time() < attempt) {
       if (xEventGroupGetBits(events) & 1)
-        return true;
+        return prepare_dns();
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
@@ -466,8 +548,15 @@ static std::string post(const std::string &path, const std::string &body,
   esp_http_client_close(h);
   esp_http_client_cleanup(h);
   if (auth && status == 401) { token.clear(); save_provision(); }
-  if (result.empty())
-    last_error = "https_sync_failed";
+  if (result.empty()) {
+    if (status > 0) {
+      printf("HTTPS: %s HTTP %d\n", path.c_str(), status);
+      last_error = "http_" + std::to_string(status);
+    } else {
+      printf("HTTPS: %s connection/read failed: %s\n", path.c_str(), esp_err_to_name(err));
+      last_error = "https_sync_failed";
+    }
+  }
   return result;
 }
 static uint8_t time_quality = 0;
@@ -892,7 +981,7 @@ static std::atomic<SetupState> setup_state{SetupState::waiting};
 static bool setup_provisioned = false;
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
-      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><p><small>Время и сертификат будут получены с указанного HTTPS-сервера автоматически.</small></p><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.csrf='NONCE';try{const u=new URL(b.server);if(u.protocol!=='https:'||u.username||u.password)throw Error('Укажите HTTPS-адрес сервера');const boot=await fetch(u.href.replace(/\/$/,'')+'/api/sensors/bootstrap',{credentials:'omit',cache:'no-store'});if(!boot.ok)throw Error('Не удалось получить время и сертификат сервера');const meta=await boot.json();b.epoch=meta.time;b.ca=meta.ca;const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch(error){document.getElementById('result').textContent=error.message||'Не удалось получить настройки сервера.';}};</script></html>)HTML";
+      R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Основной DNS (необязательно)<input name="dns_primary" placeholder="Из DHCP" maxlength="15"></label><label>Резервный DNS (необязательно)<input name="dns_secondary" placeholder="Из DHCP" maxlength="15"></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><p><small>Время и сертификат будут получены с указанного HTTPS-сервера автоматически.</small></p><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.csrf='NONCE';try{const u=new URL(b.server);if(u.protocol!=='https:'||u.username||u.password)throw Error('Укажите HTTPS-адрес сервера');const boot=await fetch(u.href.replace(/\/$/,'')+'/api/sensors/bootstrap',{credentials:'omit',cache:'no-store'});if(!boot.ok)throw Error('Не удалось получить время и сертификат сервера');const meta=await boot.json();b.epoch=meta.time;b.ca=meta.ca;const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch(error){document.getElementById('result').textContent=error.message||'Не удалось получить настройки сервера.';}};</script></html>)HTML";
   html.replace(html.find("NONCE"), 5, setup_nonce);
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, html.c_str(), html.size());
@@ -950,6 +1039,8 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca");
+  std::string primary = text(j,"dns_primary"), secondary = text(j,"dns_secondary");
+  if (!valid_dns_address(primary) || !valid_dns_address(secondary)) return "DNS: укажите корректный IPv4-адрес или оставьте поле пустым.";
   std::string kind = text(j, "sensor_type");
   if (kind.empty()) kind = "sht4x";
   std::string entered_setup_password = text(j, "setup_password");
@@ -977,6 +1068,7 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   ssid = s;
   password = p;
   server = url;
+  dns_primary = primary; dns_secondary = secondary;
   device = id;
   code = key;
   token.clear();
@@ -1322,7 +1414,7 @@ extern "C" void app_main() {
     const bool registered = wifi_up() && sync_time() && enroll();
     stop_network();
     if (!registered) {
-      puts("FACTORY: registration not confirmed; retry in 5 minutes or hold BOOT after RESET for manual setup");
+      printf("FACTORY: registration not confirmed (%s); retry in 5 minutes or hold BOOT after RESET for manual setup\n", last_error.c_str());
       sleep_for(300);
     }
     puts("FACTORY: server authorized device");
