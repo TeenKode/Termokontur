@@ -7,6 +7,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     application.state.failed_logins = {}
+    application.state.login_lock = Lock()
     application.middleware("http")(security_headers)
     application.add_api_route("/", index, methods=["GET"])
     application.add_api_route("/sensors/firmware-debug", firmware_debug, methods=["GET"],
