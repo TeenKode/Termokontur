@@ -1,11 +1,11 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
-let historyData = null, historyRequestId = 0;
+let historyData = null, historyRequestId = 0, readingRequestId = 0;
 const selectedMaxRooms = new Set();
 let activeMaxCodes = [], issuedMaxCodes = [];
 let maxStaff = [], selectedMaxStaff = null;
-let reportsData = null, selectedReportSection = "coverage";
+let reportsData = null, reportRequestId = 0, selectedReportSection = "coverage";
 let buildingScope = "";
 let panelOpened = false;
 const maxAssignmentRooms = new Set();
@@ -18,8 +18,29 @@ const el = (tag, className = "", value = "") => {
   if(value !== null && value !== undefined) item.textContent = String(value);
   return item;
 };
+const navigationToggle = $("navigation-toggle");
+function closeNavigation(restoreFocus=false) {
+  if(navigationToggle.getAttribute("aria-expanded")!=="true")return;
+  navigationToggle.setAttribute("aria-expanded","false");
+  if(restoreFocus)navigationToggle.focus({preventScroll:true});
+}
+navigationToggle.addEventListener("click",()=>{
+  const open=navigationToggle.getAttribute("aria-expanded")==="true";
+  navigationToggle.setAttribute("aria-expanded",String(!open));
+});
+document.querySelector(".sidebar").addEventListener("keydown",event=>{
+  if(event.key!=="Escape"||!navigationToggle.offsetWidth)return;
+  closeNavigation(true);
+});
+for(const type of ["click","focusin"]){
+  document.addEventListener(type,event=>{
+    if(!event.target.closest(".sidebar"))closeNavigation();
+  });
+}
 function toast(message, isError = false) {
   const target = $("toast");
+  const container = document.querySelector("dialog[open]") || document.body;
+  if(target.parentElement!==container)container.append(target);
   target.textContent = message; target.className = "toast show" + (isError ? " error" : " success");
   target.setAttribute("role",isError?"alert":"status");
   target.setAttribute("aria-live",isError?"assertive":"polite");
@@ -115,26 +136,29 @@ async function api(path, method = "GET", body) {
   } finally {finish();}
 }
 function enterLogin() {
+  closeNavigation();
   show("login-screen",true); show("app-root",false); $("password").value="";
 }
 function enterApp(session) {
   panelOpened=true;
   buildingScope=session.building||"";
   for(const element of document.querySelectorAll("[data-admin-only]"))element.hidden=Boolean(buildingScope);
-  if(buildingScope)$("panel-scope").textContent=buildingScope;
+  $("panel-scope").textContent=buildingScope;
+  show("panel-scope",Boolean(buildingScope));
   show("login-screen",false);show("app-root",true);
 }
 // Move to the beginning of a different section before replacing long content.
 // Otherwise the browser clamps/anchors scroll to the shorter new page and
 // sticky navigation visibly jumps. Never animate this corrective scroll.
 function scrollToSectionStart(section){
-  const top=section.getBoundingClientRect().top+window.scrollY;
-  if(window.scrollY>top+16)window.scrollTo({top:Math.max(0,top-12),behavior:"instant"});
+  const offset=parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop)||12;
+  const top=Math.max(0,section.getBoundingClientRect().top+window.scrollY-offset);
+  if(window.scrollY>top+16)window.scrollTo({top,behavior:"instant"});
 }
 function setTab(name) {
   const target=$("view-"+name);
   if(!target || (selectedTab===name && !target.hidden))return false;
-  scrollToSectionStart(document.querySelector(".topbar"));
+  scrollToSectionStart($("app-root"));
   selectedTab = name;
   for(const view of ["overview","rooms","staff","reports","readings","sensors","settings"]) {
     const active=view===name;
@@ -157,18 +181,27 @@ function temperature(value) {return value === null || value === undefined ? "—
 function option(select,value,label) {const o=el("option","",label);o.value=value;select.append(o);}
 function renderFilters() {
   const oldBuilding=$("building-filter").value, oldReading=$("reading-filter").value;
+  const oldManualRoom=$("reading-room").value;
   for(const id of ["building-filter","reading-filter","reading-room"]) $(id).replaceChildren();
   option($("building-filter"),"","Все корпуса");
-  for(const building of [...new Set(rooms.map(r=>r.building))].sort()) option($("building-filter"),building,building);
-  $("building-filter").value=buildingScope||oldBuilding;
+  const buildings=new Set(rooms.map(room=>room.building));
+  if(buildingScope)buildings.add(buildingScope);
+  for(const building of [...buildings].sort())option($("building-filter"),building,building);
+  $("building-filter").value=buildingScope||(buildings.has(oldBuilding)?oldBuilding:"");
   $("building-filter").disabled=Boolean(buildingScope);
   option($("reading-filter"),"","Все помещения");
+  option($("reading-room"),"","Выберите помещение");
   for(const room of rooms) {
     const label=room.building+" · "+room.name;
     option($("reading-filter"),String(room.id),label);
     option($("reading-room"),String(room.id),label);
   }
   $("reading-filter").value=oldReading;
+  if(!$("reading-filter").value)$("reading-filter").value="";
+  $("reading-room").value=oldManualRoom;
+  if(!$("reading-room").value)$("reading-room").value="";
+  show("reading-room-hint",rooms.length===0);
+  $("reading-save").disabled=rooms.length===0;
 }
 function renderDaily() {
   if(!daily) return;
@@ -177,25 +210,26 @@ function renderDaily() {
   const expected=selected.filter(r=>r.expected);
   const missing=selected.filter(r=>r.daily_status==="missing");
   const awaiting=selected.filter(r=>r.daily_status==="awaiting");
-  $("daily-date").textContent="На "+daily.local_date+" · "+daily.timezone+(building?" · "+building:"");
+  $("daily-date").textContent=fullDay(daily.local_date)+" · "+daily.timezone;
   $("daily-counts").textContent=(expected.length-missing.length-awaiting.length)+" из "+expected.length;
-  const area=$("daily-missing");area.replaceChildren();
-  if(!missing.length&&!awaiting.length){
-    const message=expected.length?"Показания по графику собраны.":
+  show("daily-status",!missing.length&&!awaiting.length);
+  if(!$("daily-status").hidden){
+    $("daily-status").textContent=expected.length?"Показания по графику собраны.":
       selected.length?"По календарю сегодня нет обязательных замеров.":"Нет помещений в выбранном корпусе.";
-    area.append(el("p","daily-complete",message));
-    return;
   }
-  for(const [group,title] of [[missing,"Нет измерений"],[awaiting,"Ожидаем выгрузку датчика"]]){
-    if(!group.length)continue;
-    area.append(el("p","daily-heading",title+": "+group.length));
-    const list=el("div","daily-tags");
-    for(const room of group){
+  for(const [id,group,title] of [
+    ["daily-missing-rooms",missing,"Нет измерений"],
+    ["daily-awaiting-rooms",awaiting,"Ожидаем выгрузку датчика"],
+  ]){
+    const details=$(id);
+    details.hidden=!group.length;
+    details.querySelector("summary").textContent=title+" · "+group.length;
+    const labels=group.map(room=>{
       const label=el("span","daily-tag",room.building+" · "+room.name);
       if(room.waiting_until)label.title="Окно выгрузки до "+when(new Date(room.waiting_until*1000).toISOString());
-      list.append(label);
-    }
-    area.append(list);
+      return label;
+    });
+    details.querySelector(".daily-tags").replaceChildren(...labels);
   }
 }
 function renderOverview() {
@@ -207,20 +241,28 @@ function renderOverview() {
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
-  const search=$("search-rooms").value.toLocaleLowerCase("ru");
-  const filtered=selected.filter(r=>(r.name+" "+r.building+" "+r.kind).toLocaleLowerCase("ru").includes(search));
+  const search=$("search-rooms").value.trim().toLocaleLowerCase("ru");
+  const status=$("overview-status").value;
+  const filtered=selected.filter(room=>{
+    const roomStatus=["below","above"].includes(room.status)?"alert":room.status;
+    const name=(room.name+" "+room.building+" "+room.kind).toLocaleLowerCase("ru");
+    return (!status||status===roomStatus)&&name.includes(search);
+  });
   const tbody=$("overview-table");tbody.replaceChildren();
   for(const item of filtered){
-    const tr=el("tr");cell(tr,item.name);cell(tr,item.building);
+    const tr=el("tr");
+    cell(tr,item.name).append(el("small","table-building",item.building));
     const val=cell(tr,temperature(item.last_temp),"temp"+(item.status==="below"?" low":item.status==="above"?" high":""));
     val.title=item.last_source?"Источник: "+(sources[item.last_source]||item.last_source):"";
+    const label=item.status==="missing"&&item.last_at?"Устарело":statuses[item.status];
+    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,label||item.status));
     cell(tr,Number(item.min_temp).toLocaleString("ru-RU")+"–"+Number(item.max_temp).toLocaleString("ru-RU")+" °C");
     cell(tr,when(item.last_at));
-    const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,statuses[item.status]||item.status));
     tbody.append(tr);
   }
   show("overview-empty",filtered.length===0);
-  $("overview-empty").textContent=overview.length?"Помещения не найдены.":"Помещения ещё не добавлены. Перейдите в раздел «Помещения».";
+  $("overview-empty").textContent=selected.length?"По выбранным фильтрам помещений нет.":
+    building?"В этом корпусе пока нет помещений.":"Помещения пока не добавлены.";
 }
 function shortDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7):"—";}
 function fullDay(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4):"—";}
@@ -272,24 +314,26 @@ function renderHistory(){
   const series=historyData.series;
   const today=series[series.length-1],yesterday=series[series.length-2];
   $("avg-today").textContent=temperature(today.average);
-  $("avg-today-desc").textContent=today.average==null?
-    "За сегодня показаний пока нет.":
-    "По "+today.rooms_measured+" из "+today.rooms_total+" кабинетов · "+historyData.timezone;
+  show("avg-today-desc",today.average==null);
   const change=$("avg-change");
   change.className="dashboard-change";
-  if(today.average!=null&&yesterday?.average!=null){
+  change.hidden=today.average==null||yesterday?.average==null;
+  if(!change.hidden){
     const diff=today.average-yesterday.average;
     change.textContent=(Math.abs(diff)<0.005?"Без изменений":(diff>0?"↑ ":"↓ ")+Math.abs(diff).toLocaleString("ru-RU",{maximumFractionDigits:2})+" °C")+" к предыдущему дню";
     if(diff>0.005)change.classList.add("rise");
     if(diff< -0.005)change.classList.add("fall");
-  }else change.textContent="Для сравнения нужны показания за сегодня и вчера";
+  }
   $("today-coverage").textContent=today.coverage+"%";
-  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" кабинетов с данными";
+  $("today-coverage-desc").textContent=today.rooms_measured+" из "+today.rooms_total+" помещений";
   $("coverage-progress").value=today.coverage;
-  $("today-alerts").textContent="Отклонения по среднесуточной: "+today.out_of_range;
+  show("today-coverage-desc",true);
+  show("coverage-progress",true);
+  $("today-alerts").textContent="Вне нормы по средней: "+today.out_of_range;
+  show("today-alerts",today.out_of_range>0);
   const hasReadings=series.some(x=>x.average!=null);
   show("history-empty",!hasReadings);
-  $("history-chart").hidden=!hasReadings;
+  show("history-chart-frame",hasReadings);
   renderHistoryTable();
   renderBuildingSummary();
   renderBuildingMatrix();
@@ -372,11 +416,11 @@ function renderBuildingMatrix(){
 }
 function drawHistoryChart(){
   const canvas=$("history-chart");
-  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||canvas.hidden)return;
+  if(!historyData||selectedTab!=="overview"||$("history-content").hidden||$("history-chart-frame").hidden)return;
   const series=historyData.series,buildings=historyData.buildings||[];
-  const width=Math.max(280,canvas.parentElement.clientWidth-2),height=310,dpr=window.devicePixelRatio||1;
+  const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
+  if(!width||!height)return;
   canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
-  canvas.style.width=width+"px";canvas.style.height=height+"px";
   const ctx=canvas.getContext("2d");if(!ctx)return;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
   const left=51,right=18,top=18,bottom=43,graphWidth=width-left-right,graphHeight=height-top-bottom;
@@ -387,7 +431,7 @@ function drawHistoryChart(){
   const px=i=>left+(series.length===1?graphWidth/2:graphWidth*i/(series.length-1));
   const py=v=>top+(maximum-v)/(maximum-minimum)*graphHeight;
   const dark=document.documentElement.dataset.theme==="dark";
-  const historyGrid=dark?"#354961":"#eaf0f4",historyText=dark?"#b4c5da":"#8594a6";
+  const historyGrid=dark?"#354961":"#eaf0f4",historyText=dark?"#b4c5da":"#5d7187";
   ctx.font="12px system-ui";ctx.strokeStyle=historyGrid;ctx.fillStyle=historyText;ctx.textAlign="right";ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const value=minimum+(maximum-minimum)*(4-i)/4,y=top+graphHeight*i/4;
@@ -416,15 +460,15 @@ function drawHistoryChart(){
   if(buildings.length>1)line(series,dark?"#a5bacc":"#6a7b8d",true);
   buildings.forEach((building,index)=>line(building.series,buildingColor(index)));
   ctx.textAlign="center";ctx.fillStyle=historyText;ctx.font="11px system-ui";
-  const step=Math.max(1,Math.ceil(series.length/7));
-  for(let i=0;i<series.length;i++){
-    if(i%step!==0&&i!==series.length-1)continue;
+  const ticks=Math.max(1,Math.min(7,series.length-1,Math.floor(graphWidth/44)));
+  for(let tick=0;tick<=ticks;tick++){
+    const i=Math.round(tick*(series.length-1)/ticks);
     ctx.fillText(shortDay(series[i].date),px(i),height-15);
   }
 }
 function hoverHistoryChart(event){
   const canvas=$("history-chart"),tooltip=$("history-tooltip");
-  if(!historyData||canvas.hidden)return;
+  if(!historyData||$("history-chart-frame").hidden)return;
   const rect=canvas.getBoundingClientRect(),width=rect.width,left=51,right=18;
   const ratio=Math.max(0,Math.min(1,(event.clientX-rect.left-left)/(width-left-right)));
   const index=Math.round(ratio*(historyData.series.length-1));
@@ -442,8 +486,15 @@ function hoverHistoryChart(event){
   tooltip.style.left=Math.max(12,Math.min(event.clientX-rect.left,rect.width-12))+"px";
   tooltip.style.top="6px";
 }
+function resetHistorySummary(){
+  historyData=null;
+  for(const id of ["avg-today","today-coverage"])$(id).textContent="—";
+  for(const id of ["avg-today-desc","avg-change","today-coverage-desc","coverage-progress","today-alerts","building-panel","room-drilldown"])
+    show(id,false);
+}
 async function refreshHistory(){
   const sequence=++historyRequestId,building=$("building-filter").value,days=$("history-period").value;
+  if(historyData&&(historyData.building||"")!==building)resetHistorySummary();
   $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
   $("history-content").hidden=true;
   try{
@@ -451,12 +502,13 @@ async function refreshHistory(){
     if(sequence!==historyRequestId)return;
     historyData=data;
     $("history-state").hidden=true;$("history-content").hidden=false;
+    show("building-panel",true);
+    show("room-drilldown",true);
     renderHistory();
   }catch(error){
     if(sequence!==historyRequestId)return;
-    historyData=null;
+    resetHistorySummary();
     $("history-state").textContent="Не удалось загрузить историю: "+error.message;
-    $("avg-today").textContent="—";$("today-coverage").textContent="—";
   }
 }
 function exportHistory(){
@@ -545,7 +597,8 @@ function reportTable(bodyId,items,render){
   }
   if(!items.length){
     const tr=el("tr"),td=el("td","","Нет данных за выбранный период");
-    td.colSpan=10;tr.append(td);body.append(tr);
+    td.colSpan=body.closest("table").tHead.rows[0].cells.length;
+    tr.append(td);body.append(tr);
   }
 }
 function reportSection(name){
@@ -565,7 +618,10 @@ function reportKpi(value,label){
 }
 function renderReport(){
   const r=reportsData;
-  if(!r){show("report-kpis",false);return;}
+  show("report-results",Boolean(r));
+  show("report-kpis",Boolean(r));
+  for(const id of ["report-export-excel","report-export-pdf"])$(id).disabled=!r;
+  if(!r)return;
   const s=r.summary;
   const kpis=$("report-kpis");kpis.replaceChildren(
     reportKpi(reportNumber(s.coverage,"%"),"Охват показаниями"),
@@ -573,8 +629,8 @@ function renderReport(){
     reportKpi(reportNumber(s.missing),"Пропущено"),
     reportKpi(reportNumber(s.average," °C"),"Средняя температура"),
     reportKpi(reportNumber(s.out_of_range),"Дней вне порогов")
-  );show("report-kpis",true);
-  $("report-status").textContent="Период "+r.from+" — "+r.to+
+  );
+  $("report-status").textContent="Период "+fullDay(r.from)+" — "+fullDay(r.to)+
     " · "+(r.building||"Все здания")+" · "+r.timezone+
     " · "+r.rooms_count+" помещений"+(s.sync_pending?" · ожидаются пакеты датчиков":"");
   $("report-staff-note").textContent=r.note;
@@ -627,9 +683,8 @@ function renderReport(){
   });
   reportSection(selectedReportSection);
 }
-function reportDateDefaults(){
-  if($("report-start").value&&$("report-end").value)return;
-  const today=daily?.local_date||new Date().toISOString().slice(0,10);
+function reportDateDefaults(today){
+  if($("report-start").value||$("report-end").value)return;
   const date=new Date(today+"T12:00:00Z");
   date.setUTCDate(date.getUTCDate()-6);
   $("report-start").value=date.toISOString().slice(0,10);
@@ -653,19 +708,24 @@ function reportPersonOptions(){
     maxUserName(user)+" · MAX ID "+user.user_id);
   select.value=maxStaff.some(p=>p.user_id===old)?old:"";
 }
+function clearReport(message){
+  reportsData=null;
+  renderReport();
+  $("report-status").textContent=message;
+}
 async function loadReport(){
+  const request=++reportRequestId;
   const start=$("report-start").value,end=$("report-end").value;
-  if(!start||!end)return;
+  if(!start||!end){clearReport("Укажите обе даты отчёта.");return;}
   const query=new URLSearchParams({start,end,building:$("report-building").value});
-  $("report-status").textContent="Формируем отчёт…";
+  clearReport("Формируем отчёт…");
   try{
     const result=await api("/api/reports?"+query);
+    if(request!==reportRequestId)return;
     reportsData=result;
     renderReport();
   }catch(error){
-    reportsData=null;renderReport();
-    $("report-status").textContent="Не удалось сформировать отчёт";
-    toast(error.message,true);
+    if(request===reportRequestId)clearReport("Не удалось сформировать отчёт. "+error.message);
   }
 }
 function reportExport(type){
@@ -718,7 +778,11 @@ async function loadReportSubscriptions(){
   renderReportSubscriptions(list);
 }
 async function loadReports(){
-  reportDateDefaults();reportBuildingOptions();
+  if(!$("report-start").value&&!$("report-end").value){
+    const today=daily?.local_date||(await api("/api/daily")).local_date;
+    reportDateDefaults(today);
+  }
+  reportBuildingOptions();
   if(buildingScope)await loadReport();
   else{
     reportPersonOptions();
@@ -847,11 +911,20 @@ function renderRooms(){
       .some(x=>String(x).toLocaleLowerCase("ru").includes(search)));
   for(const room of matching) {
     const row=el("tr", room.active ? "" : "archived-room");
-    cell(row,room.name);
-    const building=cell(row,room.building);
+    row.setAttribute("role","row");
+    cell(row,room.name,"room-name-cell");
+    const building=cell(row,room.building,"room-building-cell");
     if(!room.active)building.append(el("span","archived-label","Отключён"));
-    cell(row,room.floor||"—");cell(row,room.kind);
-    cell(row,room.min_temp+"–"+room.max_temp+" °C");
+    const attributes=[
+      ["Этаж",room.floor||"—"],["Тип",room.kind],
+      ["Норма",room.min_temp+"–"+room.max_temp+" °C"],
+    ];
+    for(const [label,value] of attributes){
+      const detail=cell(row,value,"room-attribute");
+      const heading=el("span","room-attribute-label",label);
+      heading.setAttribute("aria-hidden","true");
+      detail.prepend(heading);
+    }
     const maxCell=cell(row,"","max-users-cell");
     const boundUsers=room.max_users||[];
     if(!boundUsers.length)maxCell.append(el("span","max-unbound","Не привязан"));
@@ -872,7 +945,7 @@ function renderRooms(){
       }
       maxCell.append(list);
     }
-    const actions=cell(row,"");
+    const actions=cell(row,"","room-actions-cell");
     const duplicate=el("button","","Копировать");
     duplicate.title="Копировать параметры кабинета";
     duplicate.addEventListener("click",()=>openRoom(room,true));
@@ -888,16 +961,22 @@ function renderRooms(){
       restore.addEventListener("click",()=>restoreRoom(room));
       actions.append(restore);
     }
+    for(const detail of row.cells)detail.setAttribute("role","cell");
     tbody.append(row);
   }
   show("rooms-empty",matching.length===0);
   if(!matching.length)$("rooms-empty").textContent=allRooms.length?"Помещения не найдены.":"Добавьте первое помещение.";
 }
 function renderReadings(){
+  const chartVisible=Boolean($("reading-filter").value);
+  show("reading-chart-panel",chartVisible);
+  show("reading-chart-hint",!chartVisible);
   const tbody=$("readings-table");tbody.replaceChildren();
   for(const row of readings) {
-    const tr=el("tr");cell(tr,when(row.observed_at));cell(tr,row.building);
-    cell(tr,row.room_name);cell(tr,temperature(row.value),"temp");
+    const tr=el("tr");
+    cell(tr,row.room_name).append(el("small","table-building",row.building));
+    cell(tr,temperature(row.value),"temp");
+    cell(tr,when(row.observed_at));
     cell(tr,sources[row.source]||row.source);
     cell(tr,row.reporter_display||row.reporter||"—");
     const actions=el("td");
@@ -935,21 +1014,22 @@ async function openReadingHistory(reading){
 $("reading-history-close").addEventListener("click",()=>$("reading-history-dialog").close());
 $("reading-history-done").addEventListener("click",()=>$("reading-history-dialog").close());
 function drawChart(){
+  const filter=$("reading-filter").value;
+  if(!filter||$("view-readings").hidden)return;
   const canvas=$("reading-chart"), parent=canvas.parentElement;
   const rectWidth=Math.max(200,parent.clientWidth-46), dpr=window.devicePixelRatio||1;
   const height=200;
   canvas.width=rectWidth*dpr;canvas.height=height*dpr;
   const ctx=canvas.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,rectWidth,height);
-  const filter=$("reading-filter").value;
-  const data=readings.filter(r=>!filter||String(r.room_id)===filter).slice(0,40).reverse();
+  const data=readings.filter(r=>String(r.room_id)===filter).slice(0,40).reverse();
   const left=44,right=15,top=18,bottom=30,w=rectWidth-left-right,h=height-top-bottom;
   const values=data.map(x=>Number(x.value));
   const min=values.length?Math.floor(Math.min(...values)-1):16;
   const max=values.length?Math.ceil(Math.max(...values)+1):26;
   const span=Math.max(1,max-min);
   const dark=document.documentElement.dataset.theme==="dark";
-  const chartGrid=dark?"#354961":"#e5ebf1",chartText=dark?"#b4c4d9":"#8492a7";
+  const chartGrid=dark?"#354961":"#e5ebf1",chartText=dark?"#b4c4d9":"#5d7187";
   ctx.font="11px system-ui";ctx.textAlign="right";ctx.strokeStyle=chartGrid;ctx.fillStyle=chartText;ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const y=top+h*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(rectWidth-right,y);ctx.stroke();
@@ -969,25 +1049,39 @@ async function refresh() {
   if(refreshBusy)return;
   refreshBusy=true;
   try {
-    const selected=$("reading-filter").value;
-    const params=selected?"?room_id="+encodeURIComponent(selected)+"&limit=200":"?limit=200";
-    const adminData=buildingScope?[]:[api("/api/rooms"),api("/api/readings"+params),
+    const adminData=buildingScope?[]:[api("/api/rooms"),
       api("/api/rooms?include_inactive=true"),api("/api/max/users")];
-    const [dash,day,activeRooms,items,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
+    const [dash,day,activeRooms,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
     overview=dash.rooms;rooms=activeRooms||dash.rooms;daily=day;
     renderFilters();renderOverview();renderDaily();
     if(!buildingScope){
-      allRooms=all;readings=items;maxStaff=staff;
-      renderRooms();renderReadings();renderMaxStaff();
+      allRooms=all;maxStaff=staff;
+      renderRooms();renderMaxStaff();
     }
-    await refreshHistory();
-    $("updated-at").textContent="Обновлено: "+when(dash.generated_at);
+    await Promise.all([refreshHistory(),buildingScope?undefined:refreshReadings()]);
+    const updated=$("updated-at");
+    updated.dateTime=dash.generated_at;
+    updated.textContent="Обновлено "+when(dash.generated_at);
+    updated.hidden=false;
   } catch(error) {toast(error.message,true);}
   finally {refreshBusy=false;}
 }
 async function refreshReadings(){
-  try{const room=$("reading-filter").value;readings=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));renderReadings();}
-  catch(error){toast(error.message,true);}
+  const request=++readingRequestId,room=$("reading-filter").value;
+  try{
+    const result=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));
+    if(request!==readingRequestId)return;
+    readings=result;
+    renderReadings();
+  }catch(error){if(request===readingRequestId)toast(error.message,true);}
+}
+function openReading({building="",room=""}={}){
+  $("reading-form").reset();
+  const choices=rooms.filter(room=>!building||room.building===building);
+  $("reading-room").value=room||(choices.length===1?String(choices[0].id):"");
+  show("reading-room-hint",rooms.length===0);
+  $("reading-save").disabled=rooms.length===0;
+  $("reading-dialog").showModal();
 }
 function openRoom(room=null, duplicate=false){
   $("room-form").reset();
@@ -1031,14 +1125,23 @@ $("login-form").addEventListener("submit",async event=>{
   }
   catch(error){$("login-error").textContent=error.message;}
 });
-for(const id of ["logout","logout-mobile"])$(id).addEventListener("click",async()=>{
+$("logout").addEventListener("click",async()=>{
   try{await api("/api/logout","POST");window.location.reload();}
   catch(error){toast(error.message,true);}
 });
 $("refresh").addEventListener("click",refresh);
 for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("click",()=>{
   const name=nav.dataset.tab;
-  if(!setTab(name))return; // Re-selecting an open tab must not reload or shift its contents.
+  const changed=setTab(name);
+  if(navigationToggle.offsetWidth){
+    closeNavigation(!changed);
+    if(changed){
+      const title=$("view-"+name).querySelector("h1");
+      title.tabIndex=-1;
+      title.focus({preventScroll:true});
+    }
+  }
+  if(!changed)return; // Re-selecting an open tab must not reload or shift its contents.
   if(name==="overview")drawHistoryChart();
   if(name==="readings")refreshReadings();
   if(name==="staff")void loadMaxStaff().catch(error=>toast(error.message,true));
@@ -1047,18 +1150,36 @@ for(const nav of document.querySelectorAll("[data-tab]"))nav.addEventListener("c
   if(name==="settings"&&!settingsDirty())loadSettings();
 });
 $("search-rooms").addEventListener("input",renderOverview);
+$("overview-status").addEventListener("change",renderOverview);
+for(const button of document.querySelectorAll("[data-overview-status]")){
+  button.addEventListener("click",()=>{
+    $("overview-status").value=button.dataset.overviewStatus;
+    $("search-rooms").value="";
+    renderOverview();
+    $("latest-readings-title").focus({preventScroll:true});
+    $("latest-readings").scrollIntoView({block:"start"});
+  });
+}
 $("building-filter").addEventListener("change",()=>{renderOverview();renderDaily();refreshHistory();});
 $("history-period").addEventListener("change",refreshHistory);
 $("heatmap-search").addEventListener("input",renderHeatmap);
 $("history-export").addEventListener("click",exportHistory);
 $("history-chart").addEventListener("pointermove",hoverHistoryChart);
 $("history-chart").addEventListener("pointerleave",()=>{$("history-tooltip").hidden=true;});
-$("reading-filter").addEventListener("change",refreshReadings);
-$("quick-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
-$("add-reading").addEventListener("click",()=>{$("reading-form").reset();$("reading-dialog").showModal();});
+$("reading-filter").addEventListener("change",()=>{
+  readings=[];
+  renderReadings();
+  void refreshReadings();
+});
+$("quick-reading").addEventListener("click",()=>openReading({building:$("building-filter").value}));
+$("add-reading").addEventListener("click",()=>openReading({room:$("reading-filter").value}));
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
 $("report-filter-form").addEventListener("submit",event=>{event.preventDefault();void loadReport();});
+$("report-filter-form").addEventListener("change",()=>{
+  reportRequestId++;
+  clearReport("Нажмите «Сформировать», чтобы обновить отчёт.");
+});
 $("report-export-excel").addEventListener("click",()=>reportExport("xlsx"));
 $("report-export-pdf").addEventListener("click",()=>reportExport("pdf"));
 for(const button of document.querySelectorAll("[data-report-section]")){
@@ -1117,7 +1238,10 @@ $("max-user-rooms-form").addEventListener("submit",async event=>{
 });
 $("show-inactive").addEventListener("change",renderRooms);
 $("export-rooms").addEventListener("click",()=>{window.location.href="/api/rooms/export.csv";});
-$("export-csv").addEventListener("click",()=>{window.location.href="/api/export.csv";});
+$("export-csv").addEventListener("click",()=>{
+  const room=$("reading-filter").value;
+  window.location.href="/api/export.csv"+(room?"?room_id="+encodeURIComponent(room):"");
+});
 $("close-pairing").addEventListener("click",()=>$("pairing-dialog").close());
 $("copy-pairing").addEventListener("click",async()=>{
   try{await navigator.clipboard.writeText("/bind "+$("pairing-code").textContent);toast("Команда скопирована");}
@@ -1151,14 +1275,21 @@ const settingsGroups = {
   backups:["maintenance-form"],tls:["tls-form","sensor-ca-form"],calendar:["calendar-form"]
 };
 let selectedSettingsCategory="summary",settingsLoaded=false;
+const settingsCategory=$("settings-category");
+for(const button of document.querySelectorAll(".settings-nav-button")){
+  option(settingsCategory,button.dataset.settingsTarget,button.textContent.trim());
+}
+settingsCategory.addEventListener("change",()=>setSettingsCategory(settingsCategory.value));
 function settingsDirty(){
   return !!document.querySelector('.settings-pane form[data-dirty="true"]');
 }
 function updateDirtyNavigation(){
   for(const [category,forms] of Object.entries(settingsGroups)){
     const dirty=forms.some(id=>$(id).dataset.dirty==="true");
-    for(const button of document.querySelectorAll('.settings-nav-button[data-settings-target="'+category+'"]'))
-      button.classList.toggle("is-dirty",dirty);
+    const button=document.querySelector('.settings-nav-button[data-settings-target="'+category+'"]');
+    const choice=settingsCategory.querySelector('option[value="'+category+'"]');
+    button.classList.toggle("is-dirty",dirty);
+    choice.textContent=button.textContent.trim()+(dirty?" · не сохранено":"");
   }
 }
 function markSettingsSaved(form,message){
@@ -1182,6 +1313,7 @@ function setSettingsCategory(category){
   if(!target || (selectedSettingsCategory===category && !target.hidden))return;
   scrollToSectionStart(document.querySelector(".settings-layout"));
   selectedSettingsCategory=category;
+  settingsCategory.value=category;
   for(const pane of document.querySelectorAll("[data-settings-view]"))
     pane.hidden=pane.dataset.settingsView!==category;
   for(const button of document.querySelectorAll(".settings-nav-button")){
@@ -1228,13 +1360,13 @@ $("setting-enabled").addEventListener("change",syncNotificationControls);
 $("setting-alerts-enabled").addEventListener("change",syncNotificationControls);
 async function loadSettings() {
   try {
+    settingsCache=await api("/api/settings");
     const pending=new Map();
     for(const id of Object.values(settingsGroups).flat()){
       const form=$(id);
       if(form.dataset.dirty==="true")pending.set(id,
         [...form.querySelectorAll("input,select,textarea")].map(input=>({value:input.value,checked:input.checked})));
     }
-    settingsCache=await api("/api/settings");
     $("setting-organization").value=settingsCache.organization_name;
     $("setting-timezone").value=settingsCache.timezone;
     $("setting-stale").value=settingsCache.stale_hours;

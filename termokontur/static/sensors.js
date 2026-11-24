@@ -30,19 +30,19 @@ async function refreshSensors(){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
       card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatus[d.status]||d.status),
         el("p","",(d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно")+" · "+sensorWhen(d.last_seen)),
-        sensorButton("Открыть",()=>openSensor(d.id)));(archived(d)?archive:cards).append(card);
+        sensorButton("Открыть",()=>openSensor(d.id,true)));(archived(d)?archive:cards).append(card);
       if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
     }
     $("sensor-state").textContent=activeDevices.length?"Датчиков: "+activeDevices.length+". Указано состояние последнего подключения.":archivedDevices.length?"Нет активных датчиков. История доступна в архиве.":"Подключите первый датчик по USB или по коду.";
     // Do not overwrite a partially edited MQTT form during refresh.
-    if(!$("sensor-mqtt-form").contains(document.activeElement)){
+    if($("sensor-mqtt-form").dataset.dirty!=="true"){
       $("sensor-mqtt-enabled").checked=mqtt.enabled;$("sensor-mqtt-host").value=mqtt.host;$("sensor-mqtt-port").value=mqtt.port;
       $("sensor-mqtt-tls").checked=mqtt.tls;$("sensor-mqtt-user").value=mqtt.username;$("sensor-mqtt-prefix").value=mqtt.discovery_prefix;
     }
     $("sensor-mqtt-state").textContent=(mqtt.enabled?"MQTT включён":"MQTT выключен")+" · в очереди: "+mqtt.outbox.length+(mqtt.outbox.some(x=>x.error)?" · есть ошибки доставки":"");
   }catch(e){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}
 }
-async function openSensor(id){
+async function openSensor(id,reveal=false){
   const request=++sensorLoadId;
   try{
     const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit=5000"),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
@@ -70,8 +70,14 @@ async function openSensor(id){
     if(!retired&&bundle&&!available.some(fromBundle))option(select,"bundled:"+bundle.version,bundledLabel);
     for(const fw of available)option(select,String(fw.id),fromBundle(fw)?bundledLabel:fw.version+" · "+Math.round(fw.size/1024)+" КиБ");
     select.value=String(d.target_firmware||"");
+    $("sensor-ota-assign").disabled=!select.value;
+    $("sensor-ota-cancel").disabled=!d.target_firmware;
     $("sensor-ota-state").textContent="Установлено: "+(d.firmware||"неизвестно")+" · неудачных попыток: "+d.ota_failures+". Обновление начнётся после передачи данных при достаточном заряде.";
     drawSensorChart();
+    if(reveal){
+      $("sensor-title").focus({preventScroll:true});
+      $("sensor-detail").scrollIntoView({block:"start"});
+    }
   }catch(e){toast(e.message,true);}
 }
 function drawSensorChart(){
@@ -97,15 +103,27 @@ function drawSensorChart(){
   }
 }
 function revealSensorCode(reply){$("sensor-code-help").textContent="Подключитесь к Wi-Fi датчика и откройте http://192.168.4.1. Имя сети и пароль указаны в USB-мониторе.";$("sensor-code-id").value=reply.device_id;$("sensor-code-value").value=reply.code;$("sensor-code-dialog").showModal();}
-$("sensor-add").addEventListener("click",()=>{sensorRoomOptions($("sensor-new-room"));$("sensor-add-dialog").showModal();});
+$("sensor-add").addEventListener("click",()=>{
+  $("sensor-add-form").reset();
+  sensorRoomOptions($("sensor-new-room"));
+  show("sensor-new-room-hint",rooms.length===0);
+  $("sensor-add-submit").disabled=rooms.length===0;
+  $("sensor-add-dialog").showModal();
+});
 $("sensor-add-close").addEventListener("click",()=>$("sensor-add-dialog").close());
-$("sensor-code-close").addEventListener("click",()=>{$("sensor-code-dialog").close();$("sensor-code-value").value="";});
+$("sensor-code-close").addEventListener("click",()=>$("sensor-code-dialog").close());
+$("sensor-code-dialog").addEventListener("close",()=>{
+  for(const id of ["sensor-code-id","sensor-code-value"])$(id).value="";
+});
 $("sensor-code-copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("sensor-code-id").value+"\n"+$("sensor-code-value").value);toast("Данные скопированы");}catch{toast("Выделите и скопируйте поля вручную",true);}});
 $("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-refresh").addEventListener("click",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
 $("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
 $("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-config-form").addEventListener("submit",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
+$("sensor-firmware").addEventListener("change",()=>{
+  $("sensor-ota-assign").disabled=!$("sensor-firmware").value;
+});
 $("sensor-ota-form").addEventListener("submit",async e=>{
   e.preventDefault();
   const choice=$("sensor-firmware").value;
@@ -115,7 +133,23 @@ $("sensor-ota-form").addEventListener("submit",async e=>{
 });
 $("sensor-ota-cancel").addEventListener("click",async()=>{try{await api("/api/sensors/devices/"+sensorSelected+"/ota","PUT");await refreshSensors();await openSensor(sensorSelected);toast("Обновление отменено");}catch(e){toast(e.message,true);}});
 $("sensor-upload-form").addEventListener("submit",async e=>{e.preventDefault();const finish=beginRequest("/api/sensors/firmware","POST");try{const form=new FormData();form.append("file",$("sensor-image").files[0]);const r=await fetch("/api/sensors/firmware",{method:"POST",credentials:"same-origin",body:form});if(!r.ok){const error=await r.json();throw Error(typeof error.detail==="string"?error.detail:"Не удалось загрузить образ");}await openSensor(sensorSelected);toast("Прошивка загружена");}catch(e){toast(e.message,true);}finally{finish();}});
-$("sensor-mqtt-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/mqtt","PUT",{enabled:$("sensor-mqtt-enabled").checked,host:$("sensor-mqtt-host").value.trim(),port:Number($("sensor-mqtt-port").value),tls:$("sensor-mqtt-tls").checked,username:$("sensor-mqtt-user").value,password:$("sensor-mqtt-pass").value||null,discovery_prefix:$("sensor-mqtt-prefix").value.trim()});$("sensor-mqtt-pass").value="";await refreshSensors();toast("Настройки MQTT сохранены");}catch(e){toast(e.message,true);}});
+$("sensor-mqtt-form").addEventListener("input",event=>{event.currentTarget.dataset.dirty="true";});
+$("sensor-mqtt-form").addEventListener("submit",async event=>{
+  event.preventDefault();
+  const form=event.currentTarget;
+  try{
+    await api("/api/sensors/mqtt","PUT",{
+      enabled:$("sensor-mqtt-enabled").checked,host:$("sensor-mqtt-host").value.trim(),
+      port:Number($("sensor-mqtt-port").value),tls:$("sensor-mqtt-tls").checked,
+      username:$("sensor-mqtt-user").value,password:$("sensor-mqtt-pass").value||null,
+      discovery_prefix:$("sensor-mqtt-prefix").value.trim(),
+    });
+    $("sensor-mqtt-pass").value="";
+    form.dataset.dirty="false";
+    await refreshSensors();
+    toast("Настройки MQTT сохранены");
+  }catch(error){toast(error.message,true);}
+});
 $("sensor-export").addEventListener("click",()=>{const keys=["seq","measured_at","received_at","time_quality","temperature","humidity","battery_mv","error"],lines=[keys.join(","),...sensorRecords.map(r=>keys.map(k=>JSON.stringify(r[k]??"")).join(","))];const url=URL.createObjectURL(new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"}));const a=el("a");a.href=url;a.download=sensorSelected+".csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 window.addEventListener("resize",drawSensorChart);
 document.addEventListener("termokontur:themechange",drawSensorChart);
