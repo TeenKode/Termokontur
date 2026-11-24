@@ -55,6 +55,7 @@ if [[ "${1:-}" == "clone" ]]; then
   cp -r /src/. "$destination/"
   if [[ "${TEST_BREAK_UPGRADE:-0}" == "1" ]]; then
     printf '\nraise RuntimeError("intentional CI upgrade failure")\n' >> "$destination/termokontur/app.py"
+    printf '\n# Changed requirements for the rollback test\n' >> "$destination/requirements.txt"
   fi
   exit 0
 fi
@@ -92,10 +93,11 @@ echo "Begin native updater smoke assertions"
 # Force a change to exercise the actual stage/swap path of the updater.
 printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
 runuser -u termokontur -- touch /var/lib/termokontur/update-request
-/usr/local/sbin/termokontur-apply-update
+PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update
 echo "Updater returned; validating post-update state"
 cat /var/lib/termokontur/update-status.json
 grep -q '"state": "success"' /var/lib/termokontur/update-status.json
+grep -q 'Готовое Python-окружение проверено и скопировано' /var/lib/termokontur/update-status.json
 echo "Checking previous application backup"
 test -d /opt/termokontur-previous
 test -d /var/lib/termokontur/backups
@@ -115,6 +117,7 @@ if TEST_BREAK_UPGRADE=1 /usr/local/sbin/termokontur-apply-update; then
   exit 1
 fi
 grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
+grep -q 'Устанавливаем Python-зависимости с локальным кешем' /var/lib/termokontur/update-status.json
 echo "Checking rollback health after process startup"
 recovered=0
 for i in $(seq 1 25); do

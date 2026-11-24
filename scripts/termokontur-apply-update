@@ -76,6 +76,19 @@ check_writable_dir() {
   fi
   rm -f -- "$probe"
 }
+reuse_python_environment() {
+  local current="$APP/.venv" staged="$STAGE/.venv"
+  [[ -d "$current" && ! -L "$current" ]] || return 1
+  cmp -s "$APP/requirements.txt" "$STAGE/requirements.txt" || return 1
+  # Keep a separate environment so staging and rollback do not edit the live one.
+  cp -a --reflink=auto -- "$current" "$staged" || return 1
+  runuser -u termokontur -- "$staged/bin/python" -m pip --quiet check || return 1
+  # Check the top-level requirements too. An empty plan means every
+  # requirement is already installed in the copy.
+  runuser -u termokontur -- "$staged/bin/python" -m pip install \
+    --no-index --dry-run --quiet --report - -r "$STAGE/requirements.txt" |
+    /usr/bin/python3 -c 'import json, sys; plan = sys.stdin.read(); sys.exit(not plan or json.loads(plan)["install"] != [])'
+}
 restore_db() {
   if [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]]; then
     runuser -u termokontur -- /usr/bin/python3 - "$BACKUP_FILE" "$DATA/termokontur.sqlite3" <<'PY'
@@ -136,10 +149,15 @@ if [[ -f "$DATA/installed-revision" ]] && [[ "$(cat "$DATA/installed-revision")"
 fi
 
 record installing "Исходный код получен. Подготавливаем Python…" downloading
-runuser -u termokontur -- /usr/bin/python3 -m venv "$STAGE/.venv"
-record installing "Установка Python-зависимостей. Это может занять несколько минут…" dependencies
-runuser -u termokontur -- "$STAGE/.venv/bin/python" -m pip install \
-  --no-cache-dir -r "$STAGE/requirements.txt"
+if reuse_python_environment; then
+  record installing "Готовое Python-окружение проверено и скопировано." dependencies
+else
+  rm -rf -- "$STAGE/.venv"
+  record installing "Устанавливаем Python-зависимости с локальным кешем…" dependencies
+  runuser -u termokontur -- /usr/bin/python3 -m venv "$STAGE/.venv"
+  runuser -u termokontur -- "$STAGE/.venv/bin/python" -m pip install \
+    --cache-dir "$DATA/pip-cache" -r "$STAGE/requirements.txt"
+fi
 runuser -u termokontur -- "$STAGE/.venv/bin/python" -m compileall -q "$STAGE/termokontur"
 bash -n "$STAGE/scripts/install-debian.sh" "$STAGE/scripts/termokontur-apply-update"
 for unit in "${INSTALL_UNITS[@]}"; do
@@ -149,7 +167,7 @@ chown -R root:root "$STAGE"
 chmod -R a+rX "$STAGE"
 chmod 0755 "$STAGE"
 
-record installing "Зависимости установлены. Подготавливаем резервную копию…" backup
+record installing "Зависимости готовы. Подготавливаем резервную копию…" backup
 
 # Backup SQLite online without stopping the running application.
 install -o termokontur -g termokontur -m 0700 -d "$BACKUPS"
