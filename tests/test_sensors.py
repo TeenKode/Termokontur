@@ -492,3 +492,15 @@ def test_retention_removes_sensor_payload_but_replay_is_idempotent(admin):
         assert conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0
     payload["records"][0]["temperature"] = 22.0
     assert sync(admin, d, headers, payload).status_code == 409
+
+
+def test_late_expired_sensor_record_is_acknowledged_without_restoring_history(admin):
+    from termokontur import settings
+    d, _, headers, _ = setup_sensor(admin)
+    settings.update({"retention_days": "30"})
+    payload = batch([record(measured_at=int(time.time())-100*86400)])
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 2
+    with db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0

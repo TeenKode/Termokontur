@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Requ
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import __version__, db, sensor_firmware, sensor_monitor
+from . import __version__, db, sensor_firmware, sensor_monitor, settings
 
 MODEL = "c3-sht40-v1"
 SensorModel = Literal["c3-sht40-v1"]
@@ -293,6 +293,8 @@ def router(require_admin):
     @r.post("/devices/{device}/sync")
     def sync(device: str, payload: Sync, authorization: str = Header(default="")):
         now = int(time.time())
+        retention = int(settings.get("retention_days", "0"))
+        cutoff = now - retention * 86400 if retention else 0
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
@@ -337,6 +339,10 @@ def router(require_admin):
                     else:
                         event(conn, device, "gap", f"Нет записей [{gap_from},{rec.seq})")
                         lost_confirmed += gap
+                if rec.measured_at is not None and rec.measured_at < cutoff:
+                    conn.execute("INSERT INTO sensor_record_receipts VALUES(?,?,?)", (device, rec.seq, fingerprint))
+                    ack = rec.seq + 1
+                    continue
                 room_id = d["room_id"]
                 if rec.measured_at is not None:
                     assigned = conn.execute("""SELECT room_id FROM sensor_room_history

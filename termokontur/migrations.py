@@ -77,12 +77,12 @@ def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
 
 
 def _sensor_history(conn: sqlite3.Connection, _: str) -> None:
-    conn.execute("""CREATE TABLE sensor_room_history (
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_room_history (
         device_id TEXT NOT NULL REFERENCES sensor_devices(id),
         starts_at INTEGER NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms(id),
         PRIMARY KEY(device_id, starts_at))""")
-    conn.execute("INSERT INTO sensor_room_history SELECT id,0,room_id FROM sensor_devices")
-    conn.execute("""CREATE TABLE sensor_record_receipts (
+    conn.execute("INSERT OR IGNORE INTO sensor_room_history SELECT id,0,room_id FROM sensor_devices")
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_record_receipts (
         device_id TEXT NOT NULL REFERENCES sensor_devices(id),
         seq INTEGER NOT NULL, fingerprint TEXT NOT NULL,
         PRIMARY KEY(device_id, seq))""")
