@@ -76,7 +76,7 @@ static std::string identity_public, identity_fingerprint;
 static Config cfg;
 static State state;
 static std::string ssid, password, server, device, code, token, ca,
-    sensor_type = "sht4x", setup_password;
+    sensor_type = "sht4x", setup_password, factory_ticket;
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
@@ -237,6 +237,7 @@ static std::string provision_json() {
   add(j, "ca", ca);
   add(j, "sensor_type", sensor_type);
   add(j, "setup_password", setup_password);
+  add(j, "factory_ticket", factory_ticket);
   auto s = stringify(j);
   cJSON_Delete(j);
   return s;
@@ -292,6 +293,7 @@ static bool load_provision() {
   sensor_type = text(j, "sensor_type");
   if (sensor_type.empty()) sensor_type = "sht4x";
   setup_password = text(j, "setup_password");
+  factory_ticket = text(j, "factory_ticket");
   cJSON_Delete(j);
   if (!setup_password.empty() && !sensor::valid_setup_password(setup_password)) {
     setup_password.clear();
@@ -612,6 +614,7 @@ static bool identity_authenticate() {
   auto signature = identity_sign(message);
   if (signature.empty()) return false;
   j = identity_payload(); add(j, "challenge", challenge); add(j, "signature", signature);
+  if (!factory_ticket.empty()) add(j, "setup_ticket", factory_ticket);
   body = stringify(j); cJSON_Delete(j);
   response = post("/api/sensors/auth/prove", body, false);
   j = cJSON_Parse(response.c_str());
@@ -623,7 +626,10 @@ static bool identity_authenticate() {
   }
   if (id.size() != 19 || id.rfind("tk-", 0) || credential.size() != 64) return false;
   device = id; token = credential;
-  return save_provision();
+  auto ticket = factory_ticket; factory_ticket.clear();
+  if (save_provision()) return true;
+  factory_ticket = ticket; token.clear();
+  return false;
 }
 static bool enroll() {
   if (!token.empty())
@@ -938,7 +944,7 @@ static void usb_test_measurement(cJSON *out) {
   num(out, "attempts", attempts);
 }
 
-static std::string provision_apply(cJSON *j, bool require_nonce) {
+static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = false) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (setup_state != SetupState::waiting || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
   std::string s = text(j, "ssid"), p = text(j, "password"),
@@ -960,6 +966,8 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
                ((id.empty() && key.empty()) || (id.size() == 19 && id.rfind("tk-", 0) == 0 &&
                  (key.empty() || (key.size() >= 32 && key.size() <= 100)))) && root.size() <= 8000 && epoch >= 1700000000 && epoch <= 4102444800;
   if (!valid) return "Проверьте поля и получение времени сервера.";
+  if (factory && (text(j,"hardware_id") != hardware_id() || text(j,"factory_ticket").size() != 64 || !id.empty() || !key.empty()))
+    return "Invalid factory authorization";
   if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
   if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
   auto config = cJSON_GetObjectItemCaseSensitive(j, "config");
@@ -977,15 +985,47 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
   setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
                                                   random_setup_password);
   state.saved_time = epoch;
+  factory_ticket = factory ? text(j,"factory_ticket") : "";
   deferred_configuration = false;
-  if (!save_provision() || !save_state()) return "Не удалось сохранить настройки в памяти платы.";
+  if (!save_state() || !save_provision()) return "Не удалось сохранить настройки в памяти платы.";
   const bool defer = !require_nonce && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "defer_finish"));
-  if (defer) {
+  if (defer || factory) {
     if (!verify_saved_configuration()) return "Проверка чтения настроек из NVS не пройдена.";
-    deferred_configuration = true;
+    deferred_configuration = defer;
   } else setup_state = SetupState::saved;
   return "";
 }
+// Factory seed is a transient, CRC-checked JSON frame in an otherwise unused
+// data partition. Existing OTA installations have no such partition.
+static bool import_factory_setup(bool provisioned) {
+  const auto *part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+      (esp_partition_subtype_t)0x41, "factory_setup");
+  if (!part || part->size != 0x4000) return provisioned;
+  uint32_t header[3]{};
+  if (esp_partition_read(part, 0, header, sizeof header) != ESP_OK ||
+      header[0] != 0x31534b54) return provisioned; // TKS1
+  if (provisioned) {
+    if (esp_partition_erase_range(part, 0, part->size) != ESP_OK)
+      puts("FACTORY: seed erase failed; retry next boot");
+    return true;
+  }
+  if (!header[1] || header[1] > 12288 || header[1] > part->size-sizeof header)
+    return false;
+  std::vector<char> payload(header[1]+1, 0);
+  if (esp_partition_read(part, sizeof header, payload.data(), header[1]) != ESP_OK ||
+      sensor::crc32(payload.data(), header[1]) != header[2]) {
+    puts("FACTORY: invalid seed CRC"); return false;
+  }
+  auto *j = cJSON_Parse(payload.data());
+  if (!j) return false;
+  auto error = provision_apply(j, false, true); cJSON_Delete(j);
+  if (!error.empty()) { puts("FACTORY: settings import failed"); return false; }
+  if (esp_partition_erase_range(part, 0, part->size) != ESP_OK)
+    puts("FACTORY: seed erase failed; retry next boot");
+  puts("FACTORY: settings imported and verified");
+  return true;
+}
+
 static esp_err_t setup_save(httpd_req_t *req) {
   if (req->content_len <= 0 || req->content_len > 11000)
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Слишком большой запрос.");
@@ -1260,7 +1300,7 @@ extern "C" void app_main() {
                             std::max<int64_t>(0, rt.cool_until)))
     sleep_for(
         std::min((int64_t)cfg.measure_s, rt.cool_until - (int64_t)rt.uptime));
-  bool provisioned = load_provision();
+  bool provisioned = import_factory_setup(load_provision());
   gpio_set_direction(BOOT_PIN, GPIO_MODE_INPUT);
   gpio_set_pull_mode(BOOT_PIN, GPIO_PULLUP_ONLY);
   bool physical = false;
@@ -1268,7 +1308,23 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     physical = gpio_get_level(BOOT_PIN) == 0;
   }
-  const bool setup_requested = !provisioned || physical || usb_host_for_setup(after_reset);
+  const bool usb_host = usb_host_for_setup(after_reset);
+  if (provisioned && !factory_ticket.empty() && !physical) {
+    // Registration is independent of a measurement: a bare USB-powered
+    // board can enroll, without inventing a battery reading or uploading data.
+    uint16_t mv = battery_mv();
+    if (!usb_host && (mv < cfg.wifi_min_mv || mv > 5000)) sleep_for(cfg.measure_s);
+    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    const bool registered = wifi_up() && sync_time() && enroll();
+    stop_network();
+    if (!registered) {
+      puts("FACTORY: registration not confirmed; retry in 5 minutes or hold BOOT after RESET for manual setup");
+      sleep_for(300);
+    }
+    puts("FACTORY: server authorized device");
+    if (usb_host) sleep_for(cfg.measure_s);
+  }
+  const bool setup_requested = !provisioned || physical || usb_host;
   if (charging()) sleep_for(cfg.measure_s);
   bool boot_debug = false;
   if (setup_requested) {

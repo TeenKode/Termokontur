@@ -185,6 +185,8 @@ def kit(version='0.1.4', mutate=None):
         if not row.strip() or row.startswith('#'):
             continue
         name,kind,subtype,offset,size = [field.strip() for field in row.split(',')]
+        if name == 'factory_setup' and tuple(map(int, version.split('.'))) < (1,1,5):
+            continue
         kind = {'data':1,'app':0}[kind]
         subtype = named_subtypes[subtype] if subtype in named_subtypes else int(subtype,0)
         struct.pack_into('<HBBII16sI',image,0x8000+32*i,0x50aa,kind,subtype,int(offset,0),int(size,0),name.encode().ljust(16,b'\0'),0)
@@ -365,3 +367,30 @@ def test_bootstrap_fails_closed_for_invalid_private_proxy_ca(client, monkeypatch
         assert str(path) not in response.text
     path.unlink()
     assert client.get('/api/sensors/bootstrap').status_code == 503
+
+
+def test_factory_ticket_is_bound_and_idempotent(admin):
+    private, ident = identity()
+    r = room()
+    payload = {'hardware_id':ident['hardware_id'],'name':'Factory','room_id':r['id'],
+               'sensor_type':ident['sensor_type'],'config':{'measure_s':60,'send_s':600}}
+    ticket = admin.post('/api/sensors/usb/prepare',json=payload).json()['ticket']
+    assert admin.get('/api/sensors/devices').json() == []
+    wrong, wrong_ident = identity()
+    wrong_ident['hardware_id'] = '1123456789ab'
+    assert admin.post('/api/sensors/auth/prove',json={**proof(admin,wrong,wrong_ident),'setup_ticket':ticket}).status_code == 403
+    result = admin.post('/api/sensors/auth/prove',json={**proof(admin,private,ident),'setup_ticket':ticket})
+    assert result.status_code == 200, result.text
+    device = result.json()['device_id']
+    assert admin.get('/api/sensors/devices').json()[0]['config']['measure_s'] == 60
+    retry = admin.post('/api/sensors/auth/prove',json={**proof(admin,private,ident),'setup_ticket':ticket})
+    assert retry.json()['device_id'] == device
+    other, same_mac = identity()
+    assert admin.post('/api/sensors/auth/prove',json={**proof(admin,other,same_mac),'setup_ticket':ticket}).status_code == 403
+    assert admin.post('/api/sensors/usb/prepare',json=payload).status_code == 409
+    assert len(admin.get('/api/sensors/devices').json()) == 1
+
+
+def test_factory_bundle_cannot_contain_personal_seed():
+    with pytest.raises(ValueError, match='персональные'):
+        sensor_firmware.read_kit(kit('1.1.5', lambda image: image.__setitem__(0x12000, 1)))

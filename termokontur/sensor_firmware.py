@@ -103,12 +103,17 @@ def _read_factory(archive, manifest):
         if magic != 0x50AA:
             break
         partitions[name.split(b"\0", 1)[0].decode()] = (kind, subtype, offset, size)
-    if partitions != {
+    expected = {
         "nvs": (1, 2, 0x9000, 0x6000), "otadata": (1, 0, 0xF000, 0x2000),
         "phy_init": (1, 1, 0x11000, 0x1000), "ota_0": (0, 16, 0x20000, 0x1C0000),
         "ota_1": (0, 17, 0x1E0000, 0x1C0000), "datalog": (1, 64, 0x3A0000, 0x60000),
-    }:
+    }
+    if tuple(map(int, version.split("."))) >= (1, 1, 5):
+        expected["factory_setup"] = (1, 65, 0x12000, 0x4000)
+    if partitions != expected:
         raise ValueError("Неподдерживаемая разметка памяти")
+    if image[0x12000:0x16000] != b"\xff" * 0x4000:
+        raise ValueError("Заводской комплект содержит персональные настройки")
     commit = manifest["source_commit"]
     if not isinstance(commit, str) or not re.fullmatch(r"[a-f0-9]{40}", commit):
         raise ValueError("В комплекте неверно указан исходный коммит")

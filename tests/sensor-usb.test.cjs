@@ -74,3 +74,15 @@ test('USB reconnect retries a busy port and verifies the re-enumerated board',as
  assert.equal(result.hello.hardware_id,hello.hardware_id);assert.equal(scans,2);assert.equal(wrong.closed,true);
  await result.serial.close();
 });
+
+test('factory seed changes only reserved partition and contains CRC-protected JSON',async()=>{
+ const {factorySeedImage}=await module_();const bytes=factoryBytes();bytes.fill(255,0x12000,0x16000);
+ const v=new DataView(bytes.buffer);v.setUint16(0x8000,0x50aa,true);bytes[0x8002]=1;bytes[0x8003]=0x41;
+ v.setUint32(0x8004,0x12000,true);v.setUint32(0x8008,0x4000,true);bytes.set(new TextEncoder().encode('factory_setup'),0x800c);
+ const settings={ssid:'Тест',factory_ticket:'a'.repeat(64)},out=factorySeedImage(bytes,settings),head=new DataView(out.buffer);
+ assert.equal(head.getUint32(0x12000,true),0x31534b54);
+ const length=head.getUint32(0x12004,true),payload=out.slice(0x1200c,0x1200c+length);
+ assert.deepEqual(JSON.parse(new TextDecoder().decode(payload)),settings);
+ assert.deepEqual(out.slice(0,0x12000),bytes.slice(0,0x12000));assert.deepEqual(out.slice(0x16000),bytes.slice(0x16000));
+ assert.equal(bytes[0x12000],255);assert.throws(()=>factorySeedImage(out,settings),/чистый раздел/);
+});

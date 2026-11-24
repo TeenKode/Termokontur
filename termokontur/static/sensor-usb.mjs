@@ -103,7 +103,26 @@ function validateFactoryHeader(bytes) {
     throw Error("Неверные параметры Flash заводского образа: нужны DIO, 80 МГц, 4 МиБ. Запись не начата.");
 }
 
-export async function flashFactory(port,image,metadata,{checkBoard,progress,log,sdk=null}) {
+export function factorySeedImage(bytes, settings) {
+  const start=0x12000, size=0x4000, view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  let found=false;
+  for(let pos=0x8000;pos<0x9000-31;pos+=32){
+    if(view.getUint16(pos,true)!==0x50aa)break;
+    const name=new TextDecoder().decode(bytes.subarray(pos+12,pos+28)).split("\0")[0];
+    if(name==="factory_setup"&&bytes[pos+2]===1&&bytes[pos+3]===0x41&&view.getUint32(pos+4,true)===start&&view.getUint32(pos+8,true)===size)found=true;
+  }
+  if(!found||!bytes.subarray(start,start+size).every(b=>b===255))throw Error("Заводской образ не содержит чистый раздел настройки");
+  const payload=new TextEncoder().encode(JSON.stringify(settings));
+  if(!payload.length||payload.length>12288)throw Error("Настройки слишком большие для заводского образа");
+  let crc=0xffffffff;
+  for(const b of payload){crc^=b;for(let bit=0;bit<8;bit++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}
+  const output=bytes.slice(), header=new DataView(output.buffer);
+  header.setUint32(start,0x31534b54,true);header.setUint32(start+4,payload.length,true);header.setUint32(start+8,(crc^0xffffffff)>>>0,true);
+  output.set(payload,start+12);
+  return output;
+}
+
+export async function flashFactory(port,image,metadata,{checkBoard,progress,log,sdk=null,prepareSettings=null}) {
   const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",image)),b=>b.toString(16).padStart(2,"0")).join("");
   if(image.byteLength!==metadata.size||digest!==metadata.sha256)throw Error("Контрольная сумма не совпадает. Загрузите комплект заново.");
   const bytes=new Uint8Array(image);
@@ -118,8 +137,9 @@ export async function flashFactory(port,image,metadata,{checkBoard,progress,log,
     const hardware=String(await loader.chip.readMac(loader)).replace(/:/g,"").toLowerCase();
     if(!/^[a-f0-9]{12}$/.test(hardware))throw Error("Не удалось прочитать MAC платы");
     await checkBoard(hardware);
+    const prepared=prepareSettings?factorySeedImage(bytes,await prepareSettings(hardware)):bytes;
     const pieces=[];
-    for(let offset=0;offset<bytes.length;offset+=8192)pieces.push(String.fromCharCode(...bytes.subarray(offset,offset+8192)));
+    for(let offset=0;offset<prepared.length;offset+=8192)pieces.push(String.fromCharCode(...prepared.subarray(offset,offset+8192)));
     await loader.writeFlash({fileArray:[{data:pieces.join(""),address:0}],flashMode:"keep",flashFreq:"keep",flashSize:"keep",eraseAll:true,compress:true,
       reportProgress:(index,written,total)=>progress(Math.round(100*written/total)),calculateMD5Hash:md5});
     try{await loader.after("hard_reset");}catch{log("Запись проверена. USB-порт исчез при перезапуске; ожидаем повторного подключения.");}

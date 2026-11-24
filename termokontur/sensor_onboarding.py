@@ -37,6 +37,18 @@ class Proof(Identity):
     signature: str = Field(pattern=r"^[a-f0-9]{16,160}$")
 
 
+class FactoryProof(Proof):
+    setup_ticket: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class FactoryPrepare(sensors.Strict):
+    hardware_id: str = Field(pattern=r"^[a-f0-9]{12}$")
+    name: str = Field(min_length=1, max_length=100)
+    room_id: int = Field(gt=0)
+    sensor_type: sensors.SensorType
+    config: sensors.Config = Field(default_factory=sensors.Config)
+
+
 class Onboard(Proof):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
@@ -174,7 +186,7 @@ def router(require_admin):
         return {'challenge':nonce, 'message':text, 'expires_in':60}
 
     @r.post('/auth/prove')
-    def prove(payload: Proof, request: Request):
+    def prove(payload: FactoryProof, request: Request):
         # Invalid proofs roll back their transaction; their rate limit must persist.
         with db.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -182,7 +194,24 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             verify(conn, payload)
-            fp = remember(conn, payload)
+            fp = remember(conn, payload, usb=bool(payload.setup_ticket))
+            if payload.setup_ticket:
+                ticket = conn.execute("SELECT * FROM sensor_factory_tickets WHERE ticket_hash=?",
+                                      (sensors.digest(payload.setup_ticket),)).fetchone()
+                if (not ticket or ticket["hardware_id"] != payload.hardware_id or
+                        ticket["sensor_type"] != payload.sensor_type or
+                        (ticket["consumed_fp"] is not None and ticket["consumed_fp"] != fp)):
+                    raise HTTPException(403, "Разрешение заводской настройки недействительно")
+                if ticket["consumed_fp"] is None:
+                    if ticket["expires"] < time.time():
+                        raise HTTPException(403, "Срок разрешения заводской настройки истёк")
+                    if conn.execute("SELECT 1 FROM sensor_devices WHERE hardware_id=? AND enabled=1",
+                                    (payload.hardware_id,)).fetchone():
+                        raise HTTPException(409, "Плата уже подключена")
+                    approve(conn, fp, ticket["name"], ticket["room_id"],
+                            sensors.Config(**json.loads(ticket["config"])), ticket["sensor_type"])
+                    conn.execute("UPDATE sensor_factory_tickets SET consumed_fp=? WHERE ticket_hash=?",
+                                 (fp, ticket["ticket_hash"]))
             identity = conn.execute('SELECT * FROM sensor_identities WHERE fingerprint=?', (fp,)).fetchone()
             status = identity['state']
             if status != 'approved':
@@ -228,6 +257,28 @@ def router(require_admin):
     @r.get('/usb/options', dependencies=admin)
     def options():
         return {'config':sensors.Config().model_dump()}
+
+    @r.post('/usb/prepare', dependencies=admin)
+    def prepare_factory(payload: FactoryPrepare):
+        ticket = secrets.token_hex(32)
+        with db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            sensors.check_room(conn, payload.room_id)
+            if conn.execute('SELECT 1 FROM sensor_devices WHERE hardware_id=? AND enabled=1',
+                            (payload.hardware_id,)).fetchone():
+                raise HTTPException(409, 'Плата уже подключена. Сначала отключите старую запись.')
+            now = int(time.time())
+            conn.execute("DELETE FROM sensor_factory_tickets WHERE expires<?", (now-86400,))
+            conn.execute("DELETE FROM sensor_factory_tickets WHERE hardware_id=?", (payload.hardware_id,))
+            if conn.execute("SELECT count(*) FROM sensor_factory_tickets").fetchone()[0] >= 512:
+                raise HTTPException(503, 'Слишком много разрешений заводской настройки')
+            payload.config.version = 1
+            conn.execute("""INSERT INTO sensor_factory_tickets
+                         (ticket_hash,hardware_id,name,room_id,sensor_type,config,expires)
+                         VALUES(?,?,?,?,?,?,?)""",
+                         (sensors.digest(ticket), payload.hardware_id, payload.name.strip(),
+                          payload.room_id, payload.sensor_type, payload.config.model_dump_json(), now+86400))
+        return JSONResponse({'ticket': ticket, 'expires_in': 86400}, headers={'Cache-Control':'no-store'})
 
     @r.get('/usb/check/{hardware_id}', dependencies=admin)
     def check_board(hardware_id: str):
