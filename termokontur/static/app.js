@@ -1379,6 +1379,7 @@ function setSettingsCategory(category){
   if(category==="notifications")void loadNotificationCenter();
   if(category==="calendar")void loadSchoolCalendar();
   if(category==="access")void loadBuildingAccounts();
+  if(category==="security")void loadAudit();
 }
 for(const button of document.querySelectorAll("[data-settings-target]")){
   button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));
@@ -1820,6 +1821,17 @@ for(const button of document.querySelectorAll("[data-password-target]")){
     button.setAttribute("aria-pressed",String(visible));
   });
 }
+async function loadAudit(){
+  const state=$("audit-state"),body=$("audit-records");
+  state.textContent="Загружаем журнал…";
+  try{
+    const records=await api("/api/audit");
+    body.replaceChildren();
+    for(const item of records){const tr=el("tr");cell(tr,when(item.recorded_at));cell(tr,item.method+" "+item.route);cell(tr,item.target||"—");cell(tr,String(item.status));body.append(tr);}
+    state.textContent=records.length?"Записей: "+records.length:"Пока нет действий";
+  }catch(error){state.textContent=error.message;}
+}
+onOperation($("audit-refresh"),"Загружаем журнал…",loadAudit);
 function passwordFeedback(){
   const value=$("new-password").value,confirmValue=$("confirm-password").value;
   const hint=$("password-feedback");

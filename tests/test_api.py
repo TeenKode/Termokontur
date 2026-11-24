@@ -345,3 +345,18 @@ def test_reading_corrections_api_and_authentication(client):
     assert changes[0]["old_value"] == 21
     assert changes[0]["new_value"] == 22
     assert client.get("/api/readings/999999/corrections").status_code == 404
+
+
+def test_admin_audit_excludes_credentials_and_requires_admin(admin):
+    token = "sensitive-test-token-do-not-log-123"
+    assert admin.put("/api/settings/max-token",json={"value":token}).status_code == 200
+    room = admin.post("/api/rooms",json={"building":"Школа","name":"101"}).json()
+    assert admin.patch("/api/rooms/"+str(room["id"]),json={"name":"102"}).status_code == 200
+    result = admin.get("/api/audit")
+    assert result.status_code == 200
+    assert token not in result.text
+    records = result.json()
+    assert records[0]["method"] == "PATCH" and records[0]["target"] == "room_id="+str(room["id"])
+    assert any(r["route"] == "/api/settings/max-token" for r in records)
+    assert admin.post("/api/logout").status_code == 200
+    assert admin.get("/api/audit").status_code == 401

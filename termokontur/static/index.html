@@ -600,6 +600,11 @@
                   <p class="hint">После смены пароля всем пользователям потребуется войти заново.</p>
                 </form>
               </article>
+              <article class="panel settings-panel">
+                <div class="panel-heading"><div><h3>Журнал действий администратора</h3><p class="hint">Последние 100 операций. Пароли, токены и содержимое форм не записываются.</p></div><button type="button" id="audit-refresh" class="btn secondary">Обновить</button></div>
+                <p id="audit-state" role="status" aria-live="polite"></p>
+                <div class="table-scroll" tabindex="0" role="region" aria-label="Журнал администратора"><table><thead><tr><th>Дата</th><th>Операция</th><th>Объект</th><th>Результат HTTP</th></tr></thead><tbody id="audit-records"></tbody></table></div>
+              </article>
             </div>
             <div class="settings-pane" data-settings-view="access" hidden>
               <div class="settings-section-heading"><h2>Доступ по корпусам</h2><p>Ответственный видит обзор и выгрузки своего корпуса.</p></div>

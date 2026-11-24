@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, maintenance, settings, tls, updates
+from .. import auth, audit, maintenance, settings, tls, updates
 from .access import require_admin
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
@@ -37,6 +37,11 @@ class SettingsIn(BaseModel):
 class RestoreBackupIn(BaseModel):
     name: str
     password: str
+
+
+@router.get("/audit")
+def get_audit():
+    return audit.recent()
 
 
 @router.get("/settings")

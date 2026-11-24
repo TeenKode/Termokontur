@@ -76,7 +76,14 @@ def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
     )""")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets)
+def _admin_audit(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS admin_audit (
+        id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL,
+        method TEXT NOT NULL, route TEXT NOT NULL, target TEXT NOT NULL,
+        status INTEGER NOT NULL)""")
+
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _admin_audit)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

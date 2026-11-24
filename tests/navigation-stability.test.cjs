@@ -64,7 +64,8 @@ function harness(){
     drawChart:()=>calls.chart++,
     loadBackups:()=>calls.backups++,
     loadUpdateStatus:()=>calls.updates++,
-    loadMaxDiagnostics:()=>calls.max++
+    loadMaxDiagnostics:()=>calls.max++,
+    loadAudit:()=>{}
   });
   vm.runInContext('let selectedTab="overview",selectedSettingsCategory="summary";\n'+
     ["scrollToSectionStart","setTab","setSettingsCategory"].map(extractFunction).join("\n"),ctx);
