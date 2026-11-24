@@ -88,7 +88,17 @@ def _sensor_history(conn: sqlite3.Connection, _: str) -> None:
         PRIMARY KEY(device_id, seq))""")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _sensor_history)
+def _session_revocations(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS session_revocations (
+        digest TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS session_revocations_expiry ON session_revocations(expires_at)")
+
+def _max_delivery_failures(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS max_delivery_failures (
+        event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
+        status_code INTEGER NOT NULL, failed_at TEXT NOT NULL)""")
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

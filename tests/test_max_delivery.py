@@ -323,3 +323,29 @@ def test_temperature_deviation_notifies_all_bound_employees(client):
     assert [row["user_id"] for row in queued] == ["7", "8"]
     assert all("ниже минимума" in row["text"] for row in queued)
     assert max_delivery.queue_temperature_alerts() == 0  # cooldown
+
+
+def test_max_permanent_rejection_is_distinguished_from_network_retry(client):
+    assert max_delivery.enqueue(message("terminal"))
+    class Rejected:
+        async def post(self, route, **kwargs):
+            return httpx.Response(403, request=httpx.Request("POST","https://example.test/messages"))
+    asyncio.run(max_delivery.drain(Rejected()))
+    assert max_delivery.pending() == []
+    assert max_delivery.diagnostics()["permanently_failed"] == 1
+    with db.connect() as conn:
+        assert conn.execute("SELECT delivered_at FROM max_outbox").fetchone()[0] is None
+    assert max_delivery.enqueue(message("new-after-terminal"))
+    assert len(max_delivery.pending()) == 1
+
+
+def test_max_menu_order_does_not_block_other_users(client):
+    for mid, uid in (("first",123),("second",123),("other",456)):
+        assert max_delivery.enqueue(message(mid,user=uid))
+    initial = max_delivery.pending()
+    assert [x["user_id"] for x in initial] == ["123","123","456"]
+    max_delivery.mark_failed(initial[0]["event_id"],0)
+    assert [x["user_id"] for x in max_delivery.pending()] == ["456"]
+    with db.connect() as conn:
+        conn.execute("UPDATE max_outbox SET next_retry_at='2000-01-01T00:00:00+00:00'")
+    assert [x["event_id"] for x in max_delivery.pending()] == [x["event_id"] for x in initial]

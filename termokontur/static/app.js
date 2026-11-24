@@ -134,6 +134,11 @@ window.addEventListener("offline",()=>{
   renderOperationStatus();
 });
 window.addEventListener("online",()=>{void api("/health").catch(()=>{});});
+function apiTimeout(path){
+  if(path==="/api/backups/import")return 300000;
+  if(path.includes("/firmware/")||path.includes("/installer")||path.startsWith("/api/backups"))return 120000;
+  return 30000;
+}
 async function api(path,method="GET",body){
   const opts={method,credentials:"same-origin",headers:{"Accept":"application/json"}};
   if(path.startsWith("/api/update/"))opts.cache="no-store";
@@ -146,9 +151,11 @@ async function api(path,method="GET",body){
     opts.headers["Content-Type"]="application/json";
     opts.body=JSON.stringify(body);
   }
+  if(typeof AbortSignal!=="undefined"&&typeof AbortSignal.timeout==="function")opts.signal=AbortSignal.timeout(apiTimeout(path));
   let response;
   try{response=await fetch(path,opts);}
-  catch{
+  catch(error){
+    if(error.name==="TimeoutError"||opts.signal?.aborted)throw Error(method==="GET"?"Сервер не ответил вовремя.":"Сервер не ответил вовремя. Проверьте, применилось ли действие, прежде чем повторить.");
     connectionProblem=navigator.onLine===false?browserOfflineMessage:serverOfflineMessage;
     renderOperationStatus();
     throw new Error(connectionProblem);
@@ -168,7 +175,8 @@ async function api(path,method="GET",body){
       Array.isArray(detail)?"Проверьте поля формы и повторите попытку.":"Ошибка запроса ("+response.status+").";
     throw Object.assign(new Error(message),{status:response.status});
   }
-  return response.json();
+  try{return await response.json();}
+  catch(error){if(error.name==="TimeoutError"||opts.signal?.aborted)throw Error("Не удалось получить ответ вовремя. Обновите данные.");throw error;}
 }
 function enterLogin(message="") {
   closeNavigation();
@@ -2320,6 +2328,7 @@ async function loadMaxDiagnostics() {
     }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
+    if(state.permanently_failed) lines.push("Окончательно отклонено MAX: "+state.permanently_failed+". Проверьте доступность получателей.");
     if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");
     target.textContent=lines.join(" ");
   }catch(error) { target.textContent="Ошибка диагностики MAX: "+error.message; }

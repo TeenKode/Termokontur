@@ -240,3 +240,12 @@ test("trend scale and label spacing",()=>{
   assert.equal(JSON.stringify(trendTicks([0,.1,.2,.3,1],100,60)),"[0,4]");
   assert.equal(JSON.stringify(trendTicks([],100,60)),"[]");
 });
+
+
+test("API deadlines distinguish routine calls and large imports",()=>{
+  const timeout=vm.runInNewContext("("+extractFunction("apiTimeout")+")");
+  assert.equal(timeout("/api/daily"),30000);
+  assert.equal(timeout("/api/sensors/firmware/bundled/retry"),120000);
+  assert.equal(timeout("/api/backups/import"),300000);
+  assert.match(source,/AbortSignal\.timeout\(apiTimeout\(path\)\)/);
+});

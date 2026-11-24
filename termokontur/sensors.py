@@ -1,6 +1,8 @@
 """Autonomous sensors: versioned SQLite schema, transactional ingest and admin API."""
 from __future__ import annotations
 
+import csv
+import io
 import hashlib
 import hmac
 import json
@@ -12,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import __version__, db, sensor_firmware, sensor_monitor, settings
@@ -399,11 +401,39 @@ def router(require_admin):
         return {"ack_seq": ack, "time": now, "config": config, "ota": ota}
 
     @r.get("/devices/{device}/records", dependencies=admin)
-    def records(device: str, limit: int = Query(500, ge=1, le=5000)):
+    def records(device: str, limit: int = Query(500, ge=1, le=5000),
+                before_seq: int | None = Query(default=None, ge=1, le=9007199254740991)):
         with db.connect() as conn:
             get_device(conn, device)
-            return [dict(x) for x in conn.execute("SELECT * FROM sensor_records WHERE device_id=? ORDER BY seq DESC LIMIT ?",
-                                                  (device, limit))]
+            return [dict(x) for x in conn.execute("""SELECT * FROM sensor_records
+                WHERE device_id=? AND (? IS NULL OR seq<?) ORDER BY seq DESC LIMIT ?""",
+                (device, before_seq, before_seq, limit))]
+
+    @r.get("/devices/{device}/records.csv", dependencies=admin)
+    def export_records(device: str):
+        with db.connect() as conn:
+            get_device(conn, device)
+        fields = ("seq", "measured_at", "received_at", "time_quality", "temperature",
+                  "humidity", "battery_mv", "error")
+        def rows():
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(fields)
+            yield "\ufeff" + output.getvalue()
+            output.seek(0)
+            output.truncate()
+            with db.connect() as conn:
+                cursor = conn.execute("""SELECT seq,measured_at,received_at,time_quality,
+                    temperature,humidity,battery_mv,error FROM sensor_records
+                    WHERE device_id=? ORDER BY seq DESC""", (device,))
+                while batch := cursor.fetchmany(500):
+                    writer.writerows(batch)
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate()
+        return StreamingResponse(rows(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{device}.csv"',
+                     "Cache-Control": "no-store"})
 
     @r.get("/devices/{device}/events", dependencies=admin)
     def events(device: str):
