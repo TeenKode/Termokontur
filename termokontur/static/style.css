@@ -121,9 +121,10 @@ a:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-off
 .archived-label{display:block;margin-top:5px;font-size:10px;color:#80551a}
 
 .rooms-table th,.rooms-table td{padding-inline:14px;white-space:normal;overflow-wrap:anywhere}
+.rooms-table th:nth-child(5),.rooms-table td:nth-child(5){white-space:nowrap}
 .rooms-table .room-name-cell,.rooms-table .room-building-cell{min-width:116px;max-width:230px}
 .rooms-table .max-users-cell{min-width:194px;max-width:270px}
-.rooms-table .room-actions-cell{min-width:178px;max-width:240px}
+.rooms-table .room-actions-cell{min-width:218px;max-width:245px}
 .room-actions-cell button{margin-block:3px;white-space:normal}
 .room-attribute-label{display:none}
 @media(max-width:700px){
