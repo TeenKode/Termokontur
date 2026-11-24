@@ -579,6 +579,7 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 .firmware-debug-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px}
 .firmware-debug-values dt{font-size:13px;color:var(--muted,#60718a)}
 .firmware-debug-values dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
+#debug-wifi-password{white-space:break-spaces}
 #debug-log{font:13px/1.55 ui-monospace,monospace;height:min(42vh,360px);padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
 html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}

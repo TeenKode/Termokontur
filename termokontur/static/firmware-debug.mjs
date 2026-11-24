@@ -21,6 +21,7 @@ function controls() {
   field("disconnect").disabled = !serial;
   field("identify").disabled = !serial || checking;
   field("measure").disabled = !serial || checking;
+  field("wifi").disabled = !serial || checking;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
 }
@@ -62,6 +63,15 @@ function showMeasurement(sample) {
     field("humidity").textContent + " · аккумулятор " + field("battery").textContent + ".";
 }
 
+function setSetupWifi(reply) {
+  const visible = Boolean(reply);
+  field("wifi-ssid").textContent = reply?.ssid ?? "";
+  field("wifi-password").textContent = reply?.password ?? "";
+  field("wifi-details").hidden = !visible;
+  field("wifi").textContent = visible ? "Скрыть пароль точки Wi-Fi" : "Показать пароль точки Wi-Fi";
+  field("wifi").setAttribute("aria-expanded", String(visible));
+}
+
 async function checkBoard(command) {
   const connection = serial;
   if (!connection || checking) return;
@@ -74,12 +84,15 @@ async function checkBoard(command) {
   let message;
   try {
     const reply = await connection.request(command);
+    if (command === "hello") await verifyIdentity(reply);
+    if (serial !== connection) return;
     if (command === "hello") {
-      await verifyIdentity(reply);
-      if (serial !== connection) return;
       message = showIdentity(reply);
+    } else if (command === "setup_wifi") {
+      if (!reply.ssid || !reply.password) throw Error("Плата не вернула данные точки Wi-Fi.");
+      setSetupWifi(reply);
+      message = "Получены данные точки настройки.";
     } else {
-      if (serial !== connection) return;
       message = showMeasurement(reply);
     }
   } catch (error) {
@@ -100,6 +113,7 @@ async function closePort(connection, message) {
   serial = null;
   checking = false;
   connecting = true;
+  setSetupWifi(null);
   controls();
   await connection.close();
   connecting = false;
@@ -135,6 +149,10 @@ field("disconnect").addEventListener("click", () => {
 });
 field("identify").addEventListener("click", () => checkBoard("hello"));
 field("measure").addEventListener("click", () => checkBoard("test_measurement"));
+field("wifi").addEventListener("click", () => {
+  if (field("wifi-details").hidden) void checkBoard("setup_wifi");
+  else setSetupWifi(null);
+});
 field("clear").addEventListener("click", () => {
   log.textContent = "";
   controls();

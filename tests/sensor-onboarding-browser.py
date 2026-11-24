@@ -29,6 +29,7 @@ SIMULATED_USB=r'''(() => {
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
    else if(req.cmd==='configure'){window.savedUSB=req;response.saved=true;}
    else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
+   else if(req.cmd==='setup_wifi')Object.assign(response,{ssid:'Termokontur-1234',password:' Wi-Fi <demo> & pass  '});
    const bytes=new TextEncoder().encode('startup log\nSETUP password: masked-test-password\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
@@ -178,13 +179,28 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-temperature')).to_have_text('21,5 °C')
                 expect(page.locator('#debug-humidity')).to_have_text('44,2 %')
                 expect(page.locator('#debug-battery')).to_have_text('3,95 В')
+                expect(page.locator('#debug-wifi-details')).to_be_hidden()
+                page.click('#debug-wifi')
+                expect(page.locator('#debug-wifi-details')).to_be_visible()
+                expect(page.locator('#debug-wifi-ssid')).to_have_text('Termokontur-1234')
+                assert page.locator('#debug-wifi-password').text_content() == ' Wi-Fi <demo> & pass  '
                 expect(page.locator('#debug-log')).to_contain_text('SETUP password: [скрыт]')
                 expect(page.locator('#debug-log')).not_to_contain_text('masked-test-password')
                 with page.expect_download() as debug_log:
                     page.click('#debug-save')
-                assert 'Пробный замер' in debug_log.value.path().read_text(encoding='utf-8')
+                saved_log = debug_log.value.path().read_text(encoding='utf-8')
+                assert 'Пробный замер' in saved_log
+                assert 'masked-test-password' not in saved_log and 'Wi-Fi <demo> & pass' not in saved_log
+                assert all('Wi-Fi <demo> & pass' not in body for _, body in requests)
+                page.click('#debug-wifi')
+                expect(page.locator('#debug-wifi-details')).to_be_hidden()
+                expect(page.locator('#debug-wifi-password')).to_be_empty()
+                page.click('#debug-wifi')
+                expect(page.locator('#debug-wifi-details')).to_be_visible()
                 page.click('#debug-disconnect')
                 expect(page.locator('#debug-connect')).to_be_enabled()
+                expect(page.locator('#debug-wifi-details')).to_be_hidden()
+                expect(page.locator('#debug-wifi-password')).to_be_empty()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                 assert not errors,errors
                 browser.close()

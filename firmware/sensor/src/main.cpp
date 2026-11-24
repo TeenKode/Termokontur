@@ -853,6 +853,18 @@ static esp_err_t setup_page(httpd_req_t *req) {
   return httpd_resp_send(req, html.c_str(), html.size());
 }
 static std::mutex provision_mutex;
+static void usb_setup_wifi(cJSON *out) {
+  wifi_config_t wifi{};
+  if (configured || charging() || esp_wifi_get_config(WIFI_IF_AP, &wifi) != ESP_OK) {
+    add(out, "error", "Откройте режим настройки, чтобы прочитать пароль точки Wi-Fi.");
+    return;
+  }
+  const auto *name = reinterpret_cast<const char *>(wifi.ap.ssid);
+  const auto *pass = reinterpret_cast<const char *>(wifi.ap.password);
+  add(out, "ssid", std::string(name, strnlen(name, sizeof wifi.ap.ssid)));
+  add(out, "password", std::string(pass, strnlen(pass, sizeof wifi.ap.password)));
+}
+
 static void usb_test_measurement(cJSON *out) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (configured || charging()) {
@@ -952,6 +964,8 @@ static void usb_setup_task(void *) {
             add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
             add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
+          } else if (cmd == "setup_wifi") {
+            usb_setup_wifi(out);
           } else if (cmd == "test_measurement") {
             usb_test_measurement(out);
           } else if (cmd == "sign") {
