@@ -25,13 +25,18 @@ int main() {
     assert(!sensor::valid_ack(0, 1, end));
     assert(!sensor::valid_ack(1.5, 1, end));
   }
-  // After RESET / power loss, obtain time before the first sample.
-  assert(sensor::needs_clock_preflight(false, true, true));
+  // After RESET / power loss, sample first and then obtain authenticated UTC.
+  assert(sensor::needs_clock_after_sample(false, true, true));
   // An already checked RTC, a scheduled sleep cycle and a weak battery do
   // not force a network wakeup.
-  assert(!sensor::needs_clock_preflight(true, true, true));
-  assert(!sensor::needs_clock_preflight(false, false, true));
-  assert(!sensor::needs_clock_preflight(false, true, false));
+  assert(!sensor::needs_clock_after_sample(true, true, true));
+  assert(!sensor::needs_clock_after_sample(false, false, true));
+  assert(!sensor::needs_clock_after_sample(false, true, false));
+  assert(sensor::sample_epoch(1795520000, 1000000, 13500000) == 1795519988);
+  assert(sensor::sample_epoch(1795520000, 0, 0) == 1795520000);
+  assert(sensor::sample_epoch(1795520000, 2000000, 1000000) == 0);
+  assert(sensor::sample_epoch(1700000000, 0, 1000000) == 0);
+  assert(sensor::sample_epoch(0, 0, 1000000) == 0);
   assert(sensor::retry_delay(86400, 0) == 3600);
   assert(sensor::retry_delay(86400, 100) == 57600);
   assert(sensor::retry_delay(1800, 10) == 1800);

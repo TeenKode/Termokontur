@@ -24,11 +24,18 @@ inline bool http_retryable(int status, bool open_failed, bool replay_safe, bool 
   return (status <= 0 && (open_failed || replay_safe)) ||
          (replay_safe && (status == 200 || status == 502 || status == 503 || status == 504));
 }
-// Only spend radio energy on a clock preflight when a measurement is due,
-// the RTC time is not trusted and the battery permits Wi-Fi.
-inline bool needs_clock_preflight(bool trusted_clock, bool measurement_due,
-                                  bool wifi_allowed) {
-  return !trusted_clock && measurement_due && wifi_allowed;
+// Only obtain UTC after sampling when there is no trusted RTC timestamp.
+inline bool needs_clock_after_sample(bool trusted_clock, bool measured,
+                                     bool wifi_allowed) {
+  return !trusted_clock && measured && wifi_allowed;
+}
+// Derive the timestamp of this newly sampled record from authenticated UTC
+// and a monotonic clock in the same boot. Never extrapolate across RESET.
+inline int64_t sample_epoch(int64_t server_now, int64_t sampled_us, int64_t now_us) {
+  if (sampled_us < 0 || now_us < sampled_us || server_now < 1700000000 ||
+      server_now > 4102444800) return 0;
+  const auto epoch = server_now - (now_us - sampled_us) / 1000000;
+  return epoch >= 1700000000 ? epoch : 0;
 }
 // The optional Wi-Fi threshold can be disabled (0), but never bypass the
 // configured battery cutoff when operating from a battery.

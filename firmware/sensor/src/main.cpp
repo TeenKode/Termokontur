@@ -964,6 +964,11 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
           cJSON_Delete(j);
           return false;
         }
+        if (r.battery == 0 && !server_supports_usb_sync) {
+          cJSON_Delete(j);
+          last_error = "usb_sync_unsupported";
+          return false;
+        }
         cJSON *x = cJSON_CreateObject();
         num(x, "seq", r.seq);
         add(x, "boot_id", hex64(r.boot));
@@ -1468,18 +1473,15 @@ extern "C" void app_main() {
     physical = gpio_get_level(BOOT_PIN) == 0;
   }
   const bool usb_host = usb_host_for_setup(after_reset);
-  if (provisioned && !factory_ticket.empty() && !physical) {
+  // USB factory enrollment alone does not sample. On battery, enrollment
+  // follows the same radio-off measurement path as ordinary operation.
+  if (provisioned && !factory_ticket.empty() && !physical && usb_host) {
     if (!time_quality && state.saved_time >= 1700000000) {
       timeval tv{(time_t)state.saved_time, 0};
       settimeofday(&tv, nullptr);
     }
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
-    uint16_t mv = battery_mv();
-    if (!usb_host && !sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv)) {
-      printf("FACTORY: battery %u mV below threshold or unavailable\n", (unsigned)mv);
-      sleep_for(cfg.measure_s);
-    }
     deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
     const bool registered = wifi_up() && sync_time() && enroll();
     stop_network();
@@ -1488,7 +1490,7 @@ extern "C" void app_main() {
       sleep_for(300);
     }
     puts("FACTORY: server authorized device");
-    if (usb_host) sleep_for(cfg.measure_s);
+    sleep_for(cfg.measure_s);
   }
   const bool setup_requested = !provisioned || physical || usb_host;
   if (charging()) sleep_for(cfg.measure_s);
@@ -1571,34 +1573,23 @@ extern "C" void app_main() {
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
       boot_debug || (cfg.enabled && rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
-  // Hardware RESET and power loss invalidate RTC time. Obtain a validated
-  // HTTPS server timestamp before sampling so the first reading has a date.
-  // If offline or below the Wi-Fi threshold, preserve the untimed reading.
   const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
-  const bool clock_preflight = usb_without_battery || sensor::needs_clock_preflight(
-      time_quality != 0, measurement_due, wifi_allowed);
-  bool time_prepared = false;
-  if (clock_preflight) {
-    deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
-    if (wifi_up()) {
-      time_prepared = sync_time();
-    } else {
-      stop_network();
-    }
-  }
-  // Check compatibility before placing a USB-powered reading in the journal.
-  if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
-    boot_debug_result(time_prepared ? "Обновите сервер для отправки по USB без аккумулятора."
-                                    : "Не удалось связаться с сервером. Проверьте Wi-Fi и адрес панели.");
-    sleep_for(cfg.measure_s);
-  }
+  // Measure before any station connection, even after a cold boot. The
+  // setup AP is already stopped by setup_ap() before the BOOT test.
   Record measurement{};
   measurement.boot = rt.boot;
-  measurement.uptime = rt.uptime + esp_timer_get_time() / 1000000;
   measurement.battery = mv;
   measurement.interval = cfg.measure_s;
+  if (measurement_due) {
+    stop_network();
+    puts("SENSOR: measurement before Wi-Fi");
+  }
   bool measured = measurement_due && sensor_read(measurement);
+  const int64_t sampled_us = esp_timer_get_time();
+  measurement.uptime = rt.uptime + sampled_us / 1000000;
+  measurement.timestamp = time_quality ? time(nullptr) : 0;
+  measurement.quality = time_quality;
   if (charging()) {
     rt.charging = true;
     sleep_for(cfg.measure_s);
@@ -1612,11 +1603,29 @@ extern "C" void app_main() {
       save_state();
     }
   }
+  // A newly sampled record with no trusted RTC can receive UTC once, before
+  // its first journal commit. Derive it from monotonic elapsed time, never
+  // rewrite an existing sequence (even if it has unknown time).
+  const bool clock_after_sample = sensor::needs_clock_after_sample(
+      measurement.quality != 0, measured, wifi_allowed);
+  bool time_prepared = false;
+  if (clock_after_sample && !charging()) {
+    deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
+    if (wifi_up()) time_prepared = sync_time();
+    if (time_prepared) {
+      const auto restored = sensor::sample_epoch(time(nullptr), sampled_us, esp_timer_get_time());
+      if (restored) {
+        measurement.timestamp = restored;
+        measurement.quality = 2;
+        printf("SENSOR: timestamp restored after measurement (%lld)\n", (long long)restored);
+      }
+    } else {
+      stop_network();
+      puts("SENSOR: no trusted time; preserving measurement with unknown UTC");
+    }
+  }
   if (measured) {
-    rt.next_measure =
-        rt.uptime + esp_timer_get_time() / 1000000 + cfg.measure_s;
-    measurement.timestamp = time_quality ? time(nullptr) : 0;
-    measurement.quality = time_quality;
+    rt.next_measure = measurement.uptime + cfg.measure_s;
     measurement.seq = state.next;
     state.next++;
     if (!save_state())
@@ -1630,11 +1639,12 @@ extern "C" void app_main() {
     rt.pending = false;
   }
   auto now = time(nullptr);
-  if ((boot_debug || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed) {
-    if (!clock_preflight)
+  const bool factory_pending = !factory_ticket.empty();
+  if ((boot_debug || factory_pending || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed && !charging()) {
+    if (!clock_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
-    // Do not start another full Wi-Fi session if the time preflight failed.
-    bool ok = (!clock_preflight || time_prepared) &&
+    // Reuse the time connection; if it failed, retry at the next wake.
+    bool ok = (!clock_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
     now = time(nullptr);
@@ -1644,11 +1654,11 @@ extern "C" void app_main() {
           now + (state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s)
                                         : cfg.send_s);
     } else {
-      uint32_t backoff = last_error == "authorization_pending" ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
+      uint32_t backoff = (last_error == "authorization_pending" || !factory_ticket.empty()) ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
       rt.failures++;
       rt.next_send = now + backoff;
     }
-  } else if (clock_preflight) {
+  } else if (clock_after_sample) {
     stop_network();
   }
   if (boot_debug) {
@@ -1671,5 +1681,5 @@ extern "C" void app_main() {
   // for its independent radio deadline, without forcing another sample.
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
       wifi_allowed && time_quality != 0, rt.next_send, time(nullptr));
-  sleep_for(last_error == "authorization_pending" ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
+  sleep_for((last_error == "authorization_pending" || !factory_ticket.empty()) ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
 }
