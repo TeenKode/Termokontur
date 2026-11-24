@@ -3,7 +3,7 @@ html{scrollbar-gutter:stable}
 html{scroll-padding-top:12px}
 *{box-sizing:border-box}body{margin:0;min-height:100vh}button,input,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,
 a:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
-.table-scroll:focus-visible,#debug-log:focus-visible{outline:3px solid var(--focus);outline-offset:-3px}
+.table-scroll:focus-visible,.serial-log:focus-visible{outline:3px solid var(--focus);outline-offset:-3px}
 [hidden]{display:none!important}h1,h2,p{margin:0}h1{font-size:29px;letter-spacing:-.035em;font-weight:750}h2{font-size:17px;letter-spacing:-.02em}p{line-height:1.5}.muted,.hint{color:var(--text-muted);font-size:13px}
 .shell{display:grid;grid-template-columns:216px minmax(0,1fr);min-height:100vh}
 .sidebar{position:sticky;top:0;display:flex;flex-direction:column;height:100vh;height:100dvh;padding:24px 14px 16px;background:#101d31;color:#d4dded}
@@ -716,6 +716,8 @@ html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}
 .sensor-disclosure{margin:0 0 16px;padding:0 20px}
 .sensor-disclosure>summary,#sensor-detail>details>summary{padding:14px 0;cursor:pointer;font-size:14px;font-weight:690}
 .sensor-disclosure>p,#sensor-detail>details>p{color:var(--text-muted);font-size:13px;line-height:1.5}
+#sensor-detail{--sensor-temperature:#087b65;--sensor-humidity:#356bad}
+html[data-theme="dark"] #sensor-detail{--sensor-temperature:#5bdac1;--sensor-humidity:#87b7fc}
 #sensor-detail>form{padding:0 20px 16px}
 #sensor-detail>details{padding:0 20px;border-top:1px solid #dce4eb}
 html[data-theme="dark"] #sensor-detail>details{border-color:var(--dk-border)}
@@ -739,7 +741,10 @@ html[data-theme="dark"] #sensor-detail>details{border-color:var(--dk-border)}
 .firmware-debug-values dt{font-size:13px;color:var(--muted,#60718a)}
 .firmware-debug-values dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
 #debug-wifi-password{white-space:break-spaces}
-#debug-log{font:13px/1.55 ui-monospace,monospace;height:min(42vh,360px);padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
+.serial-log{font:13px/1.55 ui-monospace,monospace;padding:14px;overflow:auto;overscroll-behavior:contain;overflow-anchor:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
+#debug-log{height:min(42vh,360px)}
+#usb-log{height:min(32vh,240px)}
+#usb-log-panel h3{margin:0;font-size:15px}
 html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
 .sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
@@ -748,9 +753,13 @@ html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-form label.archive-toggle{flex-direction:row;align-items:center}
 .sensor-form input:not([type=checkbox]),.sensor-form select{width:100%;min-width:0}
 #sensor-chart{display:block;width:100%;height:260px}
+.sensor-chart-legend{display:flex;justify-content:center;gap:8px 18px;flex-wrap:wrap;list-style:none;margin:0 0 6px;padding:0;font-size:13px}
+.sensor-chart-legend li{display:inline-flex;align-items:center;gap:7px}
+.sensor-chart-legend li::before{content:"";width:20px;border-top:3px solid var(--sensor-temperature)}
+#sensor-humidity-key::before{border-top:3px dashed var(--sensor-humidity)}
 @media(max-width:600px){.sensor-form{display:block}.sensor-form label{margin:12px 0}.sensor-form button{margin:5px 5px 5px 0}.sensor-cards{grid-template-columns:1fr}}
 
-.sensor-usb-dialog{width:min(780px,96vw);max-height:90vh;overflow:auto}.sensor-usb-dialog form>p,.sensor-usb-dialog details{margin:14px 0}.sensor-usb-dialog progress{width:100%}.usb-log{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:12px}.sensor-claim{padding:16px 0;border-bottom:1px solid var(--border,#ddd)}.sensor-claim .sensor-form{margin-top:12px}
+.sensor-usb-dialog{width:min(780px,96vw);max-height:90vh;overflow:auto}.sensor-usb-dialog form>p,.sensor-usb-dialog details{margin:14px 0}.sensor-usb-dialog progress{width:100%}.sensor-claim{padding:16px 0;border-bottom:1px solid var(--border,#ddd)}.sensor-claim .sensor-form{margin-top:12px}
 
 .sensor-usb-dialog .archive-toggle{display:flex;flex-direction:row;gap:10px;white-space:normal;align-items:flex-start}.sensor-usb-dialog .archive-toggle input{flex:0 0 16px;width:16px;height:16px;margin-top:2px}.sensor-usb-dialog textarea{width:100%;max-width:100%}.sensor-usb-dialog details{min-width:0}.sensor-usb-dialog label{min-width:0}
 
