@@ -28,12 +28,20 @@ test('USB identity rejects fingerprint substitution and a different physical boa
 function sdk(chip='ESP32-C3',flashSize=4096){
  const calls=[];return {calls,Transport:class{async disconnect(){calls.push('disconnect');}},ESPLoader:class{
  constructor(){this.chip={readMac:async()=> '01:23:45:67:89:ab'};}
- async main(){return chip;}async getFlashSize(){return flashSize;}async writeFlash(opts){calls.push('write');assert.equal(opts.eraseAll,true);assert.equal(opts.fileArray[0].address,0);assert.equal(opts.calculateMD5Hash(opts.fileArray[0].data),'md5');opts.reportProgress(0,3,3);}
+ async main(){return chip;}async getFlashSize(){return flashSize;}async writeFlash(opts){calls.push('write');assert.equal(opts.eraseAll,true);assert.equal(opts.fileArray[0].address,0);assert.equal(opts.flashMode,'keep');assert.equal(opts.flashFreq,'keep');assert.equal(opts.flashSize,'keep');assert.deepEqual(Array.from(opts.fileArray[0].data,c=>c.charCodeAt(0)),Array.from(factoryBytes()));assert.equal(opts.calculateMD5Hash(opts.fileArray[0].data),'md5');opts.reportProgress(0,3,3);}
  async after(){calls.push('reset');}},md5:()=> 'md5'};
 }
+function factoryBytes(){
+ const bytes=new Uint8Array(0x20000+256);
+ bytes.set([0xe9,1,2,0x2f]);bytes[12]=5;bytes[0x20000]=0xe9;bytes[0x20000+12]=5;
+ return bytes;
+}
+async function metadataFor(image){
+ return {size:image.byteLength,sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',image)),b=>b.toString(16).padStart(2,'0')).join('')};
+}
 test('factory flasher verifies download, chip and existing-board policy before erase',async()=>{
- const {flashFactory}=await module_();const image=Uint8Array.from([1,2,3]).buffer;
- const sha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',image)),b=>b.toString(16).padStart(2,'0')).join('');const metadata={sha256:sha,size:3};
+ const {flashFactory}=await module_();const image=factoryBytes().buffer;
+ const metadata=await metadataFor(image);
  let lib=sdk();let progress=0;
  assert.equal(await flashFactory({},image,metadata,{sdk:lib,checkBoard:async mac=>assert.equal(mac,'0123456789ab'),progress:n=>progress=n,log(){}}),'0123456789ab');
  assert.deepEqual(lib.calls,['write','reset','disconnect']);assert.equal(progress,100);
@@ -41,4 +49,13 @@ test('factory flasher verifies download, chip and existing-board policy before e
  lib=sdk('ESP32-S3');await assert.rejects(flashFactory({},image,metadata,{sdk:lib,log(){}}),/ESP32-C3/);assert.deepEqual(lib.calls,['disconnect']);
  lib=sdk('ESP32-C3',2048);await assert.rejects(flashFactory({},image,metadata,{sdk:lib,log(){}}),/Flash/);assert.deepEqual(lib.calls,['disconnect']);
  lib=sdk();await assert.rejects(flashFactory({},image,metadata,{sdk:lib,log(){},checkBoard:async()=>{throw Error('registered');}}),/registered/);assert.deepEqual(lib.calls,['disconnect']);
+});
+
+test('factory flasher rejects valid-checksum but invalid headers before connecting',async()=>{
+ const {flashFactory}=await module_();
+ for(const [offset,value,pattern] of [[0,0,/заводской образ/],[12,0,/заводской образ/],[2,0,/параметры Flash/],[3,0x20,/параметры Flash/],[0x20000,0,/заводской образ/]]){
+  const bytes=factoryBytes();bytes[offset]=value;const image=bytes.buffer;const lib=sdk();
+  await assert.rejects(flashFactory({},image,await metadataFor(image),{sdk:lib,log(){}}),pattern);
+  assert.deepEqual(lib.calls,[]);
+ }
 });

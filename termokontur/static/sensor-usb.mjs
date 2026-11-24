@@ -65,9 +65,24 @@ export async function verifyIdentity(hello,expectedHardware=null) {
   return fp;
 }
 
+// The factory bundle already contains an esptool-merged, configured bootloader.
+// Never ask esptool-js to rewrite its binary header or invalidate its digest.
+function validateFactoryHeader(bytes) {
+  const appOffset = 0x20000;
+  if (bytes.length < appOffset + 256 || bytes.length > 0x1e0000 ||
+      bytes[0] !== 0xe9 || bytes[12] !== 5 || bytes[13] !== 0 ||
+      bytes[appOffset] !== 0xe9 || bytes[appOffset+12] !== 5 || bytes[appOffset+13] !== 0)
+    throw Error("Неверный заводской образ ESP32-C3. Запись не начата.");
+  // ESP image header: DIO=2, 4MB=0x20, 80MHz=0x0f.
+  if (bytes[2] !== 2 || bytes[3] !== 0x2f)
+    throw Error("Неверные параметры Flash заводского образа: нужны DIO, 80 МГц, 4 МиБ. Запись не начата.");
+}
+
 export async function flashFactory(port,image,metadata,{checkBoard,progress,log,sdk=null}) {
   const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",image)),b=>b.toString(16).padStart(2,"0")).join("");
   if(image.byteLength!==metadata.size||digest!==metadata.sha256)throw Error("Контрольная сумма не совпадает. Загрузите комплект заново.");
+  const bytes=new Uint8Array(image);
+  validateFactoryHeader(bytes);
   const {ESPLoader,Transport,md5}=sdk||await import("./vendor/esptool.bundle.js");
   const transport=new Transport(port,true);
   const loader=new ESPLoader({transport,baudrate:115200,terminal:{clean(){},write:log,writeLine:log},debugLogging:false});
@@ -78,9 +93,9 @@ export async function flashFactory(port,image,metadata,{checkBoard,progress,log,
     const hardware=String(await loader.chip.readMac(loader)).replace(/:/g,"").toLowerCase();
     if(!/^[a-f0-9]{12}$/.test(hardware))throw Error("Не удалось прочитать MAC платы");
     await checkBoard(hardware);
-    const bytes=new Uint8Array(image);const pieces=[];
+    const pieces=[];
     for(let offset=0;offset<bytes.length;offset+=8192)pieces.push(String.fromCharCode(...bytes.subarray(offset,offset+8192)));
-    await loader.writeFlash({fileArray:[{data:pieces.join(""),address:0}],flashMode:"dio",flashFreq:"80m",flashSize:"4MB",eraseAll:true,compress:true,
+    await loader.writeFlash({fileArray:[{data:pieces.join(""),address:0}],flashMode:"keep",flashFreq:"keep",flashSize:"keep",eraseAll:true,compress:true,
       reportProgress:(index,written,total)=>progress(Math.round(100*written/total)),calculateMD5Hash:md5});
     await loader.after("hard_reset");
     return hardware;
