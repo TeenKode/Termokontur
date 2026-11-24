@@ -6,6 +6,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import closing
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
@@ -40,6 +41,28 @@ def backup_path(name: str) -> Path:
         raise ValueError("Резервная копия не найдена")
     return target
 
+@lru_cache(maxsize=1)
+def _expected_columns() -> dict[str, set[str]]:
+    # Use the same migration chain as a clean installation, rather than a
+    # hand-maintained list that can become stale with the next schema version.
+    with closing(sqlite3.connect(":memory:")) as conn:
+        migrations.apply(conn, db.utc_now())
+        return {
+            row[0]: {column[1] for column in conn.execute(
+                "SELECT * FROM pragma_table_info(?)", (row[0],))}
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+
+
+def _inspect_current_schema(conn: sqlite3.Connection) -> None:
+    for table, expected in _expected_columns().items():
+        actual = {column[1] for column in conn.execute("SELECT * FROM pragma_table_info(?)", (table,))}
+        if not expected.issubset(actual):
+            raise ValueError(f"В резервной копии повреждена структура таблицы {table}")
+    if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise ValueError("Резервная копия содержит нарушенные связи между таблицами")
+
+
 def inspect(path: Path) -> None:
     if path.stat().st_size < 4096:
         raise ValueError("Файл слишком мал для резервной копии SQLite")
@@ -47,7 +70,7 @@ def inspect(path: Path) -> None:
     try:
         with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
-            migrations.read_version(conn)
+            version = migrations.read_version(conn)
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("Резервная копия повреждена")
             schema = conn.execute("SELECT name, type FROM sqlite_master").fetchall()
@@ -58,7 +81,17 @@ def inspect(path: Path) -> None:
                 raise ValueError("Файл содержит неподдерживаемые объекты SQLite")
             if not conn.execute("SELECT 1 FROM admin_account WHERE id=1").fetchone():
                 raise ValueError("Резервная копия не содержит учётную запись администратора")
-    except sqlite3.DatabaseError as exc:
+            if version == migrations.SCHEMA_VERSION:
+                _inspect_current_schema(conn)
+        if version < migrations.SCHEMA_VERSION:
+            # Old backups remain supported. Migrate a disposable copy, never
+            # modify the uploaded original or the live database during validation.
+            with TemporaryDirectory(dir=path.parent, prefix=".validate-") as workspace:
+                staged = Path(workspace) / "validate.sqlite3"
+                _copy_database(path, staged)
+                db.initialize(staged)
+                inspect(staged)
+    except (sqlite3.DatabaseError, RuntimeError) as exc:
         raise ValueError("Невозможно прочитать SQLite-файл") from exc
 
 def _copy_database(source: Path, dest: Path) -> None:
