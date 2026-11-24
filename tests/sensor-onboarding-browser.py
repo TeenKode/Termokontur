@@ -25,9 +25,11 @@ SIMULATED_USB=r'''(() => {
   port={async open(){const self=this;this.readable=new ReadableStream({start(c){self.rx=c;}});this.writable=new WritableStream({async write(value){
    const req=JSON.parse(new TextDecoder().decode(value).trim().slice(6));let response={id:req.id};const pair=await key;
    const publicBytes=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',publicBytes)));
-   if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false});
+   if(req.cmd==='hello')Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
-   else if(req.cmd==='configure'){window.savedUSB=req;response.saved=true;}
+   else if(req.cmd==='configure'){if(window.simSaveFailure){response.error='NVS test failure';}else{window.savedUSB=req;response.saved=true;response.verified=true;}}
+   else if(req.cmd==='verify_configuration'){Object.assign(response,{verified:true,device:window.savedUSB.device,sensor_type:window.savedUSB.sensor_type,config:window.savedUSB.config});}
+   else if(req.cmd==='finish_setup'){response.finished=true;window.simFinished=true;}
    else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
    else if(req.cmd==='setup_wifi')Object.assign(response,{ssid:'Termokontur-1234',password:' Wi-Fi <demo> & pass  '});
    else if(req.cmd==='arm_boot_debug'){response.duration_s=300;window.simBootArmed=true;}
@@ -92,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 # The ROM transfer is simulated; the controller still downloads the real API image.
                 real=(ROOT/'termokontur/static/sensor-usb.mjs').read_text()
                 page.route('**/static/test-real-sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=real))
-                wrapper='''export {SensorSerial,verifyIdentity} from './test-real-sensor-usb.mjs';
+                wrapper='''export {SensorSerial,verifyIdentity,connectSensor} from './test-real-sensor-usb.mjs';
                 export async function flashFactory(port,image,metadata,callbacks){
                   if(image.byteLength!==metadata.size)throw Error('size mismatch');
                   await callbacks.checkBoard('0123456789ab');callbacks.progress(100);window.simFlashed=true;return '0123456789ab';
@@ -136,13 +138,18 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path='/tmp/termokontur-usb-setup-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/10-usb-setup.jpg'),type='jpeg',quality=85)
+                page.evaluate('window.simSaveFailure=true')
+                page.click('#usb-configure')
+                expect(page.locator('#usb-status')).to_contain_text('NVS test failure')
+                assert api.get('/api/sensors/devices').json()==[]
+                page.evaluate('window.simSaveFailure=false')
                 page.evaluate('window.originalDateNow=Date.now;Date.now=()=>window.originalDateNow()+315360000000')
                 with page.expect_response(base + firmware_url + '/esp32-c3-factory.bin') as image:
                     page.click('#usb-flash')
                 assert image.value.ok
                 expect(page.locator('#usb-status')).to_contain_text('Готово',timeout=30000)
                 expect(page.locator('#usb-status')).to_contain_text('коротко нажмите RESET')
-                assert page.evaluate('window.simFlashed') is True
+                assert page.evaluate('window.simFlashed && window.simFinished') is True
                 saved=page.evaluate('window.savedUSB');assert abs(saved['epoch']-time.time())<30 and saved['ca']==certificate.decode('ascii')
                 assert saved['ssid']=='School-IoT-2.4G' and saved['password']=='SchoolPassDemo2026'
                 page.evaluate('Date.now=window.originalDateNow')

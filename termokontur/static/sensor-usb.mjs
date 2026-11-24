@@ -43,7 +43,7 @@ export class SensorSerial {
       const timer=setTimeout(()=>{this.pending.delete(id);const error=Error("Нет ответа платы по USB за "+(this.timeout/1000)+" с. Проверьте порт и режим настройки.");error.name="USBTimeoutError";reject(error);},this.timeout);
       this.pending.set(id,{resolve,reject,timer});
     });
-    const writing=writer.write(new TextEncoder().encode("TKRPC "+JSON.stringify({...data,id,cmd})+"\n"))
+    const writing=writer.write(new TextEncoder().encode("\nTKRPC "+JSON.stringify({...data,id,cmd})+"\n"))
       .catch(error=>this.failAll(error)).finally(()=>writer.releaseLock());
     const [reply]=await Promise.all([response,writing]);
     return reply;
@@ -63,6 +63,31 @@ export async function verifyIdentity(hello,expectedHardware=null) {
   if(fp!==hello.fingerprint)throw Error("Отпечаток ключа не совпадает");
   if(expectedHardware&&hello.hardware_id!==expectedHardware)throw Error("Выбран порт другой платы: настройки не отправлены");
   return fp;
+}
+
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+
+export async function connectSensor(port,{expectedHardware=null,getPorts=async()=>[],onAttempt=()=>{},attempts=5,timeout=2200,delay=400}={}){
+  let lastError;
+  for(let attempt=1;attempt<=attempts;attempt++){
+    onAttempt(attempt,attempts);
+    let candidates=[port];
+    if(expectedHardware){
+      try{candidates=[...new Set([port,...(await getPorts()).filter(p=>!p.getInfo||p.getInfo().usbVendorId===0x303a)])];}catch{}
+    }
+    for(const candidate of candidates){
+      const serial=new SensorSerial(candidate,timeout);
+      try{
+        await serial.open();
+        const hello=await serial.request("hello");
+        const fingerprint=await verifyIdentity(hello,expectedHardware);
+        serial.timeout=20000;
+        return {serial,hello,fingerprint};
+      }catch(error){lastError=error;await serial.close();}
+    }
+    if(attempt<attempts)await pause(delay);
+  }
+  throw Error("Не удалось открыть режим настройки ESP32-C3: "+(lastError?.message||"USB недоступен")+". Отключите USB зарядки TP4056, коротко нажмите RESET и выберите «Настроить без прошивки».");
 }
 
 // The factory bundle already contains an esptool-merged, configured bootloader.
@@ -97,7 +122,7 @@ export async function flashFactory(port,image,metadata,{checkBoard,progress,log,
     for(let offset=0;offset<bytes.length;offset+=8192)pieces.push(String.fromCharCode(...bytes.subarray(offset,offset+8192)));
     await loader.writeFlash({fileArray:[{data:pieces.join(""),address:0}],flashMode:"keep",flashFreq:"keep",flashSize:"keep",eraseAll:true,compress:true,
       reportProgress:(index,written,total)=>progress(Math.round(100*written/total)),calculateMD5Hash:md5});
-    await loader.after("hard_reset");
+    try{await loader.after("hard_reset");}catch{log("Запись проверена. USB-порт исчез при перезапуске; ожидаем повторного подключения.");}
     return hardware;
   } finally {try{await transport.disconnect();}catch{}}
 }

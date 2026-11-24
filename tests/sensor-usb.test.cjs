@@ -59,3 +59,18 @@ test('factory flasher rejects valid-checksum but invalid headers before connecti
   assert.deepEqual(lib.calls,[]);
  }
 });
+
+test('USB reconnect retries a busy port and verifies the re-enumerated board',async()=>{
+ const {connectSensor}=await module_();
+ const bytes=Uint8Array.from({length:65},(_,i)=>i===0?4:i);
+ const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+ const fingerprint=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)));
+ const hello={protocol:1,public_key:hex(bytes),fingerprint,hardware_id:'0123456789ab'};
+ const busy={async open(){throw Error('busy');}};
+ const replacement=port((req,send)=>send({...hello,id:req.id}));
+ const wrong=port((req,send)=>send({...hello,hardware_id:'1123456789ab',id:req.id}));
+ let scans=0;
+ const result=await connectSensor(busy,{expectedHardware:hello.hardware_id,getPorts:async()=>++scans===1?[]:[wrong,replacement],attempts:3,timeout:30,delay:1});
+ assert.equal(result.hello.hardware_id,hello.hardware_id);assert.equal(scans,2);assert.equal(wrong.closed,true);
+ await result.serial.close();
+});

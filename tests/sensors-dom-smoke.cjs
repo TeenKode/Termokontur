@@ -60,6 +60,11 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   assert.equal(d.querySelector("#sensor-records tr").children[3].textContent,"—");
   assert.equal(d.querySelector("#sensor-new-model"),null);
   assert.ok(d.querySelector('#view-sensors a[href="/sensors/firmware-debug"]'));
+  d.getElementById("sensor-enabled").checked=false;
+  d.getElementById("sensor-device-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
+  await until(()=>d.querySelectorAll("#sensor-archive-cards .sensor-card").length===1&&d.querySelectorAll("#sensor-cards .sensor-card").length===0&&d.getElementById("sensor-detail").hidden);
+  d.querySelector("#sensor-archive-cards button").click();
+  await until(()=>!d.getElementById("sensor-detail").hidden&&d.querySelectorAll("#sensor-records tr").length===2);
   w.termokonturTheme.setPreference("dark");assert.equal(d.documentElement.dataset.theme,"dark");
   d.querySelector('[data-tab="settings"]').click();
   d.querySelector('.settings-nav-button[data-settings-target="calendar"]').click();

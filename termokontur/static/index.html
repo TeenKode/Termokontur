@@ -196,6 +196,8 @@
         </div>
         <article class="panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
         <div id="sensor-cards" class="sensor-cards"></div>
+        <details id="sensor-archive" class="panel" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
+        <details id="sensor-rejected-panel" class="panel" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
         <div id="sensor-detail" class="panel" hidden>
           <div class="panel-heading"><div><h2 id="sensor-title"></h2><p id="sensor-detail-state"></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>

@@ -221,6 +221,8 @@ def router(require_admin):
             updated = conn.execute("UPDATE sensor_identities SET state='rejected' WHERE fingerprint=? AND state!='approved'", (fp,))
             if not updated.rowcount:
                 raise HTTPException(409, "Заявка не найдена или датчик уже авторизован")
+            conn.execute("UPDATE sensor_devices SET enabled=0,token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 "
+                         "WHERE id=(SELECT device_id FROM sensor_identities WHERE fingerprint=?)", (fp,))
         return {'status':'rejected'}
 
     @r.get('/usb/options', dependencies=admin)

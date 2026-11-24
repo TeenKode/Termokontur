@@ -152,6 +152,12 @@ def test_rekey_revokes_signed_renewal_and_rejection_stays_rejected(admin):
     fp = onboarding.fingerprint(ident['public_key'])
     assert admin.post('/api/sensors/claims/'+fp+'/reject').status_code == 200
     assert admin.post('/api/sensors/auth/prove',json=proof(admin,private,ident)).json()['status'] == 'rejected'
+    archived = admin.get('/api/sensors/devices').json()[0]
+    assert archived['status'] == 'rejected' and not archived['enabled']
+    assert archived['next_sync_at'] is None
+    assert admin.get('/api/sensors/devices/'+d+'/records').status_code == 200
+    assert admin.post('/api/sensors/claims/'+fp+'/approve',json={'name':'x','room_id':r['id']}).status_code == 200
+    assert admin.get('/api/sensors/devices').json()[0]['enabled']
 
 
 def test_challenge_rate_and_invalid_curve(admin):

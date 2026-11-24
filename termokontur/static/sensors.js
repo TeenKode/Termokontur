@@ -1,7 +1,7 @@
 "use strict";
 let sensorDevices=[],sensorSelected=null,sensorRecords=[],sensorConfig=null,sensorLoadId=0;
 const sensorFirmwareBase="/api/sensors/firmware/bundled";
-const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив"};
+const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив",rejected:"Доступ отклонён",authorization_pending:"Требуется разрешение"};
 const sensorTime={unknown:"Дата неизвестна",sntp:"Сервер времени",server:"Сервер",rtc:"Часы устройства"};
 const sensorConfigFields=[
   ["measure_s","Интервал измерений, с",60,86400],["send_s","Интервал передачи, с",600,604800],
@@ -20,15 +20,20 @@ async function refreshSensors(){
     sensorDevices=devices;rooms=active;
     if(typeof renderSensorClaims==="function")renderSensorClaims(claims);
     if(typeof refreshInstaller==="function")refreshInstaller().catch(()=>{});
-    const cards=$("sensor-cards");cards.replaceChildren();
+    const cards=$("sensor-cards"),archive=$("sensor-archive-cards");cards.replaceChildren();archive.replaceChildren();
+    const archived=d=>!d.enabled||["retired","rejected","authorization_pending"].includes(d.status);
+    const activeDevices=devices.filter(d=>!archived(d));
+    const archivedDevices=devices.filter(archived);
+    $("sensor-archive").hidden=!archivedDevices.length;
+    $("sensor-archive-title").textContent="Архив и отключённые ("+archivedDevices.length+")";
     for(const d of devices){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
       card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatus[d.status]||d.status),
         el("p","",(d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно")+" · "+sensorWhen(d.last_seen)),
-        sensorButton("Открыть",()=>openSensor(d.id)));cards.append(card);
+        sensorButton("Открыть",()=>openSensor(d.id)));(archived(d)?archive:cards).append(card);
       if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
     }
-    $("sensor-state").textContent=devices.length?"Датчиков: "+devices.length+". Указано состояние последнего подключения.":"Подключите первый датчик по USB или по коду.";
+    $("sensor-state").textContent=activeDevices.length?"Датчиков: "+activeDevices.length+". Указано состояние последнего подключения.":archivedDevices.length?"Нет активных датчиков. История доступна в архиве.":"Подключите первый датчик по USB или по коду.";
     // Do not overwrite a partially edited MQTT form during refresh.
     if(!$("sensor-mqtt-form").contains(document.activeElement)){
       $("sensor-mqtt-enabled").checked=mqtt.enabled;$("sensor-mqtt-host").value=mqtt.host;$("sensor-mqtt-port").value=mqtt.port;
@@ -98,7 +103,7 @@ $("sensor-code-close").addEventListener("click",()=>{$("sensor-code-dialog").clo
 $("sensor-code-copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("sensor-code-id").value+"\n"+$("sensor-code-value").value);toast("Данные скопированы");}catch{toast("Выделите и скопируйте поля вручную",true);}});
 $("sensor-add-form").addEventListener("submit",async e=>{e.preventDefault();try{const reply=await api("/api/sensors/devices","POST",{name:$("sensor-new-name").value.trim(),room_id:Number($("sensor-new-room").value)});$("sensor-add-dialog").close();await refreshSensors();revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-refresh").addEventListener("click",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
-$("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled:$("sensor-enabled").checked});await refreshSensors();await openSensor(sensorSelected);toast("Изменения сохранены");}catch(e){toast(e.message,true);}});
+$("sensor-device-form").addEventListener("submit",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
 $("sensor-rekey").addEventListener("click",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 $("sensor-config-form").addEventListener("submit",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
 $("sensor-ota-form").addEventListener("submit",async e=>{
