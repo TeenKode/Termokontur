@@ -1,6 +1,7 @@
 #include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "bootloader_random.h"
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/platform_util.h"
@@ -523,10 +524,8 @@ static uint16_t battery_mv() {
   adc_oneshot_del_unit(adc);
   return ok ? (uint64_t)(total / 16) * cfg.adc_scale_ppm / 1000000 : 0;
 }
-static bool sensor_read(Record &r) {
-  if (charging()) return false;
-  sensor::read_sensor(sensor_type.c_str(), r);
-  return !charging();
+static bool sensor_read(Record &r, unsigned *attempts = nullptr) {
+  return sensor::read_sensor_retry(sensor_type.c_str(), r, [] { return charging(); }, attempts);
 }
 static void add_measurement(cJSON *out, const Record &r) {
   if (r.error) {
@@ -903,13 +902,15 @@ static void usb_test_measurement(cJSON *out) {
   }
   Record sample{};
   sample.battery = battery_mv();
-  if (!sensor_read(sample)) {
+  unsigned attempts = 0;
+  if (!sensor_read(sample, &attempts)) {
     add(out, "error", "Пробный замер прерван зарядкой.");
     return;
   }
   add_measurement(out, sample);
   add(out, "sensor_error", sensor_error_name(sample.error));
   num(out, "battery_mv", sample.battery);
+  num(out, "attempts", attempts);
 }
 
 static std::string provision_apply(cJSON *j, bool require_nonce) {
@@ -971,11 +972,18 @@ static esp_err_t setup_save(httpd_req_t *req) {
   return httpd_resp_sendstr(req, "Saved");
 }
 static void usb_setup_task(void *) {
+  usb_serial_jtag_driver_config_t usb_cfg{};
+  usb_cfg.rx_buffer_size = 2048;
+  usb_cfg.tx_buffer_size = 2048;
+  const bool buffered = usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK;
+  if (buffered) usb_serial_jtag_vfs_use_driver();
   setvbuf(stdin, nullptr, _IONBF, 0);
   fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
   std::string line; bool overflow = false;
   while (setup_state == SetupState::waiting) {
-    char bytes[256]; int size = read(STDIN_FILENO, bytes, sizeof bytes);
+    char bytes[256];
+    int size = buffered ? usb_serial_jtag_read_bytes(bytes, sizeof bytes, pdMS_TO_TICKS(20))
+                        : read(STDIN_FILENO, bytes, sizeof bytes);
     for (int i=0; i<size; ++i) {
       if (bytes[i] == '\r') continue;
       if (bytes[i] != '\n') {
@@ -1010,7 +1018,13 @@ static void usb_setup_task(void *) {
             else add(out,"error",error);
           } else add(out,"error","Команда не поддерживается. Проверьте версию прошивки.");
           auto response=stringify(out); cJSON_Delete(out); cJSON_Delete(j);
-          printf("\nTKRPC %s\n",response.c_str()); fflush(stdout);
+          const std::string frame = "\nTKRPC " + response + "\n";
+          if (buffered) {
+            usb_serial_jtag_write_bytes(frame.data(), frame.size(), pdMS_TO_TICKS(500));
+          }
+          else {
+            printf("%s", frame.c_str()); fflush(stdout);
+          }
         }
       }
       line.clear(); overflow=false;

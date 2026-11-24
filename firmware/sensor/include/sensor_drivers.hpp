@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 namespace sensor {
 // One sensor per board. GPIO5 is reserved for DHT / externally powered 1-Wire.
@@ -47,25 +48,61 @@ inline bool values(Record &r, double t, double h) {
   return true;
 }
 inline void wait_ms(unsigned ms) { vTaskDelay(pdMS_TO_TICKS(ms) + 1); }
+// Release open-drain lines and clock a stuck slave out of a partial transfer.
+inline bool recover_i2c() {
+  constexpr auto sda = GPIO_NUM_6, scl = GPIO_NUM_7;
+  for (auto pin : {sda, scl}) {
+    gpio_set_level(pin, 1);
+    gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_pull_mode(pin, GPIO_FLOATING);
+  }
+  auto high = [](gpio_num_t pin) {
+    for (int i = 0; i < 100; ++i) {
+      if (gpio_get_level(pin)) return true;
+      esp_rom_delay_us(10);
+    }
+    return false;
+  };
+  if (!high(scl)) return false;
+  for (int i = 0; i < 9 && !gpio_get_level(sda); ++i) {
+    gpio_set_level(scl, 0); esp_rom_delay_us(5);
+    gpio_set_level(scl, 1);
+    if (!high(scl)) return false;
+    esp_rom_delay_us(5);
+  }
+  gpio_set_level(scl, 0); gpio_set_level(sda, 0); esp_rom_delay_us(5);
+  gpio_set_level(scl, 1);
+  if (!high(scl)) { gpio_set_level(sda, 1); return false; }
+  esp_rom_delay_us(5); gpio_set_level(sda, 1); esp_rom_delay_us(5);
+  return gpio_get_level(sda) != 0;
+}
 struct I2C {
   bool ready = false;
+  int last_status = ESP_OK;
   I2C() {
     i2c_config_t c{};
     c.mode = I2C_MODE_MASTER;
     c.sda_io_num = GPIO_NUM_6; c.scl_io_num = GPIO_NUM_7;
     c.master.clk_speed = 100000;
-    ready = i2c_param_config(I2C_NUM_0, &c) == ESP_OK &&
-            i2c_driver_install(I2C_NUM_0, c.mode, 0, 0, 0) == ESP_OK;
+    last_status = i2c_param_config(I2C_NUM_0, &c);
+    if (last_status == ESP_OK) last_status = i2c_driver_install(I2C_NUM_0, c.mode, 0, 0, 0);
+    ready = last_status == ESP_OK;
   }
   ~I2C() { if (ready) i2c_driver_delete(I2C_NUM_0); }
   bool write(uint8_t a, const uint8_t *b, size_t n) {
-    return ready && i2c_master_write_to_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100)) == ESP_OK;
+    if (!ready) return false;
+    last_status = i2c_master_write_to_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100));
+    return last_status == ESP_OK;
   }
   bool read(uint8_t a, uint8_t *b, size_t n) {
-    return ready && i2c_master_read_from_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100)) == ESP_OK;
+    if (!ready) return false;
+    last_status = i2c_master_read_from_device(I2C_NUM_0, a, b, n, pdMS_TO_TICKS(100));
+    return last_status == ESP_OK;
   }
   bool reg(uint8_t a, uint8_t reg, uint8_t *b, size_t n) {
-    return ready && i2c_master_write_read_device(I2C_NUM_0, a, &reg, 1, b, n, pdMS_TO_TICKS(100)) == ESP_OK;
+    if (!ready) return false;
+    last_status = i2c_master_write_read_device(I2C_NUM_0, a, &reg, 1, b, n, pdMS_TO_TICKS(100));
+    return last_status == ESP_OK;
   }
 };
 inline bool sht(I2C &bus, bool sht3, Record &r) {
@@ -284,7 +321,8 @@ inline bool ds18b20(Record &r) {
   return decode_ds18b20(b, r);
 }
 
-inline bool read_sensor(const char *type, Record &r) {
+inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr) {
+  if (io_status) *io_status = ESP_OK;
   r.error = 0;
   bool ok;
   if (!strcmp(type, "dht11") || !strcmp(type, "dht22")) ok = dht(!strcmp(type, "dht22"), r);
@@ -296,8 +334,32 @@ inline bool read_sensor(const char *type, Record &r) {
     else if (!strcmp(type, "bme280")) ok = bme280(bus, r);
     else if (!strcmp(type, "bmp280")) ok = bmp280(bus, r);
     else ok = false;
+    if (io_status) *io_status = bus.last_status;
   }
   if (!ok && !r.error) r.error = 2;
   return ok;
+}
+// Shared by scheduled measurements and diagnostics. Cancellation preserves charging policy.
+template<class Cancel>
+inline bool read_sensor_retry(const char *type, Record &r, Cancel cancelled,
+                              unsigned *attempts = nullptr) {
+  const bool i2c = strcmp(type, "dht11") && strcmp(type, "dht22") && strcmp(type, "ds18b20");
+  if (attempts) *attempts = 0;
+  for (unsigned i = 1; i <= 3; ++i) {
+    if (cancelled()) return false;
+    if (attempts) *attempts = i;
+    int status = ESP_OK;
+    if (read_sensor(type, r, &status)) return !cancelled();
+    printf("SENSOR: %s attempt %u/3 failed: error=%u io_status=%d\n",
+           type, i, unsigned(r.error), status);
+    if (i < 3 && !cancelled()) {
+      if (i2c && r.error == 2) {
+        bool recovered = recover_i2c();
+        printf("SENSOR: I2C recovery %s\n", recovered ? "OK" : "line stuck");
+      }
+      wait_ms(50);
+    }
+  }
+  return !cancelled();
 }
 } // namespace sensor

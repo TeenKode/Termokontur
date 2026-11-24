@@ -20,7 +20,8 @@ namespace mock {
 inline std::map<int,std::vector<uint8_t>> samples;
 inline std::map<std::pair<int,int>,std::vector<uint8_t>> registers;
 inline std::vector<std::vector<uint8_t>> writes;
-inline void clear() { samples.clear(); registers.clear(); writes.clear(); }
+inline int fail_reads = 0;
+inline void clear() { samples.clear(); registers.clear(); writes.clear(); fail_reads = 0; }
 inline int copy(const std::vector<uint8_t> &data,uint8_t *out,size_t n) {
   if (data.size()<n) return -1;
   memcpy(out,data.data(),n); return ESP_OK;
@@ -34,6 +35,7 @@ inline int i2c_master_write_to_device(int,uint8_t a,const uint8_t *b,size_t n,in
   return mock::samples.count(a) || mock::registers.count({a,0xd0}) ? ESP_OK : -1;
 }
 inline int i2c_master_read_from_device(int,uint8_t a,uint8_t *b,size_t n,int) {
+  if (mock::fail_reads > 0) { --mock::fail_reads; return -1; }
   return mock::copy(mock::samples[a],b,n);
 }
 inline int i2c_master_write_read_device(int,uint8_t a,const uint8_t *reg,size_t,uint8_t *b,size_t n,int) {

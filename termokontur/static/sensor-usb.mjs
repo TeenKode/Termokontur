@@ -23,7 +23,7 @@ export class SensorSerial {
         let end;
         while((end=this.buffer.indexOf("\n"))>=0) {
           const line=this.buffer.slice(0,end).trimEnd();this.buffer=this.buffer.slice(end+1);
-          const frame=line.trimStart();
+          const frame=line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trimStart();
           if(!frame.startsWith("TKRPC ")){this.onLine?.(line);continue;}
           try {const reply=JSON.parse(frame.slice(6));const pending=this.pending.get(reply.id);if(!pending)continue;
             this.pending.delete(reply.id);clearTimeout(pending.timer);
@@ -40,7 +40,7 @@ export class SensorSerial {
     const id=crypto.randomUUID();
     const writer=this.port.writable.getWriter();
     const response=new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.pending.delete(id);reject(Error("Нет ответа датчика. Проверьте порт, режим настройки и версию прошивки — нужна 0.1.4 или новее."));},this.timeout);
+      const timer=setTimeout(()=>{this.pending.delete(id);const error=Error("Нет ответа платы по USB за "+(this.timeout/1000)+" с. Проверьте порт и режим настройки.");error.name="USBTimeoutError";reject(error);},this.timeout);
       this.pending.set(id,{resolve,reject,timer});
     });
     const writing=writer.write(new TextEncoder().encode("TKRPC "+JSON.stringify({...data,id,cmd})+"\n"))
