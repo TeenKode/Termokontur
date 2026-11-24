@@ -466,3 +466,19 @@ def test_relaxed_intervals_and_voltage_limits():
                    {"wifi_min_mv":4201}, {"ota_min_mv":-1}):
         with pytest.raises(ValueError):
             sensors.Config(**kwargs)
+
+
+def test_explicit_end_of_journal_acknowledges_only_confirmed_tail_losses(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    assert admin.get("/api/sensors/bootstrap").json()["sync_tail_loss"] is True
+    assert sync(admin, d, headers, batch()).json()["ack_seq"] == 2
+    # An older firmware's empty page must not implicitly acknowledge data.
+    assert sync(admin, d, headers, batch([], next_seq=5, lost=3)).json()["ack_seq"] == 2
+    assert sync(admin, d, headers, batch([], next_seq=6, lost=3, journal_end=True)).status_code == 409
+    final = batch([], next_seq=5, lost=3, journal_end=True)
+    for _ in range(2):
+        assert sync(admin, d, headers, final).json()["ack_seq"] == 5
+    assert sync(admin, d, headers, batch([record(5)], next_seq=6, lost=3)).json()["ack_seq"] == 6
+    with db.connect() as conn:
+        assert conn.execute("SELECT acknowledged_lost FROM sensor_devices").fetchone()[0] == 3
+        assert conn.execute("SELECT count(*) FROM sensor_records").fetchone()[0] == 2

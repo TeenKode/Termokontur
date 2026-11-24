@@ -110,6 +110,7 @@ class Sync(Strict):
     device_ack: int | None = Field(default=None, ge=1, le=9007199254740991)
     device_lost_base: int | None = Field(default=None, ge=0, le=9007199254740991)
     replay: bool = False
+    journal_end: bool = False
 
     @model_validator(mode="after")
     def sequence(self):
@@ -343,8 +344,18 @@ def router(require_admin):
             if replay_until is not None and not payload.records and ack < replay_until:
                 event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{replay_until})")
                 ack = replay_until
+            if payload.journal_end and replay_until is not None and ack < replay_until:
+                event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{replay_until})")
+                ack = replay_until
             if replay_until is not None and ack >= replay_until:
                 lost_confirmed = max(lost_confirmed, payload.device_lost_base)
+            if payload.journal_end and ack < payload.next_seq:
+                gap = payload.next_seq - ack
+                if gap > payload.lost - lost_confirmed:
+                    raise HTTPException(409, "Конец журнала не подтверждён счётчиком потерь")
+                event(conn, device, "gap", f"Нет записей [{ack},{payload.next_seq})")
+                lost_confirmed += gap
+                ack = payload.next_seq
             restore_pending = int(bool(d["restore_pending"] and ack == initial_ack))
             conn.execute("""UPDATE sensor_devices SET last_seen=?,firmware=?,battery_mv=?,rssi=?,boots=?,lost=?,
                          ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,
