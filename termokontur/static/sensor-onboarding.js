@@ -90,7 +90,7 @@ function usbSettings(){
 }
 async function usbRun(flash){
   if(usbBusy)return;
-  let serial=null,flashed=false;
+  let serial=null,flashed=false,approved=false,savedLocally=false;
   try{
     const data=usbSettings();if(!data)return;
     if(!usbSupported())throw Error("USB недоступен. Откройте панель по HTTPS в Chrome или Edge на компьютере.");
@@ -101,6 +101,12 @@ async function usbRun(flash){
     usbSetBusy(true);
     const port=await navigator.serial.requestPort({filters:[{usbVendorId:0x303a}]});
     const usb=await import("./sensor-usb.mjs");
+    usbStatus("Проверяем время и сертификат сервера…");
+    const bootstrapResponse=await fetch(data.settings.server+"/api/sensors/bootstrap",{credentials:"omit",cache:"no-store"});
+    if(!bootstrapResponse.ok)throw Error("Не удалось получить время и сертификат сервера");
+    const bootstrap=await bootstrapResponse.json();
+    if(!Number.isInteger(bootstrap.time)||bootstrap.time<1700000000||bootstrap.time>4102444800||typeof bootstrap.ca!=="string"||new TextEncoder().encode(bootstrap.ca).length>8000)throw Error("Сервер вернул неверное время или сертификат");
+    data.settings.epoch=bootstrap.time;data.settings.ca=bootstrap.ca;
     if(flash){
       usbStatus("Проверяем комплект и записываем прошивку. Не отключайте USB.");$("usb-progress").hidden=false;$("usb-progress").value=0;
       const response=await fetch(installer.url,{credentials:"same-origin"});
@@ -109,30 +115,48 @@ async function usbRun(flash){
         checkBoard:hardware=>api("/api/sensors/usb/check/"+hardware),progress:value=>{$("usb-progress").value=value;},
         log:line=>{$("usb-log").hidden=false;$("usb-log").textContent=($("usb-log").textContent+String(line)+"\n").slice(-4000);}});
       flashed=true;usbStatus("Прошивка записана. Ожидаем запуска датчика…");
-      await new Promise(resolve=>setTimeout(resolve,1500));
+      $("usb-new-board").checked=false;
     }
-    serial=new usb.SensorSerial(port);await serial.open();
-    const hello=await serial.request("hello");
-    const fp=await usb.verifyIdentity(hello,usbExpectedHardware);
+    const connection=await usb.connectSensor(port,{expectedHardware:usbExpectedHardware,getPorts:()=>navigator.serial.getPorts(),onAttempt:(n,total)=>usbStatus("Ожидаем режим настройки: попытка "+n+" из "+total+"…")});
+    serial=connection.serial;const {hello,fingerprint:fp}=connection;
     if(!usbServerBootstrapVersion(hello.firmware))throw Error("Для времени и сертификата от сервера обновите прошивку датчика до 0.1.5 или новее");
     if(hello.pending_records&&hello.sensor_type!==data.sensor_type)throw Error("Перед сменой типа передайте накопленные измерения на сервер");
     $("usb-identity").textContent="Плата "+hello.hardware_id+" · ключ "+fp.slice(0,16).match(/.{4}/g).join("–");
     const identity={public_key:hello.public_key,hardware_id:hello.hardware_id,sensor_type:data.sensor_type,firmware:hello.firmware};
-    usbStatus("Проверяем плату и разрешаем подключение…");
+    const deferred=hello.verified_setup===true;
+    const verifySaved=async(payload)=>{
+      const saved=await serial.request("configure",{...payload,defer_finish:true});
+      if(!saved.saved||!saved.verified)throw Error("Плата не подтвердила проверку записи в память");
+      const result=await serial.request("verify_configuration");
+      if(!result.verified||result.device!==payload.device||result.sensor_type!==payload.sensor_type||
+         Object.keys(payload.config).some(key=>result.config?.[key]!==payload.config[key]))
+        throw Error("Сохранённые настройки не совпадают с переданными");
+    };
+    const base={...data.settings,code:"",sensor_type:data.sensor_type};
+    if(deferred){
+      usbStatus("Сохраняем параметры и проверяем память платы…");
+      await verifySaved({...base,device:"",config:data.config});
+      savedLocally=true;
+    }else usbStatus("Старая прошивка: проверка записи недоступна. Разрешаем подключение…");
+    usbStatus("Проверяем подпись платы и разрешаем подключение…");
     const challenge=await api("/api/sensors/auth/challenge","POST",identity);
     const signed=await serial.request("sign",{message:challenge.message});
     const approval=await api("/api/sensors/onboard","POST",{...identity,challenge:challenge.challenge,signature:signed.signature,name:data.name,room_id:data.room_id,config:data.config});
-    usbStatus("Доступ выдан. Передаём настройки по USB…");
-    const bootstrapResponse=await fetch(data.settings.server+"/api/sensors/bootstrap",{credentials:"omit",cache:"no-store"});
-    if(!bootstrapResponse.ok)throw Error("Не удалось получить время и сертификат сервера");
-    const bootstrap=await bootstrapResponse.json();
-    if(!Number.isInteger(bootstrap.time)||bootstrap.time<1700000000||bootstrap.time>4102444800||typeof bootstrap.ca!=="string"||new TextEncoder().encode(bootstrap.ca).length>8000)throw Error("Сервер вернул неверное время или сертификат");
-    data.settings.epoch=bootstrap.time;data.settings.ca=bootstrap.ca;
-    const saved=await serial.request("configure",{...data.settings,device:approval.device_id,code:"",sensor_type:data.sensor_type,config:approval.config});
-    if(!saved.saved)throw Error("Датчик не подтвердил сохранение настроек");
+    approved=true;
+    usbStatus("Доступ выдан. Сохраняем окончательные настройки…");
+    const final={...base,device:approval.device_id,config:approval.config};
+    if(deferred){
+      await verifySaved(final);
+      usbStatus("Настройки сверены с памятью. Завершаем настройку…");
+      const done=await serial.request("finish_setup");
+      if(!done.finished)throw Error("Плата не подтвердила завершение настройки");
+    }else{
+      const saved=await serial.request("configure",final);
+      if(!saved.saved)throw Error("Датчик не подтвердил сохранение настроек");
+    }
     usbClearSecrets();await refreshSensors();
     usbStatus("Готово. Для отладки закройте мастер, оставьте USB платы подключённым и коротко нажмите RESET. Для автономной работы отсоедините USB платы и зарядки, включите питание от аккумулятора и проверьте первые данные в карточке.");
-  }catch(error){usbStatus(error.name==="NotFoundError"?"Порт не выбран или изменился после перезапуска. Нажмите «Настроить без прошивки» и выберите его снова.":error.message+(flashed?" Если USB переопределился после записи, продолжите кнопкой «Настроить без прошивки».":""));}
+  }catch(error){usbStatus(error.name==="NotFoundError"?"Порт не выбран.":error.message+(savedLocally&&!approved?" Параметры записаны, доступ ещё не выдан.":"")+(approved?" Доступ выдан, завершение не подтверждено.":"")+(flashed||approved||savedLocally?" Продолжите кнопкой «Настроить без прошивки»; повторно стирать память не нужно.":""));}
   finally{if(serial)await serial.close();usbSetBusy(false);}
 }
 $("sensor-usb-form").addEventListener("submit",e=>{e.preventDefault();usbRun(true);});

@@ -226,7 +226,7 @@ static std::string identity_sign(const std::string &message) {
                                     signature, sizeof signature, &len, identity_rng, nullptr)) return "";
   return bytes_hex(signature, len);
 }
-static bool save_provision() {
+static std::string provision_json() {
   cJSON *j = cJSON_CreateObject();
   add(j, "ssid", ssid);
   add(j, "password", password);
@@ -239,7 +239,24 @@ static bool save_provision() {
   add(j, "setup_password", setup_password);
   auto s = stringify(j);
   cJSON_Delete(j);
-  return save_blob("provision", s.c_str(), s.size() + 1);
+  return s;
+}
+static bool save_provision() {
+  auto s = provision_json();
+  return !s.empty() && save_blob("provision", s.c_str(), s.size() + 1);
+}
+static bool verify_saved_configuration() {
+  auto expected = provision_json();
+  if (expected.empty()) return false;
+  std::vector<char> stored(expected.size() + 1);
+  Config actual_cfg{};
+  State actual_state{};
+  return load_blob("provision", stored.data(), stored.size()) == 1 &&
+         memcmp(stored.data(), expected.c_str(), stored.size()) == 0 &&
+         load_blob("config", &actual_cfg, sizeof actual_cfg) == 1 &&
+         memcmp(&actual_cfg, &cfg, sizeof cfg) == 0 &&
+         load_blob("state", &actual_state, sizeof actual_state) == 1 &&
+         memcmp(&actual_state, &state, sizeof state) == 0;
 }
 static bool load_provision() {
   size_t n = 0;
@@ -868,6 +885,7 @@ static esp_err_t setup_page(httpd_req_t *req) {
   return httpd_resp_send(req, html.c_str(), html.size());
 }
 static std::mutex provision_mutex;
+static bool deferred_configuration = false;
 static void usb_arm_boot_debug(cJSON *out) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (setup_state != SetupState::waiting || charging()) {
@@ -952,8 +970,13 @@ static std::string provision_apply(cJSON *j, bool require_nonce) {
   setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
                                                   random_setup_password);
   state.saved_time = epoch;
+  deferred_configuration = false;
   if (!save_provision() || !save_state()) return "Не удалось сохранить настройки в памяти платы.";
-  setup_state = SetupState::saved;
+  const bool defer = !require_nonce && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "defer_finish"));
+  if (defer) {
+    if (!verify_saved_configuration()) return "Проверка чтения настроек из NVS не пройдена.";
+    deferred_configuration = true;
+  } else setup_state = SetupState::saved;
   return "";
 }
 static esp_err_t setup_save(httpd_req_t *req) {
@@ -973,7 +996,8 @@ static esp_err_t setup_save(httpd_req_t *req) {
 }
 static void usb_setup_task(void *) {
   usb_serial_jtag_driver_config_t usb_cfg{};
-  usb_cfg.rx_buffer_size = 2048;
+  // A configure RPC can contain an 8000-byte TLS chain. Buffer a whole frame.
+  usb_cfg.rx_buffer_size = 16384;
   usb_cfg.tx_buffer_size = 2048;
   const bool buffered = usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK;
   if (buffered) usb_serial_jtag_vfs_use_driver();
@@ -1002,6 +1026,7 @@ static void usb_setup_task(void *) {
             add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
             add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
+            cJSON_AddBoolToObject(out,"verified_setup",true);
           } else if (cmd == "setup_wifi") {
             usb_setup_wifi(out);
           } else if (cmd == "arm_boot_debug") {
@@ -1014,8 +1039,33 @@ static void usb_setup_task(void *) {
             else add(out,"signature",signature);
           } else if (cmd == "configure") {
             auto error=provision_apply(j,false);
-            if (error.empty()) cJSON_AddBoolToObject(out,"saved",true);
-            else add(out,"error",error);
+            if (error.empty()) {
+              cJSON_AddBoolToObject(out,"saved",true);
+              cJSON_AddBoolToObject(out,"verified",deferred_configuration);
+            } else add(out,"error",error);
+          } else if (cmd == "verify_configuration") {
+            std::lock_guard<std::mutex> lock(provision_mutex);
+            if (!deferred_configuration || charging() || !verify_saved_configuration())
+              add(out,"error","Настройки не подтверждены чтением NVS.");
+            else {
+              cJSON_AddBoolToObject(out,"verified",true);
+              add(out,"device",device); add(out,"sensor_type",sensor_type);
+              auto *c = cJSON_AddObjectToObject(out,"config");
+#define REPORT(field) num(c,#field,cfg.field)
+              REPORT(version); REPORT(measure_s); REPORT(send_s); REPORT(cool_s);
+              REPORT(wifi_budget_s); REPORT(wifi_min_mv); REPORT(cutoff_mv);
+              REPORT(ota_min_mv); REPORT(tx_qdbm); REPORT(adc_scale_ppm);
+#undef REPORT
+              cJSON_AddBoolToObject(c,"enabled",cfg.enabled);
+            }
+          } else if (cmd == "finish_setup") {
+            std::lock_guard<std::mutex> lock(provision_mutex);
+            if (!deferred_configuration || charging() || device.empty() || !verify_saved_configuration())
+              add(out,"error","Нельзя завершить настройку без проверенных параметров и ID датчика.");
+            else {
+              cJSON_AddBoolToObject(out,"finished",true);
+              setup_state = SetupState::saved;
+            }
           } else add(out,"error","Команда не поддерживается. Проверьте версию прошивки.");
           auto response=stringify(out); cJSON_Delete(out); cJSON_Delete(j);
           const std::string frame = "\nTKRPC " + response + "\n";
@@ -1029,7 +1079,7 @@ static void usb_setup_task(void *) {
       }
       line.clear(); overflow=false;
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    if (size <= 0) vTaskDelay(pdMS_TO_TICKS(10));
   }
   vTaskDelete(nullptr);
 }
