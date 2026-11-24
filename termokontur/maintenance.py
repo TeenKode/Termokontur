@@ -13,6 +13,7 @@ from threading import Lock
 
 from . import db, migrations, settings
 
+UPDATE_NAME_PATTERN = re.compile(r"^pre-update-[0-9TZ]{16}-[a-f0-9]{40}\.sqlite3$")
 NAME_PATTERN = re.compile(r"^termokontur-(?:manual|auto|import|pre-restore)-[0-9TZ]{16}-[0-9a-f]{12}\.sqlite3$")
 REQUIRED_TABLES = {"rooms", "readings", "settings", "admin_account", "max_bindings"}
 MAX_IMPORT_BYTES = 1024**3
@@ -32,7 +33,7 @@ def _filename(kind: str) -> str:
     return f"termokontur-{kind}-{stamp}-{secrets.token_hex(6)}.sqlite3"
 
 def backup_path(name: str) -> Path:
-    if not NAME_PATTERN.fullmatch(name):
+    if not (NAME_PATTERN.fullmatch(name) or UPDATE_NAME_PATTERN.fullmatch(name)):
         raise ValueError("Недопустимое имя резервной копии")
     root = backup_dir().resolve()
     target = root / name
@@ -84,7 +85,7 @@ def create_backup(kind: str = "manual") -> dict:
 def list_backups() -> list[dict]:
     result = []
     for file in backup_dir().iterdir():
-        if not NAME_PATTERN.fullmatch(file.name) or file.is_symlink() or not file.is_file():
+        if not (NAME_PATTERN.fullmatch(file.name) or UPDATE_NAME_PATTERN.fullmatch(file.name)) or file.is_symlink() or not file.is_file():
             continue
         stat=file.stat()
         result.append({"name":file.name,"size":stat.st_size,
@@ -143,6 +144,9 @@ def schedule() -> dict:
         for old in auto[keep:]:
             delete_backup(old["name"])
         auto = auto[:keep]
+        updates = [item for item in list_backups() if UPDATE_NAME_PATTERN.fullmatch(item["name"])]
+        for old in updates[keep:]:
+            delete_backup(old["name"])
     except (OSError, ValueError, sqlite3.Error):
         backup_error = True
         logger.exception("Scheduled backup failed")

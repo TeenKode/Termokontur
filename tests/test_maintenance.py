@@ -124,3 +124,19 @@ def test_temperature_alerts_do_not_spam(client):
     settings.update({"alerts_enabled":"0"})
     db.add_reading(r["id"],16,"ha")
     assert max_delivery.queue_temperature_alerts()==0
+
+
+def test_update_backups_visible_downloadable_and_rotated(admin):
+    settings.update({"backup_interval_days": "0", "backup_keep": "1"})
+    original = maintenance.backup_path(maintenance.create_backup()["name"])
+    import os
+    old = original.parent / ("pre-update-20260101T000000Z-" + "a"*40 + ".sqlite3")
+    new = original.parent / ("pre-update-20260102T000000Z-" + "b"*40 + ".sqlite3")
+    old.write_bytes(original.read_bytes())
+    new.write_bytes(original.read_bytes())
+    os.utime(old, (100, 100))
+    os.utime(new, (200, 200))
+    assert admin.get("/api/backups/" + old.name).status_code == 200
+    assert old.name in {x["name"] for x in maintenance.list_backups()}
+    maintenance.schedule()
+    assert not old.exists() and new.exists() and original.exists()
