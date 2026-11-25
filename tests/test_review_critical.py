@@ -92,7 +92,7 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
         "sensors", "backups", "security", "tls", "updates", "calendar", "access"
     }
     assert len(page.views) == len(set(page.views))
-    scripts = js + "\n" + "\n".join((static / name).read_text(encoding="utf-8") for name in ("reports.js", "notifications.js", "updates.js"))
+    scripts = js + "\n" + "\n".join((static / name).read_text(encoding="utf-8") for name in ("reports.js", "notifications.js", "updates.js", "settings.js"))
     assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', scripts)) - set(page.ids))
     for form in (
         "general-settings-form", "reminders-settings-form",
@@ -100,10 +100,10 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
         "max-settings-form", "password-settings-form", "tls-form"
     ):
         assert form in page.ids
-    assert "saveSettingsPatch" in js
-    assert "settingsDirty" in js
-    assert "data-dirty" in js
-    assert "renderSettingsSummary" in js
+    assert "saveSettingsPatch" in scripts
+    assert "settingsDirty" in scripts
+    assert "data-dirty" in scripts
+    assert "renderSettingsSummary" in scripts
     assert "updateAvailable=false" in scripts
     assert "X-Api-Key" in html
 

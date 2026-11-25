@@ -50,6 +50,7 @@ jobs:
           node --check termokontur/static/reports.js
           node --check termokontur/static/notifications.js
           node --check termokontur/static/updates.js
+          node --check termokontur/static/settings.js
           node --check termokontur/static/school-calendar.js
           node --check termokontur/static/building-accounts.js
           node --check termokontur/static/firmware-debug.mjs
