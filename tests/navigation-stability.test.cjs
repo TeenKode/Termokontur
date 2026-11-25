@@ -6,7 +6,7 @@ const fs=require("node:fs");
 const vm=require("node:vm");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
-const source=["reports.js","notifications.js","updates.js","settings.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
+const source=["reports.js","notifications.js","updates.js","settings.js","max-admin.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
 const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
 const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
 
@@ -331,4 +331,17 @@ test("settings save keeps unsaved edits and sends only fields with their origina
   assert.equal(await pending,true);
   assert.equal(form.dataset.dirty,"true");
   assert.equal(vm.runInContext("settingsBaseline.get(form).organization_name",context),"New");
+});
+
+
+test("MAX admin name fallback and CSV formula protection",()=>{
+  const context=vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(root,"termokontur/static/max-admin.js"),"utf8"),context);
+  assert.equal(vm.runInContext('maxUserName({first_name:"Иван",last_name:"Иванов"})',context),"Иван Иванов");
+  assert.equal(vm.runInContext('maxUserName({username:"demo",user_id:"123"})',context),"@demo");
+  assert.equal(vm.runInContext('maxUserName({user_id:"123"})',context),"MAX ID 123");
+  for(const value of ["=1+1","+1","-1","@SUM(A1)","  =2"]){
+    context.value=value;
+    assert.equal(vm.runInContext('csvMaxCell(value)',context),'"\''+value+'"');
+  }
 });

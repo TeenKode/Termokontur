@@ -92,7 +92,7 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
         "sensors", "backups", "security", "tls", "updates", "calendar", "access"
     }
     assert len(page.views) == len(set(page.views))
-    scripts = js + "\n" + "\n".join((static / name).read_text(encoding="utf-8") for name in ("reports.js", "notifications.js", "updates.js", "settings.js"))
+    scripts = js + "\n" + "\n".join((static / name).read_text(encoding="utf-8") for name in ("reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js"))
     assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', scripts)) - set(page.ids))
     for form in (
         "general-settings-form", "reminders-settings-form",
@@ -116,7 +116,7 @@ def test_max_polling_services_use_debian_ca_bundle(admin):
         assert "Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in content
         assert "verify=False" not in content
     html = (root / "termokontur" / "static" / "index.html").read_text(encoding="utf-8")
-    js = (root / "termokontur" / "static" / "app.js").read_text(encoding="utf-8")
+    js = (root / "termokontur" / "static" / "max-admin.js").read_text(encoding="utf-8")
     assert 'id="switch-polling"' in html
     assert 'id="max-webhook-form"' not in html
     assert 'id="activate-webhook"' not in html
