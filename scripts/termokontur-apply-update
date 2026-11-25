@@ -138,7 +138,10 @@ cleanup() {
     set +e
     if (( SWAPPED )); then
       # Restoring SQLite while a new writer is still running is unsafe.
-      if ! systemctl stop termokontur-max.service || ! systemctl stop termokontur.service; then
+      local stop_failed=0
+      systemctl stop termokontur-max.service || stop_failed=1
+      systemctl stop termokontur.service || stop_failed=1
+      if (( stop_failed )); then
         echo "ERROR: cannot stop writers for rollback; backups retained" >&2
         rollback_failed=1
       else
@@ -156,10 +159,15 @@ cleanup() {
           systemctl daemon-reload || rollback_failed=1
         fi
         if [[ -d "$APP" && -d "$PREV" ]]; then
-          mv "$APP" "/opt/termokontur-failed-$" || rollback_failed=1
+          local failed_dir
+          if failed_dir=$(mktemp -d /opt/termokontur-failed.XXXXXXXX); then
+            mv -T -- "$APP" "$failed_dir/app" || rollback_failed=1
+          else
+            rollback_failed=1
+          fi
         fi
-        if [[ -d "$PREV" ]]; then
-          mv "$PREV" "$APP" || rollback_failed=1
+        if [[ -d "$PREV" && ! -e "$APP" ]]; then
+          mv -T -- "$PREV" "$APP" || rollback_failed=1
         else
           rollback_failed=1
         fi

@@ -207,6 +207,8 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/readings | grep -q '23.5'
+# A failed installation is kept in an isolated directory, never nested inside the previous app.
+test "$(find /opt -maxdepth 2 -path '/opt/termokontur-failed.*/app' -type d | wc -l)" -ge 1
 # Also exercise failure after the privileged updater and revision are replaced.
 echo "Testing rollback of privileged updater and revision after final status failure"
 cp /usr/local/sbin/termokontur-apply-update /tmp/updater-before
@@ -223,6 +225,7 @@ cmp /tmp/updater-before /usr/local/sbin/termokontur-apply-update
 cmp /tmp/revision-before /var/lib/termokontur/installed-revision
 curl --silent --show-error --fail http://127.0.0.1:8092/health
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/readings | grep -q '23.5'
+test "$(find /opt -maxdepth 2 -path '/opt/termokontur-failed.*/app' -type d | wc -l)" -ge 2
 # If restoring SQLite fails, leave the writers stopped and report an
 # incomplete rollback rather than claiming that the old version is healthy.
 runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
