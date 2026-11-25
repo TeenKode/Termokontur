@@ -187,7 +187,7 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert checked.json()["available"]
     first = admin.post("/api/update/request", json={})
     assert first.status_code == 200
-    assert (db.db_path().parent/"update-request").read_text().strip() == "main"
+    assert (db.db_path().parent/"update-request").read_text().strip() == "stable"
     assert admin.post("/api/update/request", json={}).status_code == 409
     assert admin.get("/api/update/status").json()["state"] == "queued"
 
@@ -285,9 +285,9 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     expected = sha256(b"".join(
         (static / name).read_bytes() for name in (
-            "app.js", "charts.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
-            "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
-            "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
+            "app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+            "sensor-usb.mjs", "firmware-debug.mjs", "firmware-test.mjs", "sensor-log.mjs",
+            "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png",
         )
     )).hexdigest()[:16]
     assert _ASSET_FINGERPRINT == expected
@@ -297,15 +297,35 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert "__ASSET_FINGERPRINT__" not in page.text
     assert f'/static/app.js?v={expected}' in page.text
     assert f'/static/charts.js?v={expected}' in page.text
-    assert f'/static/style.css?v={expected}' in page.text
+    assert f'/static/reports.js?v={expected}' in page.text
+    assert page.text.index('/static/reports.js?') < page.text.index('/static/app.js?')
+    assert f'/static/notifications.js?v={expected}' in page.text
+    assert page.text.index('/static/notifications.js?') < page.text.index('/static/app.js?')
+    assert f'/static/updates.js?v={expected}' in page.text
+    assert page.text.index('/static/updates.js?') < page.text.index('/static/app.js?')
+    assert f'/static/settings.js?v={expected}' in page.text
+    assert page.text.index('/static/settings.js?') < page.text.index('/static/app.js?')
+    assert f'/static/max-admin.js?v={expected}' in page.text
+    assert page.text.index('/static/max-admin.js?') < page.text.index('/static/app.js?')
+    styles = ("style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css",)
+    for i, name in enumerate(styles):
+        assert f'/static/{name}?v={expected}' in page.text
+        if i:
+            assert page.text.index(f'/static/{styles[i-1]}?') < page.text.index(f'/static/{name}?')
+    # The authenticated debug page is checked separately; its template must
+    # declare exactly the same stylesheet sequence as the main panel.
+    import re
+    template = (static.parent / "firmware-debug.html").read_text()
+    assert re.findall(r'<link rel="stylesheet" href="/static/([^?]+)\?', template) == list(styles)
+    assert re.findall(r'<link rel="stylesheet" href="/static/([^?]+)\?', page.text) == list(styles)
     assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "charts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
+    for filename in ("app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "firmware-test.mjs", "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"
 
-    js = client.get(f"/static/app.js?v={expected}").text
+    js = client.get(f"/static/updates.js?v={expected}").text
     assert '"update-current-version"' in js
     assert '"update-version"' not in js
     assert 'id="update-current-version"' in page.text

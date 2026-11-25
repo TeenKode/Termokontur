@@ -45,7 +45,7 @@ def test_updater_is_not_broken_by_literal_escaped_newline():
 def test_updater_ui_contains_accessible_state_and_version_fields():
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     html = (static / "index.html").read_text(encoding="utf-8")
-    js = (static / "app.js").read_text(encoding="utf-8")
+    js = (static / "updates.js").read_text(encoding="utf-8")
     for element_id in (
         "update-current-version", "update-current-build",
         "update-latest-version", "update-latest-build",
@@ -92,18 +92,19 @@ def test_settings_workspace_has_unique_ids_and_working_category_targets():
         "sensors", "backups", "security", "tls", "updates", "calendar", "access"
     }
     assert len(page.views) == len(set(page.views))
-    assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', js)) - set(page.ids))
+    scripts = js + "\n" + "\n".join((static / name).read_text(encoding="utf-8") for name in ("reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js"))
+    assert not (set(re.findall(r'\$\("([a-zA-Z0-9-]+)"\)', scripts)) - set(page.ids))
     for form in (
         "general-settings-form", "reminders-settings-form",
         "alerts-settings-form", "maintenance-form",
         "max-settings-form", "password-settings-form", "tls-form"
     ):
         assert form in page.ids
-    assert "saveSettingsPatch" in js
-    assert "settingsDirty" in js
-    assert "data-dirty" in js
-    assert "renderSettingsSummary" in js
-    assert "updateAvailable=false" in js
+    assert "saveSettingsPatch" in scripts
+    assert "settingsDirty" in scripts
+    assert "data-dirty" in scripts
+    assert "renderSettingsSummary" in scripts
+    assert "updateAvailable=false" in scripts
     assert "X-Api-Key" in html
 
 
@@ -115,7 +116,7 @@ def test_max_polling_services_use_debian_ca_bundle(admin):
         assert "Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in content
         assert "verify=False" not in content
     html = (root / "termokontur" / "static" / "index.html").read_text(encoding="utf-8")
-    js = (root / "termokontur" / "static" / "app.js").read_text(encoding="utf-8")
+    js = (root / "termokontur" / "static" / "max-admin.js").read_text(encoding="utf-8")
     assert 'id="switch-polling"' in html
     assert 'id="max-webhook-form"' not in html
     assert 'id="activate-webhook"' not in html
@@ -123,3 +124,21 @@ def test_max_polling_services_use_debian_ca_bundle(admin):
     db.set_state("max_poll_last_error", "test connection error")
     assert admin.get("/api/max/diagnostics").json()["poll_last_error"] == "test connection error"
     assert "tls_certificate" in js
+
+
+def test_release_pointer_advances_only_after_firmware_publication():
+    from termokontur import updates
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/sensors.yml").read_text()
+    assert updates.GITHUB_HEAD.endswith("/commits/stable")
+    assert workflow.index("Wait for server Test workflow on the exact release commit") < workflow.index("Publish versioned firmware bundle") < workflow.index("Publish panel only after firmware is available")
+    assert 'head_sha=$GITHUB_SHA&event=push' in workflow
+    assert 'test "$conclusion" = success' in workflow
+    assert 'gh release download "firmware-v$VERSION"' in workflow
+    assert 'cmp "$download_dir/termokontur-firmware.zip" termokontur-firmware.zip' in workflow
+    assert "needs: [firmware, browser, bundle-browser]" in workflow
+    assert 'git push origin "$GITHUB_SHA:refs/heads/stable"' in workflow
+    updater = (root / "scripts/termokontur-apply-update").read_text()
+    assert "--branch stable" in updater
+    assert updater.index("sensor_firmware._store_release(data)") < updater.rindex("systemctl stop termokontur.service")
+    assert "bundle.factory.source_commit != sys.argv[1]" in updater

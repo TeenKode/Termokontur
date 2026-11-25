@@ -37,6 +37,14 @@ inline int64_t sample_epoch(int64_t server_now, int64_t sampled_us, int64_t now_
   const auto epoch = server_now - (now_us - sampled_us) / 1000000;
   return epoch >= 1700000000 ? epoch : 0;
 }
+// Radio deadlines belong to the RTC-retained monotonic uptime, never UTC.
+// A failed bootstrap must not bypass the retry window on each measurement.
+inline bool radio_due(bool debug, uint64_t uptime, uint64_t next_send) {
+  return debug || next_send == 0 || uptime >= next_send;
+}
+inline uint64_t radio_next_send(uint64_t uptime, uint32_t delay) {
+  return uptime + std::max<uint32_t>(1, delay);
+}
 // The optional Wi-Fi threshold can be disabled (0), but never bypass the
 // configured battery cutoff when operating from a battery.
 inline bool battery_wifi_allowed(uint16_t mv, uint32_t cutoff, uint32_t wifi_min) {

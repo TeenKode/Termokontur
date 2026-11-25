@@ -170,7 +170,7 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
     with db.connect() as conn:
         # Serialize readers and writers for the whole room/day. Two employees
         # pressing «Send» concurrently must not create two MAX readings.
-        conn.execute("BEGIN IMMEDIATE")
+        db.begin(conn, immediate=True)
         bound = conn.execute("""
             SELECT 1 FROM max_bindings b JOIN rooms r ON r.id=b.room_id
             WHERE b.user_id=? AND b.room_id=? AND r.active=1

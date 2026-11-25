@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 
@@ -45,9 +46,11 @@ def _revoke(cookie: str) -> None:
 
 def authenticated(request: Request) -> bool:
     cookie = request.cookies.get("tk_session", "")
+    if len(cookie) > 256 or not cookie.isascii():
+        return False
     try:
         expires, nonce, mac = cookie.split(":", 2)
-        if int(expires) <= time.time() or len(nonce) < 12:
+        if int(expires) <= time.time() or len(nonce) < 12 or not re.fullmatch(r"[0-9a-f]{64}", mac):
             return False
         return hmac.compare_digest(
             mac, signature(f"{expires}:{nonce}:{auth.session_epoch()}")
@@ -58,11 +61,13 @@ def authenticated(request: Request) -> bool:
 
 def _building_session(request: Request) -> dict | None:
     cookie = request.cookies.get("tk_session", "")
-    if not cookie.startswith("v:") or len(cookie) > 256:
+    if not cookie.startswith("v:") or len(cookie) > 256 or not cookie.isascii():
         return None
     try:
         _, username, expires, nonce, mac = cookie.split(":")
-        if int(expires) <= time.time() or len(nonce) < 12:
+        if (int(expires) <= time.time() or len(nonce) < 12
+                or not re.fullmatch(r"[a-z][a-z0-9_.-]{2,31}", username)
+                or not re.fullmatch(r"[0-9a-f]{64}", mac)):
             return None
     except ValueError:
         return None
@@ -111,7 +116,7 @@ def scope_building(requested: str, allowed: str) -> str:
 
 
 class Login(BaseModel):
-    password: str
+    password: str = Field(max_length=auth.MAX_AUTH_PASSWORD_LENGTH)
     username: str = Field(default="", max_length=32)
 
 
@@ -122,7 +127,7 @@ class BuildingAccountIn(BaseModel):
 
 
 class PasswordIn(BaseModel):
-    current_password: str
+    current_password: str = Field(max_length=auth.MAX_AUTH_PASSWORD_LENGTH)
     new_password: str = Field(min_length=8, max_length=256)
 
 

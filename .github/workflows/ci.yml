@@ -47,10 +47,16 @@ jobs:
           bash -n scripts/install-debian.sh scripts/termokontur-apply-update
           node --check termokontur/static/app.js
           node --check termokontur/static/charts.js
+          node --check termokontur/static/reports.js
+          node --check termokontur/static/notifications.js
+          node --check termokontur/static/updates.js
+          node --check termokontur/static/settings.js
+          node --check termokontur/static/max-admin.js
           node --check termokontur/static/school-calendar.js
           node --check termokontur/static/building-accounts.js
           node --check termokontur/static/firmware-debug.mjs
-          node --test tests/navigation-stability.test.cjs tests/theme.test.cjs tests/sensor-usb.test.cjs
+          node --check termokontur/static/firmware-test.mjs
+          node --test tests/navigation-stability.test.cjs tests/theme.test.cjs tests/sensor-usb.test.cjs tests/firmware-test.test.cjs
       - name: Test
         run: python -m pytest -q
 

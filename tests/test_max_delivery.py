@@ -349,3 +349,48 @@ def test_max_menu_order_does_not_block_other_users(client):
     with db.connect() as conn:
         conn.execute("UPDATE max_outbox SET next_retry_at='2000-01-01T00:00:00+00:00'")
     assert [x["event_id"] for x in max_delivery.pending()] == [x["event_id"] for x in initial]
+
+
+def test_command_and_reply_are_atomic_even_after_effect(client, monkeypatch):
+    from termokontur import max_ui
+    import pytest
+    room = db.create_room("Корпус", "1", "101", "Кабинет", 18, 24)
+    code = db.issue_code(room["id"])
+    original = max_ui.keyboard
+    def broken(_uid):
+        raise RuntimeError("failure after command, before reply commit")
+    monkeypatch.setattr(max_ui, "keyboard", broken)
+    update = message("atomic-bind", value="/bind " + code)
+    with pytest.raises(RuntimeError):
+        max_delivery.enqueue(update)
+    assert not db.bound_rooms("123")
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM max_inbox").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM max_outbox").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM pairing_codes").fetchone()[0] == 1
+    monkeypatch.setattr(max_ui, "keyboard", original)
+    assert max_delivery.enqueue(update)
+    assert not max_delivery.enqueue(update)
+    assert len(db.bound_rooms("123")) == 1
+
+    update = message("atomic-reading", value="/temp 21,5")
+    monkeypatch.setattr(max_ui, "keyboard", broken)
+    with pytest.raises(RuntimeError):
+        max_delivery.enqueue(update)
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM readings WHERE source='max'").fetchone()[0] == 0
+    monkeypatch.setattr(max_ui, "keyboard", original)
+    assert max_delivery.enqueue(update)
+    assert not max_delivery.enqueue(update)
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM readings WHERE source='max'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM max_outbox").fetchone()[0] == 2
+
+
+def test_concurrent_duplicate_command_commits_once(client):
+    from concurrent.futures import ThreadPoolExecutor
+    update = message("concurrent-atomic")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(max_delivery.enqueue, [update] * 8))
+    assert results.count(True) == 1
+    assert len(max_delivery.pending()) == 1

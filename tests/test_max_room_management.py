@@ -128,7 +128,7 @@ def test_active_codes_are_only_metadata_and_can_be_revoked(admin, client):
 def test_room_template_exposes_max_management_controls():
     from pathlib import Path
     html = (Path(__file__).resolve().parents[1] / "termokontur/static/index.html").read_text()
-    js = (Path(__file__).resolve().parents[1] / "termokontur/static/app.js").read_text()
+    js = (Path(__file__).resolve().parents[1] / "termokontur/static/max-admin.js").read_text()
     for element in ("max-codes-issued", "max-active-codes-list", "max-codes-unbound",
                     "max-codes-no-code", "max-codes-download-issued", "max-codes-copy-all"):
         assert f'id="{element}"' in html

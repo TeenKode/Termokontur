@@ -1,0 +1,7 @@
+/* MAX daily-reading audit: immutable author/correction sequence in the journal. */
+.reading-history-list{display:grid;gap:10px;max-height:55vh;overflow:auto}
+.reading-history-item{display:grid;gap:5px;border:1px solid var(--border,#dbe5ea);border-radius:10px;padding:12px 14px}
+.reading-history-item strong{font-size:14px;overflow-wrap:anywhere}
+.reading-history-item small{color:var(--text-muted);font-size:12px;overflow-wrap:anywhere}
+#readings-table td:nth-last-child(-n+2){white-space:normal}
+

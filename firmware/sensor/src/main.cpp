@@ -2,15 +2,9 @@
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
-#include "bootloader_random.h"
-#include "mbedtls/ecdsa.h"
-#include "mbedtls/platform_util.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <mutex>
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
-#include "esp_adc/adc_oneshot.h"
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
 #include "esp_crt_bundle.h"
@@ -33,6 +27,11 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "journal.hpp"
+#include "device_config.hpp"
+#include "nvs_store.hpp"
+#include "device_identity.hpp"
+#include "battery.hpp"
+#include "partition_flash.hpp"
 #include "mbedtls/sha256.h"
 #include "mbedtls/x509.h"
 #include "nvs.h"
@@ -51,6 +50,10 @@
 #include <vector>
 
 using sensor::Record;
+using sensor::Config;
+using sensor::State;
+using sensor::PartitionFlash;
+using sensor::valid_config;
 static constexpr gpio_num_t CHARGE_PIN = GPIO_NUM_4;
 static constexpr gpio_num_t BOOT_PIN = GPIO_NUM_9;
 static constexpr uint32_t BOOT_DEBUG_WINDOW_S = 300;
@@ -63,20 +66,6 @@ static EventGroupHandle_t events;
 static esp_netif_t *ap_netif = nullptr, *sta_netif = nullptr;
 static int64_t deadline = 0;
 static std::string last_error;
-struct Config {
-  uint32_t version = 1, measure_s = 1800, send_s = 86400, cool_s = 1800,
-           wifi_budget_s = 45;
-  uint32_t wifi_min_mv = 0, cutoff_mv = 3300, ota_min_mv = 3600,
-           tx_qdbm = 34, adc_scale_ppm = 2000000;
-  bool enabled = true;
-};
-struct State {
-  uint64_t next = 1, ack = 1, lost_base = 0;
-  uint32_t boots = 0, ota_failures = 0, ota_generation = 0;
-  int64_t saved_time = 0;
-};
-static mbedtls_ecdsa_context identity_key;
-static std::string identity_public, identity_fingerprint;
 static Config cfg;
 static State state;
 static std::string ssid, password, server, device, code, token, ca,
@@ -84,7 +73,8 @@ static std::string ssid, password, server, device, code, token, ca,
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
-  int64_t next_send, cool_until, sleep_started_us;
+  uint64_t next_send_uptime;
+  int64_t cool_until, sleep_started_us;
   uint32_t failures;
   bool charging;
   bool clock_valid;
@@ -93,11 +83,14 @@ struct Runtime {
   uint32_t crc;
 };
 RTC_DATA_ATTR static Runtime rt;
-static constexpr uint32_t RTC_MAGIC = 0x544b5234;
+static constexpr uint32_t RTC_MAGIC = 0x544b5235;
 static int64_t wall_time_us() {
   timeval tv{};
   gettimeofday(&tv, nullptr);
   return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
+static uint64_t uptime_now() {
+  return rt.uptime + esp_timer_get_time() / 1000000;
 }
 static bool charging() { return gpio_get_level(CHARGE_PIN) == 0; }
 static bool usb_host_for_setup(bool after_reset) {
@@ -138,97 +131,13 @@ static std::string hex64(uint64_t v) {
   return b;
 }
 
-// NVS blob CRC and schema guard. Never silently erase corrupt state or reset
-// seq.
 static bool save_blob(const char *key, const void *p, size_t n) {
-  std::vector<uint8_t> b(n + 8);
-  uint32_t ver = 1, crc = sensor::crc32(p, n);
-  memcpy(b.data(), &ver, 4);
-  memcpy(b.data() + 4, &crc, 4);
-  memcpy(b.data() + 8, p, n);
-  return nvs_set_blob(nv, key, b.data(), b.size()) == ESP_OK &&
-         nvs_commit(nv) == ESP_OK;
+  return sensor::save_blob(nv, key, p, n);
 }
 static int load_blob(const char *key, void *p, size_t n) {
-  size_t len = 0;
-  auto e = nvs_get_blob(nv, key, nullptr, &len);
-  if (e == ESP_ERR_NVS_NOT_FOUND)
-    return 0;
-  if (e != ESP_OK || len != n + 8)
-    return -1;
-  std::vector<uint8_t> b(len);
-  if (nvs_get_blob(nv, key, b.data(), &len) != ESP_OK)
-    return -1;
-  uint32_t ver, crc;
-  memcpy(&ver, b.data(), 4);
-  memcpy(&crc, b.data() + 4, 4);
-  if (ver != 1 || crc != sensor::crc32(b.data() + 8, n))
-    return -1;
-  memcpy(p, b.data() + 8, n);
-  return 1;
+  return sensor::load_blob(nv, key, p, n);
 }
 static bool save_state() { return save_blob("state", &state, sizeof state); }
-static bool valid_config(const Config &c) {
-  return c.version && c.version <= 2147483647 && c.measure_s >= 1 &&
-         c.measure_s <= 604800 && c.send_s >= 1 && c.send_s <= 604800 &&
-         c.cool_s <= 86400 && c.wifi_budget_s >= 1 && c.wifi_budget_s <= 600 &&
-         c.cutoff_mv >= 3000 && c.cutoff_mv <= 4200 &&
-         (c.wifi_min_mv == 0 || (c.wifi_min_mv >= c.cutoff_mv && c.wifi_min_mv <= 4200)) &&
-         c.ota_min_mv >= std::max<uint32_t>(3300, c.cutoff_mv) &&
-         c.ota_min_mv <= 4200 && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
-         c.adc_scale_ppm >= 1600000 && c.adc_scale_ppm <= 2400000;
-}
-static int identity_rng(void *, unsigned char *out, size_t size) {
-  esp_fill_random(out, size);
-  return 0;
-}
-static std::string bytes_hex(const uint8_t *data, size_t size) {
-  static const char hex[] = "0123456789abcdef";
-  std::string out(size * 2, '0');
-  for (size_t i = 0; i < size; ++i) {
-    out[2*i] = hex[data[i] >> 4]; out[2*i+1] = hex[data[i] & 15];
-  }
-  return out;
-}
-static std::string hardware_id() {
-  uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  return bytes_hex(mac, sizeof mac);
-}
-static bool identity_init() {
-  mbedtls_ecdsa_init(&identity_key);
-  uint8_t secret[32] = {}, pub[65], hash[32];
-  int loaded = load_blob("identity", secret, sizeof secret);
-  if (loaded < 0) return false; // Never replace a corrupt key silently.
-  // Enable hardware entropy before RF/ADC start; disable it before battery ADC use.
-  bootloader_random_enable();
-  int err;
-  size_t len = 0;
-  if (!loaded) {
-    err = mbedtls_ecdsa_genkey(&identity_key, MBEDTLS_ECP_DP_SECP256R1, identity_rng, nullptr);
-    if (!err) err = mbedtls_ecp_write_key_ext(&identity_key, &len, secret, sizeof secret);
-    if (!err && (len != sizeof secret || !save_blob("identity", secret, sizeof secret))) err = -1;
-  } else {
-    err = mbedtls_ecp_read_key(MBEDTLS_ECP_DP_SECP256R1, &identity_key, secret, sizeof secret);
-    if (!err) err = mbedtls_ecp_keypair_calc_public(&identity_key, identity_rng, nullptr);
-  }
-  bootloader_random_disable();
-  mbedtls_platform_zeroize(secret, sizeof secret);
-  if (!err) err = mbedtls_ecp_write_public_key(&identity_key, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, pub, sizeof pub);
-  if (err || len != sizeof pub || mbedtls_sha256(pub, sizeof pub, hash, 0)) return false;
-  identity_public = bytes_hex(pub, sizeof pub);
-  identity_fingerprint = bytes_hex(hash, sizeof hash);
-  return true;
-}
-static std::string identity_sign(const std::string &message) {
-  if (message.rfind("TK-AUTH-1\n", 0) || message.size() > 400 ||
-      message.find("\n" + identity_fingerprint + "\n" + hardware_id() + "\n") == std::string::npos)
-    return "";
-  uint8_t hash[32], signature[MBEDTLS_ECDSA_MAX_LEN]; size_t len = 0;
-  if (mbedtls_sha256((const uint8_t *)message.data(), message.size(), hash, 0) ||
-      mbedtls_ecdsa_write_signature(&identity_key, MBEDTLS_MD_SHA256, hash, sizeof hash,
-                                    signature, sizeof signature, &len, identity_rng, nullptr)) return "";
-  return bytes_hex(signature, len);
-}
 static std::string provision_json() {
   cJSON *j = cJSON_CreateObject();
   add(j, "ssid", ssid);
@@ -309,22 +218,8 @@ static bool load_provision() {
   }
   return sensor::supported(sensor_type.c_str()) && !ssid.empty() && server.rfind("https://", 0) == 0 &&
          ((device.size() == 19 && (!code.empty() || !token.empty())) ||
-          (code.empty() && !identity_public.empty()));
+          (code.empty() && !sensor::identity::public_key().empty()));
 }
-struct PartitionFlash : sensor::Flash {
-  const esp_partition_t *p;
-  explicit PartitionFlash(const esp_partition_t *q) : p(q) {}
-  size_t size() const override { return p->size; }
-  bool read(size_t o, void *b, size_t n) override {
-    return esp_partition_read(p, o, b, n) == ESP_OK;
-  }
-  bool write(size_t o, const void *b, size_t n) override {
-    return esp_partition_write(p, o, b, n) == ESP_OK;
-  }
-  bool erase(size_t o, size_t n) override {
-    return esp_partition_erase_range(p, o, n) == ESP_OK;
-  }
-};
 static void stop_network() {
   if (net_started) {
     esp_wifi_stop();
@@ -672,40 +567,7 @@ static bool sync_time() {
   return true;
 }
 static uint16_t battery_mv() {
-  adc_oneshot_unit_handle_t adc;
-  adc_oneshot_unit_init_cfg_t u{};
-  u.unit_id = ADC_UNIT_1;
-  if (adc_oneshot_new_unit(&u, &adc) != ESP_OK)
-    return 0;
-  adc_oneshot_chan_cfg_t ch{};
-  ch.atten = ADC_ATTEN_DB_12;
-  ch.bitwidth = ADC_BITWIDTH_DEFAULT;
-  adc_oneshot_config_channel(adc, ADC_CHANNEL_3, &ch);
-  adc_cali_handle_t cal = nullptr;
-  adc_cali_curve_fitting_config_t c{};
-  c.unit_id = ADC_UNIT_1;
-  c.chan = ADC_CHANNEL_3;
-  c.atten = ch.atten;
-  c.bitwidth = ch.bitwidth;
-  if (adc_cali_create_scheme_curve_fitting(&c, &cal) != ESP_OK) {
-    adc_oneshot_del_unit(adc);
-    last_error = "adc_calibration_failed";
-    return 0;
-  }
-  int total = 0;
-  bool ok = true;
-  for (int i = 0; i < 16; i++) {
-    int raw, mv;
-    if (adc_oneshot_read(adc, ADC_CHANNEL_3, &raw) != ESP_OK ||
-        adc_cali_raw_to_voltage(cal, raw, &mv) != ESP_OK) {
-      ok = false;
-      break;
-    }
-    total += mv;
-  }
-  adc_cali_delete_scheme_curve_fitting(cal);
-  adc_oneshot_del_unit(adc);
-  return ok ? (uint64_t)(total / 16) * cfg.adc_scale_ppm / 1000000 : 0;
+  return sensor::measure_battery_mv(cfg.adc_scale_ppm, last_error);
 }
 static bool sensor_read(Record &r, unsigned *attempts = nullptr) {
   return sensor::read_sensor_retry(sensor_type.c_str(), r, [] { return charging(); }, attempts);
@@ -752,8 +614,8 @@ static bool config_from(cJSON *j, bool local = false) {
 }
 static cJSON *identity_payload() {
   auto *j = cJSON_CreateObject();
-  add(j, "public_key", identity_public);
-  add(j, "hardware_id", hardware_id());
+  add(j, "public_key", sensor::identity::public_key());
+  add(j, "hardware_id", sensor::identity::hardware_id());
   add(j, "sensor_type", sensor_type);
   add(j, "firmware", firmware_version());
   return j;
@@ -765,10 +627,10 @@ static bool identity_authenticate() {
   j = cJSON_Parse(response.c_str());
   auto challenge = text(j, "challenge"), message = text(j, "message");
   cJSON_Delete(j);
-  auto expected = "TK-AUTH-1\n" + challenge + "\n" + identity_fingerprint + "\n" +
-                  hardware_id() + "\n" + sensor_type + "\n" + firmware_version();
+  auto expected = "TK-AUTH-1\n" + challenge + "\n" + sensor::identity::fingerprint() + "\n" +
+                  sensor::identity::hardware_id() + "\n" + sensor_type + "\n" + firmware_version();
   if (challenge.size() != 64 || message != expected) return false;
-  auto signature = identity_sign(message);
+  auto signature = sensor::identity::sign(message);
   if (signature.empty()) return false;
   j = identity_payload(); add(j, "challenge", challenge); add(j, "signature", signature);
   if (!factory_ticket.empty()) add(j, "setup_ticket", factory_ticket);
@@ -1134,7 +996,7 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
                ((id.empty() && key.empty()) || (id.size() == 19 && id.rfind("tk-", 0) == 0 &&
                  (key.empty() || (key.size() >= 32 && key.size() <= 100)))) && root.size() <= 8000 && epoch >= 1700000000 && epoch <= 4102444800;
   if (!valid) return "Проверьте поля и получение времени сервера.";
-  if (factory && (text(j,"hardware_id") != hardware_id() || text(j,"factory_ticket").size() != 64 || !id.empty() || !key.empty()))
+  if (factory && (text(j,"hardware_id") != sensor::identity::hardware_id() || text(j,"factory_ticket").size() != 64 || !id.empty() || !key.empty()))
     return "Invalid factory authorization";
   if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
   if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
@@ -1238,8 +1100,8 @@ static void usb_setup_task(void *) {
           add(out,"id",text(j,"id"));
           auto cmd=text(j,"cmd");
           if (cmd == "hello") {
-            num(out,"protocol",1); add(out,"public_key",identity_public);
-            add(out,"fingerprint",identity_fingerprint); add(out,"hardware_id",hardware_id());
+            num(out,"protocol",1); add(out,"public_key",sensor::identity::public_key());
+            add(out,"fingerprint",sensor::identity::fingerprint()); add(out,"hardware_id",sensor::identity::hardware_id());
             add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
             cJSON_AddBoolToObject(out,"verified_setup",true);
@@ -1251,7 +1113,7 @@ static void usb_setup_task(void *) {
           } else if (cmd == "test_measurement") {
             usb_test_measurement(out);
           } else if (cmd == "sign") {
-            auto signature=identity_sign(text(j,"message"));
+            auto signature=sensor::identity::sign(text(j,"message"));
             if (signature.empty()) add(out,"error","Не удалось подтвердить плату. Повторите подключение.");
             else add(out,"signature",signature);
           } else if (cmd == "configure") {
@@ -1445,7 +1307,7 @@ extern "C" void app_main() {
   }
   if (nvs_open("sensor", NVS_READWRITE, &nv) != ESP_OK)
     sleep_for(3600);
-  if (!identity_init()) { printf("Identity invalid; preserve NVS\n"); sleep_for(3600); }
+  if (!sensor::identity::init(nv)) { printf("Identity invalid; preserve NVS\n"); sleep_for(3600); }
   int loaded = load_blob("state", &state, sizeof state);
   if (loaded < 0) {
     printf("State CRC/schema invalid; preserve Flash\n");
@@ -1518,23 +1380,6 @@ extern "C" void app_main() {
     timeval tv{(time_t)state.saved_time, 0};
     settimeofday(&tv, nullptr);
   }
-  const auto *part = esp_partition_find_first(
-      ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
-  if (!part)
-    sleep_for(3600);
-  PartitionFlash flash(part);
-  sensor::Journal journal(flash);
-  if (!journal.scan()) {
-    printf("Journal read/corruption error\n");
-    sleep_for(3600);
-  }
-  if (!journal.entries().empty() &&
-      journal.entries().back().seq >= state.next) {
-    printf("NVS sequence behind journal; preserve data\n");
-    sleep_for(3600);
-  }
-  if (state.ack > state.next || state.next > 9007199254740000ULL)
-    sleep_for(3600);
   vTaskDelay(pdMS_TO_TICKS(500));
   uint16_t mv = battery_mv();
   // An explicitly armed BOOT test on a connected USB host is externally
@@ -1561,6 +1406,23 @@ extern "C" void app_main() {
     rt.charging = true;
     sleep_for(cfg.measure_s);
   }
+  const auto *part = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
+  if (!part)
+    sleep_for(3600);
+  PartitionFlash flash(part);
+  sensor::Journal journal(flash);
+  if (!journal.scan()) {
+    printf("Journal read/corruption error\n");
+    sleep_for(3600);
+  }
+  if (!journal.entries().empty() &&
+      journal.entries().back().seq >= state.next) {
+    printf("NVS sequence behind journal; preserve data\n");
+    sleep_for(3600);
+  }
+  if (state.ack > state.next || state.next > 9007199254740000ULL)
+    sleep_for(3600);
   state.boots++;
   if (!save_state())
     sleep_for(3600);
@@ -1578,7 +1440,7 @@ extern "C" void app_main() {
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
-      boot_debug || (cfg.enabled && rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
+      boot_debug || (cfg.enabled && (pending || uptime_now() >= rt.next_measure));
   const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
   // Measure before any station connection, even after a cold boot. The
@@ -1612,7 +1474,8 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool bootstrap_after_sample = sensor::needs_bootstrap_after_sample(
+  const bool send_due = sensor::radio_due(boot_debug, uptime_now(), rt.next_send_uptime);
+  const bool bootstrap_after_sample = send_due && sensor::needs_bootstrap_after_sample(
       measurement.quality != 0, measured, wifi_allowed, usb_without_battery);
   bool time_prepared = false;
   if (bootstrap_after_sample && !charging()) {
@@ -1652,25 +1515,21 @@ extern "C" void app_main() {
     }
     rt.pending = false;
   }
-  auto now = time(nullptr);
-  const bool factory_pending = !factory_ticket.empty();
-  if ((boot_debug || factory_pending || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed && !charging()) {
+  if (send_due && wifi_allowed && !charging()) {
     if (!bootstrap_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     // Reuse the time connection; if it failed, retry at the next wake.
     bool ok = (!bootstrap_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
-    now = time(nullptr);
     if (ok) {
       rt.failures = 0;
-      rt.next_send =
-          now + (state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s)
-                                        : cfg.send_s);
+      rt.next_send_uptime = sensor::radio_next_send(uptime_now(),
+          state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s);
     } else {
       uint32_t backoff = (last_error == "authorization_pending" || !factory_ticket.empty()) ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
-      rt.failures++;
-      rt.next_send = now + backoff;
+      if (rt.failures < 4) rt.failures++;
+      rt.next_send_uptime = sensor::radio_next_send(uptime_now(), backoff);
     }
   } else if (bootstrap_after_sample) {
     stop_network();
@@ -1689,11 +1548,11 @@ extern "C" void app_main() {
   }
   if (charging())
     rt.charging = true;
-  auto remaining = (int64_t)rt.next_measure - (int64_t)rt.uptime -
-                   esp_timer_get_time() / 1000000;
+  const auto uptime = uptime_now();
+  auto remaining = (int64_t)rt.next_measure - (int64_t)uptime;
   // A send interval shorter than the sampling interval must wake the device
   // for its independent radio deadline, without forcing another sample.
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
-      wifi_allowed && time_quality != 0, rt.next_send, time(nullptr));
-  sleep_for((last_error == "authorization_pending" || !factory_ticket.empty()) ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
+      wifi_allowed, rt.next_send_uptime, uptime);
+  sleep_for(sleep_s);
 }

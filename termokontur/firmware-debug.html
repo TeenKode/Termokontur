@@ -8,6 +8,18 @@
   <link rel="icon" href="/static/icon-32.png?v=__ASSET_FINGERPRINT__">
   <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/max-pairing.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/maintenance.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/feedback.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/overview.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/theme.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/overview-history.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/notifications.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/reading-history.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/sensors.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/max-staff.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/reports.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/charts.css?v=__ASSET_FINGERPRINT__">
   <script type="module" src="/static/firmware-debug.mjs?v=__ASSET_FINGERPRINT__"></script>
 </head>
 <body>
@@ -61,6 +73,21 @@
         <p class="hint">Подключитесь к этой сети и откройте http://192.168.4.1 на том же устройстве.</p>
       </div>
       <p id="debug-result" class="hint" role="status"></p>
+    </section>
+
+    <section class="panel firmware-debug-panel">
+      <h2>Приёмочный тест датчика</h2>
+      <p class="hint">Без изменения настроек: проверка USB, версии и 5 пробных замеров. Для сети, аккумулятора и OTA предусмотрены отдельные ручные шаги.</p>
+      <div class="heading-actions">
+        <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
+        <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
+        <button type="button" id="debug-test-report" class="btn secondary" disabled>Скачать отчёт JSON</button>
+      </div>
+      <p id="debug-test-state" role="status">Тест ещё не запускался.</p>
+      <div id="debug-test-results"></div>
+      <h3>Проверки на реальном оборудовании</h3>
+      <p class="hint">Проводите на отдельном тестовом датчике, не на действующем кабинете. Отмечайте фактический результат; непроверенные шаги не считаются успешными.</p>
+      <div id="debug-test-manual" class="firmware-test-manual"></div>
     </section>
 
     <section class="panel firmware-debug-panel">

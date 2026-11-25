@@ -42,23 +42,43 @@ def backup_path(name: str) -> Path:
         raise ValueError("Резервная копия не найдена")
     return target
 
+def _table_constraints(conn: sqlite3.Connection, table: str) -> tuple:
+    columns = list(conn.execute("SELECT * FROM pragma_table_info(?)", (table,)))
+    primary = tuple(row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5])
+    required = frozenset(row[1] for row in columns if row[3])
+    unique = set()
+    for index in conn.execute("SELECT * FROM pragma_index_list(?)", (table,)):
+        # A partial index cannot substitute for an unconditional unique key.
+        if index[2] and not index[4]:
+            unique.add(tuple(row[2] for row in conn.execute(
+                "SELECT * FROM pragma_index_info(?)", (index[1],))))
+    # Group composite foreign keys by their own sequence; numeric FK IDs
+    # need not match between equivalent legacy and fresh schemas.
+    references = {}
+    for fk in conn.execute("SELECT * FROM pragma_foreign_key_list(?)", (table,)):
+        references.setdefault(fk[0], []).append(tuple(fk[1:]))
+    foreign = frozenset(tuple(sorted(parts)) for parts in references.values())
+    return frozenset(row[1] for row in columns), primary, required, frozenset(unique), foreign
+
+
 @lru_cache(maxsize=1)
-def _expected_columns() -> dict[str, set[str]]:
-    # Use the same migration chain as a clean installation, rather than a
-    # hand-maintained list that can become stale with the next schema version.
+def _expected_schema() -> dict[str, tuple]:
+    # Derive constraints from the same migration chain as a fresh database.
     with closing(sqlite3.connect(":memory:")) as conn:
         migrations.apply(conn, db.utc_now())
         return {
-            row[0]: {column[1] for column in conn.execute(
-                "SELECT * FROM pragma_table_info(?)", (row[0],))}
+            row[0]: _table_constraints(conn, row[0])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
 
 
 def _inspect_current_schema(conn: sqlite3.Connection) -> None:
-    for table, expected in _expected_columns().items():
-        actual = {column[1] for column in conn.execute("SELECT * FROM pragma_table_info(?)", (table,))}
-        if not expected.issubset(actual):
+    for table, expected in _expected_schema().items():
+        actual = _table_constraints(conn, table)
+        columns, primary, required, unique, foreign = expected
+        if (not columns.issubset(actual[0]) or primary != actual[1]
+                or not required.issubset(actual[2])
+                or not unique.issubset(actual[3]) or not foreign.issubset(actual[4])):
             raise ValueError(f"В резервной копии повреждена структура таблицы {table}")
     if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
         raise ValueError("Резервная копия содержит нарушенные связи между таблицами")
@@ -132,6 +152,8 @@ def restore(name: str) -> dict:
         staged = Path(workspace) / "restore.sqlite3"
         _copy_database(source_path, staged)
         db.initialize(staged)
+        # Validate the exact copied/migrated image that will become live.
+        inspect(staged)
         with db.connect() as live, db.connect(staged) as target:
             previous = live.execute("SELECT session_epoch FROM admin_account WHERE id=1").fetchone()[0]
             target.execute("UPDATE admin_account SET session_epoch=MAX(session_epoch,?)+1 WHERE id=1", (previous,))
@@ -147,7 +169,7 @@ def delete_backup(name: str) -> bool:
 
 def prune_data(retention_days: int) -> dict:
     if retention_days == 0:
-        return {"readings": 0, "receipts": 0}
+        return {"readings": 0, "sensor_records": 0}
     if not 30 <= retention_days <= 3650:
         raise ValueError("Недопустимый срок хранения")
     cutoff_time = datetime.now(timezone.utc)-timedelta(days=retention_days)
