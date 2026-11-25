@@ -55,7 +55,8 @@ jobs:
           node --check termokontur/static/school-calendar.js
           node --check termokontur/static/building-accounts.js
           node --check termokontur/static/firmware-debug.mjs
-          node --test tests/navigation-stability.test.cjs tests/theme.test.cjs tests/sensor-usb.test.cjs
+          node --check termokontur/static/firmware-test.mjs
+          node --test tests/navigation-stability.test.cjs tests/theme.test.cjs tests/sensor-usb.test.cjs tests/firmware-test.test.cjs
       - name: Test
         run: python -m pytest -q
 

@@ -76,6 +76,21 @@
     </section>
 
     <section class="panel firmware-debug-panel">
+      <h2>Приёмочный тест датчика</h2>
+      <p class="hint">Без изменения настроек: проверка USB, версии и 5 пробных замеров. Для сети, аккумулятора и OTA предусмотрены отдельные ручные шаги.</p>
+      <div class="heading-actions">
+        <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
+        <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
+        <button type="button" id="debug-test-report" class="btn secondary" disabled>Скачать отчёт JSON</button>
+      </div>
+      <p id="debug-test-state" role="status">Тест ещё не запускался.</p>
+      <div id="debug-test-results"></div>
+      <h3>Проверки на реальном оборудовании</h3>
+      <p class="hint">Проводите на отдельном тестовом датчике, не на действующем кабинете. Отмечайте фактический результат; непроверенные шаги не считаются успешными.</p>
+      <div id="debug-test-manual" class="firmware-test-manual"></div>
+    </section>
+
+    <section class="panel firmware-debug-panel">
       <div class="sensor-firmware-heading">
         <h2>Журнал USB</h2>
         <div class="heading-actions">

@@ -1,5 +1,6 @@
 import {SensorSerial, verifyIdentity} from "./sensor-usb.mjs";
 import {createSerialLog} from "./sensor-log.mjs";
+import {runBenchTest, manualChecks} from "./firmware-test.mjs";
 
 const field = name => document.getElementById("debug-" + name);
 const panelVersion = field("panel-version").textContent;
@@ -18,6 +19,7 @@ let serial = null;
 let connecting = false;
 let checking = false;
 let bootArmed = false;
+let testing = false, testCancelled = false, testReport = null;
 let auto = false, timer = null, successes = 0, failures = 0;
 function stats() { field("stats").textContent = "Успешно: "+successes+" · Ошибок: "+failures; }
 function stopAuto() { auto = false; clearTimeout(timer); timer = null; controls(); }
@@ -29,12 +31,15 @@ function scheduleAuto() {
 function controls() {
   field("connect").disabled = !supported || connecting || Boolean(serial);
   field("disconnect").disabled = !serial;
-  const queriesDisabled = !serial || checking || bootArmed;
+  const queriesDisabled = !serial || checking || bootArmed || testing;
   for (const name of ["identify", "wifi", "boot"]) field(name).disabled = queriesDisabled || auto;
   field("measure").disabled = queriesDisabled || auto;
-  field("auto").disabled = !serial || bootArmed || (checking && !auto);
+  field("auto").disabled = !serial || bootArmed || testing || (checking && !auto);
   field("auto").textContent = auto ? "Остановить автозамер" : "Запустить автозамер";
-  field("interval").disabled = auto;
+  field("interval").disabled = auto || testing;
+  field("test-start").disabled = queriesDisabled || auto;
+  field("test-stop").disabled = !testing || testCancelled;
+  field("test-report").disabled = !testReport || testing;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
 }
@@ -86,7 +91,7 @@ function setSetupWifi(reply) {
 
 async function checkBoard(command) {
   const connection = serial;
-  if (!connection || checking || bootArmed) { if (auto) scheduleAuto(); return; }
+  if (!connection || checking || bootArmed || testing) { if (auto) scheduleAuto(); return; }
   checking = true;
   controls();
   field("result").textContent = "Ждём ответа платы…";
@@ -133,6 +138,7 @@ async function checkBoard(command) {
 async function closePort(connection, message) {
   if (serial !== connection) return;
   serial = null;
+  if(testing)testCancelled=true;
   stopAuto();
   checking = false;
   connecting = true;
@@ -176,10 +182,61 @@ field("identify").addEventListener("click", () => checkBoard("hello"));
 field("measure").addEventListener("click", () => checkBoard("test_measurement"));
 field("auto").addEventListener("click", () => {
   if (auto) { stopAuto(); return; }
-  if (!serial || checking || bootArmed) return;
+  if (!serial || checking || bootArmed || testing) return;
   auto = true; controls(); void checkBoard("test_measurement");
 });
 field("boot").addEventListener("click", () => checkBoard("arm_boot_debug"));
+const manual = new Map();
+for(const [id, description] of manualChecks){
+  const label=document.createElement("label");
+  const title=document.createElement("span");title.textContent=description;
+  const select=document.createElement("select");
+  select.setAttribute("aria-label",description);
+  for(const [value,text] of [["not_tested","Не проверено"],["pass","Пройдено"],["fail","Ошибка"]]){
+    const option=document.createElement("option");option.value=value;option.textContent=text;select.append(option);
+  }
+  manual.set(id,select);label.append(title,select);field("test-manual").append(label);
+}
+function renderTest(report){
+  testReport=report;
+  const result=field("test-results");result.replaceChildren();
+  const labels={pass:"Пройдено",fail:"Ошибка",warn:"Требует внимания",skipped:"Не завершено"};
+  for(const step of report.steps){
+    const row=document.createElement("p");row.className="firmware-test-result";
+    const status=document.createElement("strong");status.textContent=labels[step.status]+": ";
+    row.append(status,document.createTextNode(step.message));result.append(row);
+  }
+  for(const sample of report.samples){
+    const row=document.createElement("p");row.className="firmware-test-result";
+    row.textContent="Замер "+sample.index+": "+sample.reason+" · "+format(sample.temperature,"°C")+" · "+format(sample.humidity,"%")+" · "+format(sample.battery_mv===null?null:sample.battery_mv/1000,"В");
+    result.append(row);
+  }
+  field("test-state").textContent=testing?"Выполняется · замеров "+report.samples.length+" из 5":report.cancelled?"Тест остановлен.":"Автоматическая часть завершена; проверьте результаты и ручные шаги.";
+  controls();
+}
+field("test-start").addEventListener("click",async()=>{
+  if(!serial||checking||bootArmed||testing||auto)return;
+  const connection=serial;
+  testing=true;testCancelled=false;testReport=null;
+  for(const select of manual.values())select.value="not_tested";
+  field("test-results").replaceChildren();
+  field("test-state").textContent="Проверяем подключение…";controls();
+  try{
+    testReport=await runBenchTest(connection,panelVersion,{cancelled:()=>testCancelled||serial!==connection,onUpdate:renderTest});
+  }finally{
+    testing=false;
+    if(testReport)renderTest(testReport);
+    controls();
+  }
+});
+field("test-stop").addEventListener("click",()=>{testCancelled=true;field("test-state").textContent="Останавливаем после текущего запроса…";controls();});
+field("test-report").addEventListener("click",()=>{
+  if(!testReport||testing)return;
+  const report={...testReport,exported_at:new Date().toISOString(),manual:manualChecks.map(([id,description])=>({id,description,status:manual.get(id).value}))};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+"\n"],{type:"application/json"}));
+  const link=document.createElement("a");link.href=url;link.download="termokontur-acceptance.json";link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
 field("wifi").addEventListener("click", () => {
   if (field("wifi-details").hidden) void checkBoard("setup_wifi");
   else setSetupWifi(null);
