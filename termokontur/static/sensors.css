@@ -52,3 +52,5 @@ html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-usb-dialog .archive-toggle{display:flex;flex-direction:row;gap:10px;white-space:normal;align-items:flex-start}.sensor-usb-dialog .archive-toggle input{flex:0 0 16px;width:16px;height:16px;margin-top:2px}.sensor-usb-dialog textarea{width:100%;max-width:100%}.sensor-usb-dialog details{min-width:0}.sensor-usb-dialog label{min-width:0}
 
 
+
+.firmware-test-manual{display:grid;gap:10px}.firmware-test-manual label{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,160px);align-items:center;gap:12px}.firmware-test-manual select{min-width:0;width:100%}.firmware-test-result{padding:7px 0;border-bottom:1px solid currentColor;overflow-wrap:anywhere}@media(max-width:600px){.firmware-test-manual label{grid-template-columns:1fr;gap:4px}}
