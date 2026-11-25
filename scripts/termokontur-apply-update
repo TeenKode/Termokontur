@@ -173,7 +173,7 @@ check_writable_dir "/usr/local/sbin"
 STAGE=$(mktemp -d /opt/termokontur-stage.XXXXXXXX)
 chown termokontur:termokontur "$STAGE"
 record installing "Загружаем исходный код новой сборки с GitHub…" downloading
-runuser -u termokontur -- git clone --depth 1 --single-branch --branch main \
+runuser -u termokontur -- git clone --depth 1 --single-branch --branch stable \
   https://github.com/TeenKode/Termokontur.git "$STAGE"
 REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)
 [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid revision" >&2; exit 1; }
@@ -201,6 +201,23 @@ chown -R root:root "$STAGE"
 chmod -R a+rX "$STAGE"
 chmod 0755 "$STAGE"
 
+# Before stopping either writer, download the published bundle for the exact
+# candidate commit and validate the image, version and manifest. The Git tag
+# is immutable per release; do not accept a manually uploaded or stale cache.
+record installing "Проверяем и сохраняем комплект прошивки новой версии…" dependencies
+(
+  cd "$STAGE"
+  runuser -u termokontur -- env TERMOKONTUR_DB="$DATA/termokontur.sqlite3" "$STAGE/.venv/bin/python" - "$REVISION" <<'PY'
+import sys
+from termokontur import sensor_firmware
+
+data = sensor_firmware._download_git_bundle()
+bundle = sensor_firmware.read_release(data)
+if bundle.factory.source_commit != sys.argv[1]:
+    raise SystemExit("Firmware bundle does not match the candidate panel revision")
+sensor_firmware._store_release(data)
+PY
+)
 record installing "Зависимости готовы. Подготавливаем резервную копию…" backup
 
 # Quiesce both SQLite writers before taking the rollback snapshot. If any

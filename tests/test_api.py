@@ -187,7 +187,7 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert checked.json()["available"]
     first = admin.post("/api/update/request", json={})
     assert first.status_code == 200
-    assert (db.db_path().parent/"update-request").read_text().strip() == "main"
+    assert (db.db_path().parent/"update-request").read_text().strip() == "stable"
     assert admin.post("/api/update/request", json={}).status_code == 409
     assert admin.get("/api/update/status").json()["state"] == "queued"
 

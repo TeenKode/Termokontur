@@ -124,3 +124,17 @@ def test_max_polling_services_use_debian_ca_bundle(admin):
     db.set_state("max_poll_last_error", "test connection error")
     assert admin.get("/api/max/diagnostics").json()["poll_last_error"] == "test connection error"
     assert "tls_certificate" in js
+
+
+def test_release_pointer_advances_only_after_firmware_publication():
+    from termokontur import updates
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/sensors.yml").read_text()
+    assert updates.GITHUB_HEAD.endswith("/commits/stable")
+    assert workflow.index("Publish versioned firmware bundle") < workflow.index("Publish panel only after firmware is available")
+    assert "needs: [firmware, browser, bundle-browser]" in workflow
+    assert 'git push origin "$GITHUB_SHA:refs/heads/stable"' in workflow
+    updater = (root / "scripts/termokontur-apply-update").read_text()
+    assert "--branch stable" in updater
+    assert updater.index("sensor_firmware._store_release(data)") < updater.rindex("systemctl stop termokontur.service")
+    assert "bundle.factory.source_commit != sys.argv[1]" in updater
