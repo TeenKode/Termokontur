@@ -131,7 +131,11 @@ def test_release_pointer_advances_only_after_firmware_publication():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/sensors.yml").read_text()
     assert updates.GITHUB_HEAD.endswith("/commits/stable")
-    assert workflow.index("Publish versioned firmware bundle") < workflow.index("Publish panel only after firmware is available")
+    assert workflow.index("Wait for server Test workflow on the exact release commit") < workflow.index("Publish versioned firmware bundle") < workflow.index("Publish panel only after firmware is available")
+    assert 'head_sha=$GITHUB_SHA&event=push' in workflow
+    assert 'test "$conclusion" = success' in workflow
+    assert 'gh release download "firmware-v$VERSION"' in workflow
+    assert 'cmp "$download_dir/termokontur-firmware.zip" termokontur-firmware.zip' in workflow
     assert "needs: [firmware, browser, bundle-browser]" in workflow
     assert 'git push origin "$GITHUB_SHA:refs/heads/stable"' in workflow
     updater = (root / "scripts/termokontur-apply-update").read_text()

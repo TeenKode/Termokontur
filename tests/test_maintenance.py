@@ -164,3 +164,36 @@ def test_update_backups_visible_downloadable_and_rotated(admin):
     assert old.name in {x["name"] for x in maintenance.list_backups()}
     maintenance.schedule()
     assert not old.exists() and new.exists() and original.exists()
+
+
+def test_backup_rejects_missing_primary_unique_and_foreign_keys(admin, tmp_path):
+    from contextlib import closing
+    import sqlite3
+    import pytest
+    original = maintenance.backup_path(maintenance.create_backup()["name"])
+    for table, ddl in (
+        ("session_revocations", "CREATE TABLE session_revocations(digest TEXT, expires_at INTEGER NOT NULL)"),
+        ("sensor_factory_tickets", """CREATE TABLE sensor_factory_tickets(
+          ticket_hash TEXT PRIMARY KEY, hardware_id TEXT NOT NULL,
+          name TEXT NOT NULL, room_id INTEGER NOT NULL, sensor_type TEXT NOT NULL,
+          config TEXT NOT NULL, expires INTEGER NOT NULL, consumed_fp TEXT)"""),
+        ("max_delivery_failures", """CREATE TABLE max_delivery_failures(
+          event_id TEXT PRIMARY KEY, status_code INTEGER NOT NULL, failed_at TEXT NOT NULL)"""),
+    ):
+        staged = tmp_path / (table + ".sqlite3")
+        staged.write_bytes(original.read_bytes())
+        with closing(sqlite3.connect(staged)) as conn:
+            # Serialize a standalone SQLite file, not an uncheckpointed WAL.
+            assert conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+            # Remove the table without rewriting FK references in other tables.
+            conn.execute("DROP TABLE " + table)
+            conn.execute(ddl)
+            conn.commit()
+        assert not staged.with_name(staged.name + "-wal").exists()
+        with pytest.raises(ValueError, match=table):
+            maintenance.inspect(staged)
+        reply = admin.post("/api/backups/import", content=staged.read_bytes(),
+                           headers={"Content-Type": "application/octet-stream"})
+        assert reply.status_code == 422, (table, reply.text)
+        assert table in reply.json()["detail"]
+    assert admin.get("/api/rooms").status_code == 200
