@@ -6,7 +6,7 @@ const fs=require("node:fs");
 const vm=require("node:vm");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
-const source=["reports.js","notifications.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
+const source=["reports.js","notifications.js","updates.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
 const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
 const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
 
@@ -288,4 +288,28 @@ test("initial session probe completes before login controls become enabled",asyn
   assert.deepEqual(calls,["login"]);
   assert.equal(fields.password.disabled,false);
   assert.equal(submit.disabled,false);
+});
+
+
+test("update controls prevent duplicate or unavailable installations",()=>{
+  const fields={"check-update":{},"install-update":{}};
+  const context=vm.createContext({$:id=>fields[id]});
+  vm.runInContext(fs.readFileSync(path.join(root,"termokontur/static/updates.js"),"utf8"),context);
+  const scenarios=[
+    [false,true,"idle",false,false,true,true],
+    [true,false,"idle",false,false,false,true],
+    [true,true,"idle",false,false,false,false],
+    [true,true,"queued",false,false,true,true],
+    [true,true,"installing",false,false,true,true],
+    [true,true,"idle",true,false,true,true],
+    [true,true,"idle",false,true,true,true],
+    [true,true,"failed",false,false,false,false]
+  ];
+  for(const [supported,available,state,checking,requesting,check,install] of scenarios){
+    vm.runInContext(`updateSupported=${supported};updateAvailable=${available};updateState=${JSON.stringify(state)};updateChecking=${checking};updateRequesting=${requesting};renderUpdateControls();`,context);
+    assert.equal(fields["check-update"].disabled,check);
+    assert.equal(fields["install-update"].disabled,install);
+  }
+  assert.equal(vm.runInContext("updateElapsed(3661)",context),"1 ч 1 мин");
+  assert.equal(vm.runInContext("updateElapsed(61)",context),"1 мин 1 сек");
 });
