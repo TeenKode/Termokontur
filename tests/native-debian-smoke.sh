@@ -93,6 +93,10 @@ if [[ "${TEST_BREAK_FINISH:-0}" == 1 && "${6:-}" == success && "${8:-}" == succe
   echo "intentional final status write failure" >&2
   exit 1
 fi
+if [[ "${TEST_BREAK_RESTORE:-0}" == 1 && "${5:-}" == "-" && "${6:-}" == */backups/pre-update-*.sqlite3 && "${7:-}" == /var/lib/termokontur/termokontur.sqlite3 ]]; then
+  echo "intentional rollback database failure" >&2
+  exit 1
+fi
 exec /usr/sbin/runuser "$@"
 SH
 chmod 0755 /usr/local/bin/runuser
@@ -203,6 +207,8 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/readings | grep -q '23.5'
+# A failed installation is kept in an isolated directory, never nested inside the previous app.
+test "$(find /opt -maxdepth 2 -path '/opt/termokontur-failed.*/app' -type d | wc -l)" -ge 1
 # Also exercise failure after the privileged updater and revision are replaced.
 echo "Testing rollback of privileged updater and revision after final status failure"
 cp /usr/local/sbin/termokontur-apply-update /tmp/updater-before
@@ -214,9 +220,21 @@ if TEST_BREAK_FINISH=1 PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update; 
   exit 1
 fi
 grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
-grep -q 'finishing' /var/lib/termokontur/update-status.json
+grep -q 'Сбой на этапе: finishing' /var/lib/termokontur/update-status.json
 cmp /tmp/updater-before /usr/local/sbin/termokontur-apply-update
 cmp /tmp/revision-before /var/lib/termokontur/installed-revision
 curl --silent --show-error --fail http://127.0.0.1:8092/health
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/readings | grep -q '23.5'
+test "$(find /opt -maxdepth 2 -path '/opt/termokontur-failed.*/app' -type d | wc -l)" -ge 2
+# If restoring SQLite fails, leave the writers stopped and report an
+# incomplete rollback rather than claiming that the old version is healthy.
+runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
+runuser -u termokontur -- touch /var/lib/termokontur/update-request
+if TEST_BREAK_UPGRADE=1 TEST_BREAK_RESTORE=1 /usr/local/sbin/termokontur-apply-update; then
+  echo "Broken rollback unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'Восстановление не подтверждено' /var/lib/termokontur/update-status.json
+test ! -f /run/termokontur-test.pid
+test -n "$(find /var/lib/termokontur/backups -name 'pre-update-*' -print -quit)"
 echo "Debian 13 native install, update and rollback smoke succeeded."

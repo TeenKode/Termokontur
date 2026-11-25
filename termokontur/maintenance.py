@@ -147,7 +147,7 @@ def delete_backup(name: str) -> bool:
 
 def prune_data(retention_days: int) -> dict:
     if retention_days == 0:
-        return {"readings": 0, "receipts": 0}
+        return {"readings": 0, "sensor_records": 0}
     if not 30 <= retention_days <= 3650:
         raise ValueError("Недопустимый срок хранения")
     cutoff_time = datetime.now(timezone.utc)-timedelta(days=retention_days)

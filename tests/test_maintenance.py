@@ -62,7 +62,7 @@ def test_retention_safety_and_scheduling(admin):
     with db.connect() as conn:
         conn.execute("""INSERT INTO readings(room_id,value,source,reporter,observed_at)
                         VALUES(?,21,'manual','tester',?)""",(r["id"],before))
-    assert maintenance.prune_data(0)["readings"]==0
+    assert maintenance.prune_data(0) == {"readings": 0, "sensor_records": 0}
     assert maintenance.prune_data(30)["readings"]==1
     assert admin.post("/api/backups").status_code==200
     settings.update({"backup_interval_days":"1","backup_keep":"5","retention_days":"0"})

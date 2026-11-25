@@ -10,6 +10,9 @@ import secrets
 from . import db
 
 ITERATIONS = 310_000
+# Preserve legacy bootstrap passwords longer than the current 256-character
+# creation policy, while bounding password verification work.
+MAX_AUTH_PASSWORD_LENGTH = 4096
 
 def _digest(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac(
@@ -22,8 +25,8 @@ def bootstrap() -> None:
         if conn.execute("SELECT 1 FROM admin_account WHERE id=1").fetchone():
             return
         initial = os.environ.get("TERMOKONTUR_ADMIN_PASSWORD", "")
-        if len(initial) < 8 or initial.startswith("REPLACE_WITH_"):
-            raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (8+ chars) for first setup")
+        if not 8 <= len(initial) <= MAX_AUTH_PASSWORD_LENGTH or initial.startswith("REPLACE_WITH_"):
+            raise RuntimeError("Set a unique TERMOKONTUR_ADMIN_PASSWORD (8–4096 chars) for first setup")
         salt = secrets.token_bytes(24)
         conn.execute(
             """INSERT INTO admin_account(id, salt, password_hash, session_epoch)

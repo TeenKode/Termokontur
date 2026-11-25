@@ -20,7 +20,8 @@ CURRENT_PHASE=preparing
 UPDATE_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 record() {
   local state="$1" message="$2" phase="${3:-}"
-  CURRENT_PHASE="$phase"
+  # Preserve the last operational phase if the terminal status write fails.
+  if [[ "$phase" != success && "$phase" != failed ]]; then CURRENT_PHASE="$phase"; fi
   runuser -u termokontur -- /usr/bin/python3 - "$state" "$message" "$phase" "$UPDATE_STARTED" "${REVISION:-}" "${BACKUP_FILE:-}" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
@@ -98,6 +99,8 @@ import sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as old, sqlite3.connect(sys.argv[2]) as target:
     old.backup(target)
 PY
+  else
+    return 1
   fi
 }
 write_revision() {
@@ -128,37 +131,71 @@ restore_metadata() {
 }
 cleanup() {
   local result=$?
+  local rollback_failed=0
   trap - EXIT
   if (( result != 0 )); then
+    # Do not let another failed command abort error reporting and cleanup.
+    set +e
     if (( SWAPPED )); then
-      systemctl stop termokontur-max.service 2>/dev/null || true
-      systemctl stop termokontur.service 2>/dev/null || true
-      if (( SERVICES_SAVED )); then
-        for unit in "${INSTALL_UNITS[@]}"; do
-          if [[ -f "$OLD_UNITS/$unit" ]]; then
-            if ! install -o root -g root -m 0644 "$OLD_UNITS/$unit" "$UNITS_DIR/$unit"; then
-              echo "WARNING: could not restore $unit; copy retained in $OLD_UNITS" >&2
+      # Restoring SQLite while a new writer is still running is unsafe.
+      local stop_failed=0
+      systemctl stop termokontur-max.service || stop_failed=1
+      systemctl stop termokontur.service || stop_failed=1
+      if (( stop_failed )); then
+        echo "ERROR: cannot stop writers for rollback; backups retained" >&2
+        rollback_failed=1
+      else
+        if (( SERVICES_SAVED )); then
+          for unit in "${INSTALL_UNITS[@]}"; do
+            if [[ -f "$OLD_UNITS/$unit" ]]; then
+              if ! install -o root -g root -m 0644 "$OLD_UNITS/$unit" "$UNITS_DIR/$unit"; then
+                echo "WARNING: could not restore $unit; copy retained in $OLD_UNITS" >&2
+                rollback_failed=1
+              fi
+            else
+              rollback_failed=1
             fi
+          done
+          systemctl daemon-reload || rollback_failed=1
+        fi
+        if [[ -d "$APP" && -d "$PREV" ]]; then
+          local failed_dir
+          if failed_dir=$(mktemp -d /opt/termokontur-failed.XXXXXXXX); then
+            mv -T -- "$APP" "$failed_dir/app" || rollback_failed=1
+          else
+            rollback_failed=1
           fi
-        done
-        systemctl daemon-reload || true
+        fi
+        if [[ -d "$PREV" && ! -e "$APP" ]]; then
+          mv -T -- "$PREV" "$APP" || rollback_failed=1
+        else
+          rollback_failed=1
+        fi
+        if ! restore_db; then
+          echo "ERROR: could not restore database; snapshot retained: $BACKUP_FILE" >&2
+          rollback_failed=1
+        fi
+        if (( METADATA_CHANGED )); then
+          if ! restore_metadata; then
+            echo "WARNING: could not restore updater metadata; copies retained in $OLD_UNITS" >&2
+            rollback_failed=1
+          fi
+        fi
+        # Do not start old code over an unconfirmed database restoration.
+        if (( ! rollback_failed )); then
+          systemctl start termokontur.service && health || rollback_failed=1
+          systemctl start termokontur-max.service && systemctl is-active --quiet termokontur-max.service || rollback_failed=1
+        fi
       fi
-      if [[ -d "$APP" && -d "$PREV" ]]; then
-        mv "$APP" "/opt/termokontur-failed-$$"
-      fi
-      if [[ -d "$PREV" ]]; then mv "$PREV" "$APP"; fi
-      restore_db || true
-      if (( METADATA_CHANGED )); then
-        restore_metadata || echo "WARNING: could not restore updater metadata; copies retained in $OLD_UNITS" >&2
-      fi
-      systemctl start termokontur.service || true
-      if ! health; then echo "WARNING: rollback web health check failed" >&2; fi
-      systemctl start termokontur-max.service || true
     elif (( SERVICES_STOPPED )); then
-      systemctl start termokontur.service || true
-      systemctl start termokontur-max.service || true
+      systemctl start termokontur.service && health || rollback_failed=1
+      systemctl start termokontur-max.service && systemctl is-active --quiet termokontur-max.service || rollback_failed=1
     fi
-    record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
+    if (( rollback_failed )); then
+      record failed "Сбой на этапе: $CURRENT_PHASE. Восстановление не подтверждено. Не запускайте новое обновление до проверки журнала termokontur-update.service и резервных копий." failed || true
+    else
+      record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
+    fi
   fi
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
   exit "$result"
