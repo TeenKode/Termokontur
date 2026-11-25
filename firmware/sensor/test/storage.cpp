@@ -1,0 +1,49 @@
+#include "device_config.hpp"
+#include "blob_codec.hpp"
+#include <cassert>
+#include <cstring>
+#include <iostream>
+
+int main() {
+  sensor::Config config{};
+  assert(sensor::valid_config(config));
+  assert(config.measure_s == 1800 && config.send_s == 86400);
+  config.cutoff_mv = 3000;
+  config.wifi_min_mv = 0;
+  assert(sensor::valid_config(config));
+  config.wifi_min_mv = 2999;
+  assert(!sensor::valid_config(config));
+  config.wifi_min_mv = 3000;
+  config.ota_min_mv = 3299;
+  assert(!sensor::valid_config(config));
+  config.ota_min_mv = 3300;
+  assert(sensor::valid_config(config));
+  config.measure_s = 0;
+  assert(!sensor::valid_config(config));
+
+  sensor::State state{};
+  state.next = 197;
+  state.ack = 180;
+  state.saved_time = 1795520000;
+  auto encoded = sensor::encode_blob(&state, sizeof state);
+  // Check the legacy envelope independently, not only an encode/decode round trip.
+  uint32_t schema = 1, checksum = sensor::crc32(&state, sizeof state);
+  assert(encoded.size() == sizeof state + 8);
+  assert(!memcmp(encoded.data(), &schema, 4));
+  assert(!memcmp(encoded.data() + 4, &checksum, 4));
+  assert(!memcmp(encoded.data() + 8, &state, sizeof state));
+  sensor::State restored{};
+  assert(sensor::decode_blob(encoded, &restored, sizeof restored));
+  assert(restored.next == 197 && restored.ack == 180 && restored.saved_time == 1795520000);
+  const auto original = encoded;
+  for(size_t i = 0; i < original.size(); ++i) {
+    encoded = original;
+    encoded[i] ^= 1;
+    assert(!sensor::decode_blob(encoded, &restored, sizeof restored));
+    assert(restored.next == 197 && restored.ack == 180);
+  }
+  encoded = original;
+  encoded.pop_back();
+  assert(!sensor::decode_blob(encoded, &restored, sizeof restored));
+  std::cout << "Persistent config and legacy NVS envelope checks passed\n";
+}
