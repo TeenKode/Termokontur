@@ -52,3 +52,23 @@ def test_room_archive_reactivate_and_export(admin):
 
 def test_room_export_rejects_anonymous(client):
     assert client.get("/api/rooms/export.csv").status_code == 401
+
+
+def test_oversized_password_rejected_before_hashing(client, monkeypatch):
+    from termokontur import auth
+    def unexpected(*args):
+        raise AssertionError("oversized password must not reach hashing")
+    monkeypatch.setattr(auth, "_digest", unexpected)
+    for username in ("", "junior"):
+        response = client.post("/api/login", json={"username": username, "password": "x" * (auth.MAX_AUTH_PASSWORD_LENGTH + 1)})
+        assert response.status_code == 422
+
+
+def test_invalid_session_cookie_never_raises(client):
+    import time
+    expires = int(time.time()) + 3600
+    for payload in (f"{expires}:abcdefghijklmnop:", f"v:junior:{expires}:abcdefghijklmnop:"):
+        for mac in (b"0" * 63, b"z" * 64, b"\xff" * 64, b"0" * 300):
+            header = b"tk_session=" + payload.encode() + mac
+            assert client.get("/api/session", headers=[(b"cookie", header)]).json() == {"authenticated": False}
+            assert client.get("/api/settings", headers=[(b"cookie", header)]).status_code == 401

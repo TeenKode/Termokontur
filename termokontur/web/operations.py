@@ -41,7 +41,7 @@ class SettingsPatchIn(BaseModel):
 
 class RestoreBackupIn(BaseModel):
     name: str
-    password: str
+    password: str = Field(max_length=auth.MAX_AUTH_PASSWORD_LENGTH)
 
 
 @router.get("/audit")
