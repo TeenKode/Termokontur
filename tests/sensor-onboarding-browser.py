@@ -132,7 +132,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 }'''
                 page.route('**/static/sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=wrapper))
                 page.goto(base);page.fill('#password','browser-test-password');page.click('#login-form button[type="submit"]')
-                page.wait_for_selector('#app-root',state='visible');page.click('[data-tab="sensors"]')
+                try:
+                    page.wait_for_selector('#app-root',state='visible')
+                except Exception as exc:
+                    log.seek(0)
+                    raise AssertionError(f"Login failed: {page.locator('#login-error').inner_text()}; JS errors: {errors}; server: {log.read()[-5000:]}") from exc
+                page.click('[data-tab="sensors"]')
                 firmware_url = f'/api/sensors/firmware/bundled/{version}'
                 expect(page.locator('#sensor-bundled-status')).to_contain_text(version)
                 with page.expect_download() as download:

@@ -26,8 +26,8 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   w.HTMLElement.prototype.scrollIntoView=()=>{};
   const ctx=new Proxy({measureText:()=>({width:50})},{get:(o,k)=>k in o?o[k]:()=>{}});w.HTMLCanvasElement.prototype.getContext=()=>ctx;
   w.addEventListener("error",e=>errors.push(String(e.error)));
-  const code=["theme.js","charts.js","reports.js","app.js","school-calendar.js","building-accounts.js","sensors.js"].map(f=>fs.readFileSync(path.join(root,"termokontur/static",f),"utf8")).join("\n");w.eval(code);
-  await until(()=>!d.getElementById("login-screen").hidden);
+  const code=["theme.js","charts.js","reports.js","notifications.js","app.js","school-calendar.js","building-accounts.js","sensors.js"].map(f=>fs.readFileSync(path.join(root,"termokontur/static",f),"utf8")).join("\n");w.eval(code);
+  await until(()=>!d.getElementById("login-screen").hidden&&!d.getElementById("password").disabled);
   d.getElementById("password").value="dom-test-password";
   d.getElementById("login-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>!d.getElementById("app-root").hidden);

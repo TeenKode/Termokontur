@@ -6,7 +6,7 @@ const fs=require("node:fs");
 const vm=require("node:vm");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
-const source=["reports.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
+const source=["reports.js","notifications.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
 const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
 const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
 
@@ -250,4 +250,42 @@ test("API deadlines distinguish routine calls and large imports",()=>{
   assert.equal(timeout("/api/sensors/firmware/bundled/retry"),120000);
   assert.equal(timeout("/api/backups/import"),300000);
   assert.match(source,/AbortSignal\.timeout\(apiTimeout\(path\)\)/);
+});
+
+
+test("notification audiences preserve MAX recipient selection and building filters",()=>{
+  const vm=require("node:vm");
+  const module=fs.readFileSync(path.join(root,"termokontur/static/notifications.js"),"utf8");
+  const fields={"notification-audience":{value:"all"},"notification-building":{value:"A"}};
+  const context=vm.createContext({$:id=>fields[id]});
+  vm.runInContext(module,context);
+  vm.runInContext(`notificationPeople=[
+    {user_id:"1",missing:true,rooms:[{building:"A"},{building:"B"}]},
+    {user_id:"2",missing:false,rooms:[{building:"B"}]},
+    {user_id:"3",missing:true,rooms:[{building:"A"}]}
+  ];notificationSelected.add("2");`,context);
+  for(const [mode,expected] of [["all","1,2,3"],["missing","1,3"],["building","1,3"],["selected","2"]]){
+    fields["notification-audience"].value=mode;
+    assert.equal(vm.runInContext('notificationTargets().map(person=>person.user_id).join(",")',context),expected);
+  }
+  fields["notification-audience"].value="building";
+  fields["notification-building"].value="B";
+  assert.equal(vm.runInContext('notificationTargets().map(person=>person.user_id).join(",")',context),"1,2");
+});
+
+
+test("initial session probe completes before login controls become enabled",async()=>{
+  const fields={"login-name":{disabled:true},password:{disabled:true},"login-form":{querySelector:()=>submit}};
+  const submit={disabled:true};let complete;
+  const calls=[];
+  const context=vm.createContext({$:id=>fields[id],api:()=>new Promise(resolve=>{complete=resolve;}),enterLogin:()=>calls.push("login"),enterApp:()=>calls.push("app"),refresh:async()=>{}});
+  const boot=vm.runInContext("(async "+extractFunction("bootPanel")+")",context);
+  const pending=boot();
+  assert.equal(fields.password.disabled,true);
+  assert.equal(submit.disabled,true);
+  complete({authenticated:false});
+  await pending;
+  assert.deepEqual(calls,["login"]);
+  assert.equal(fields.password.disabled,false);
+  assert.equal(submit.disabled,false);
 });

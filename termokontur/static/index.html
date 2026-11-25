@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/style.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/charts.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/reports.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/notifications.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/school-calendar.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/building-accounts.js?v=__ASSET_FINGERPRINT__" defer></script>
@@ -27,12 +28,12 @@
       <form id="login-form">
         <div class="login-user">
           <label for="login-name">Логин ответственного</label>
-          <input id="login-name" type="text" maxlength="32" autocomplete="username" autocapitalize="none" aria-describedby="login-name-hint">
+          <input id="login-name" disabled type="text" maxlength="32" autocomplete="username" autocapitalize="none" aria-describedby="login-name-hint">
           <small id="login-name-hint" class="muted">Администратор входит только с паролем.</small>
         </div>
         <label for="password">Пароль</label>
-        <div class="password-field"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
-        <button type="submit" class="btn primary full">Войти</button>
+        <div class="password-field"><input id="password" disabled type="password" autocomplete="current-password" required autofocus><button type="button" class="password-toggle" data-password-target="password" aria-label="Показать пароль" aria-pressed="false">Показать</button></div>
+        <button type="submit" disabled class="btn primary full">Войти</button>
         <div id="login-error" class="form-error" role="alert"></div>
       </form>
     </div>
