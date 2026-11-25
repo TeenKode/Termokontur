@@ -54,7 +54,7 @@ test("invalid and cross-tab preferences",()=>{
 });
 test("theme bootstraps before stylesheet, includes dialogs and canvas colors",()=>{
   const html=fs.readFileSync(path.join(root,"termokontur/static/index.html"),"utf8");
-  const css=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
+  const css=["style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("");
   const js=fs.readFileSync(path.join(root,"termokontur/static/app.js"),"utf8");
   const charts=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
   const py=fs.readFileSync(path.join(root,"termokontur/app.py"),"utf8");

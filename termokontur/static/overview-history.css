@@ -1,0 +1,48 @@
+/* Historical dashboard added after the initial light-only layout. */
+html[data-theme="dark"] .dashboard-hero{background:linear-gradient(116deg,#152d46,#1c4e4b)}
+html[data-theme="dark"] .dashboard-hero-coverage{background:#091b2e50;border-color:#ffffff3b}
+html[data-theme="dark"] .overview-metrics .metric:hover{background:var(--dk-high);border-color:#5ca895}
+html[data-theme="dark"] .overview-metrics .metric-label,html[data-theme="dark"] .table-building{color:var(--dk-muted)}
+html[data-theme="dark"] .overview-metrics .metric::after{border-color:#8fa7bd}
+html[data-theme="dark"] .overview-metrics .metric strong.good{color:var(--dk-green)}
+html[data-theme="dark"] .overview-metrics .metric strong.bad{color:var(--dk-red)}
+html[data-theme="dark"] .overview-metrics .metric strong.warn{color:var(--dk-gold)}
+html[data-theme="dark"] .dashboard-controls label,html[data-theme="dark"] .history-legend,
+html[data-theme="dark"] .heatmap-guide{color:var(--dk-muted)}
+html[data-theme="dark"] .history-state,html[data-theme="dark"] .history-empty{background:#1b2c42;border-color:#3c536b;color:var(--dk-muted)}
+html[data-theme="dark"] .history-tooltip{background:#29455d;color:#f0f8ff;box-shadow:0 8px 24px #020916b0}
+html[data-theme="dark"] .history-details,html[data-theme="dark"] .history-details .table-scroll{border-color:var(--dk-border)}
+html[data-theme="dark"] .history-details summary{color:#81e7c5}
+html[data-theme="dark"] .history-details summary:hover{background:#20374b}
+html[data-theme="dark"] .legend-band::before{background:#2f6257}
+html[data-theme="dark"] .legend-muted{color:#9bafc6}
+html[data-theme="dark"] .history-key-school{border-color:#a5bacc}
+html[data-theme="dark"] .heatmap-guide span::before{border-color:#456075}
+html[data-theme="dark"] .heatmap-guide-normal::before{background:#194136}
+html[data-theme="dark"] .heatmap-guide-low::before{background:#1c3554}
+html[data-theme="dark"] .heatmap-guide-high::before{background:#482e36}
+html[data-theme="dark"] .heatmap-guide-empty::before{background:#26364b}
+html[data-theme="dark"] .heatmap-table th,html[data-theme="dark"] .building-matrix-table th{background:#1a2e44;color:#b7c8dd}
+html[data-theme="dark"] .heatmap-table td,html[data-theme="dark"] .building-matrix-table td{border-color:#31445a}
+html[data-theme="dark"] .heatmap-table td:first-child,html[data-theme="dark"] .building-matrix-table td:first-child{background:#152438;color:var(--dk-text);box-shadow:2px 0 4px #040e18aa}
+html[data-theme="dark"] .heatmap-table tr:hover td:first-child{background:#21364c}
+html[data-theme="dark"] .heatmap-table .heatmap-room,html[data-theme="dark"] .heatmap-table .heatmap-summary{color:#daebf8}
+html[data-theme="dark"] .heatmap-room small{color:var(--dk-muted)}
+html[data-theme="dark"] .heatmap-table .heatmap-value.normal{background:#1b4037;color:#97edc7}
+html[data-theme="dark"] .heatmap-table .heatmap-value.low{background:#1c3958;color:#9bcafb}
+html[data-theme="dark"] .heatmap-table .heatmap-value.high{background:#4b2e37;color:#ffb9ae}
+html[data-theme="dark"] .heatmap-table .heatmap-value.no-data{background:#263649;color:#a7bad0}
+html[data-theme="dark"] .building-summary-card{background:#1b2d42;border-color:#344a61;border-top-color:var(--building-accent,#49d2ae)}
+html[data-theme="dark"] .building-card-top,html[data-theme="dark"] .building-card-value{color:var(--dk-text)}
+html[data-theme="dark"] .building-card-change,html[data-theme="dark"] .building-card-meta,
+html[data-theme="dark"] .building-summary-empty{color:var(--dk-muted)}
+html[data-theme="dark"] .building-card-meta,html[data-theme="dark"] .building-matrix-heading{border-color:var(--dk-border)}
+html[data-theme="dark"] .building-matrix-heading h3{color:var(--dk-text)}
+html[data-theme="dark"] .building-matrix-heading p{color:var(--dk-muted)}
+html[data-theme="dark"] .building-day.full{background:#1c4336;color:#97ecc7}
+html[data-theme="dark"] .building-day.partial{background:#463a28;color:#ffd58d}
+html[data-theme="dark"] .building-day.with-alert{background:#492c37;color:#ffaaba}
+html[data-theme="dark"] .building-day.empty{background:#25374c;color:#a7b9cf}
+html[data-theme="dark"] .room-drilldown>summary{background:#1b2e43;border-color:var(--dk-border);color:#98e2cb}
+html[data-theme="dark"] .room-drilldown>summary:hover{background:#243e50}
+

@@ -1,0 +1,46 @@
+/* Notification composer and delivery receipts */
+.notification-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.notification-title-row h3{margin-top:0}
+.notification-draft{display:grid;gap:14px;min-width:0;margin:0;padding:0;border:0}
+.notification-compose-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.notification-recipient-summary{padding:12px 15px;border:1px solid #d9e4e9;border-radius:11px;background:#f3f9fa;font-size:13px;color:#345568;font-weight:660}
+.notification-user-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:8px;max-height:285px;overflow:auto;padding:3px}
+.notification-user{display:flex!important;flex-direction:row!important;gap:10px!important;align-items:flex-start;padding:10px;border:1px solid #e1e9ee;border-radius:10px;cursor:pointer}
+.notification-user input{width:auto;flex:0 0 auto;margin-top:2px}
+.notification-user-info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.notification-user-info small{opacity:.8;line-height:1.4;overflow-wrap:anywhere}
+.notification-missing{color:#b75d2c}
+.notification-history{display:grid;gap:10px}
+.notification-history-item{padding:13px 15px;border:1px solid #e1e9ee;border-radius:12px;min-width:0}
+.notification-history-top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.notification-history-top span{font-size:12px;opacity:.7}
+.notification-history-message{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;margin:8px 0}
+.notification-delivery{display:flex;gap:6px;flex-wrap:wrap}
+.notification-badge{padding:4px 8px;border:1px solid transparent;border-radius:6px;font-size:12px;font-weight:650}
+.notification-badge.accepted{background:#e7f6ef;color:#156e54}
+.notification-badge.queued{background:#eaf2fc;color:#2a4e78}
+.notification-badge.retrying,.notification-recipient-summary[data-state="warning"]{background:#fff3df;color:#80551a;border-color:#edddbd}
+.notification-recipient-summary[data-state="error"]{background:#fff2f2;color:#a33243;border-color:#efb9be}
+.notification-history-item small{opacity:.8}
+@media(max-width:700px){.notification-title-row>.btn{width:100%}.notification-user-list{grid-template-columns:1fr}}
+
+
+/* Match the notification workspace to the selected dark theme. */
+#notification-text{width:100%;min-height:125px;resize:vertical;border:1px solid #e0e5ee;border-radius:10px;padding:12px;font:inherit;color:#263954;background:#fff}
+html[data-theme="dark"] #notification-text{background:var(--dk-high);border-color:var(--dk-border);color:var(--dk-text)}
+html[data-theme="dark"] #notification-text::placeholder{color:var(--dk-muted)}
+html[data-theme="dark"] .notification-recipient-summary{background:#1d3c40;border-color:#356265;color:#c6eee1}
+html[data-theme="dark"] .notification-badge.accepted{background:#1b4138;color:var(--dk-green)}
+html[data-theme="dark"] .notification-badge.queued{background:#243d58;color:#c7e0ff}
+html[data-theme="dark"] .notification-badge.retrying,
+html[data-theme="dark"] .notification-recipient-summary[data-state="warning"]{background:#473724;color:var(--dk-gold);border-color:#755b38}
+html[data-theme="dark"] .notification-recipient-summary[data-state="error"]{background:#492c36;color:#ffc1ca;border-color:#854c5e}
+html[data-theme="dark"] .notification-user,html[data-theme="dark"] .notification-history-item{background:#1b2c42;border-color:var(--dk-border)}
+html[data-theme="dark"] .notification-user-info strong,html[data-theme="dark"] .notification-history-top strong,html[data-theme="dark"] .notification-history-message{color:var(--dk-text)}
+html[data-theme="dark"] .notification-user-info small,html[data-theme="dark"] .notification-history-item small{color:var(--dk-muted)}
+html[data-theme="dark"] .notification-missing{color:var(--dk-gold)}
+
+/* TLS status also follows the selected dark theme. */
+html[data-theme="dark"] .tls-details{background:#1c3043;border-color:#34536a;color:#d5e4f2}
+html[data-theme="dark"] .tls-details p{color:#d5e4f2}
+html[data-theme="dark"] .tls-actions .btn:disabled{opacity:.55}

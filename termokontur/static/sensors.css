@@ -1,0 +1,54 @@
+/* Autonomous sensor management reuses the existing light/dark panel palette. */
+#sensor-state{margin:0 0 12px;color:var(--text-muted);font-size:13px}
+.sensor-firmware-panel,.sensor-claims-panel{margin-bottom:16px;padding:20px}
+.sensor-disclosure{margin:0 0 16px;padding:0 20px}
+.sensor-disclosure>summary,#sensor-detail>details>summary{padding:14px 0;cursor:pointer;font-size:14px;font-weight:690}
+.sensor-disclosure>p,#sensor-detail>details>p{color:var(--text-muted);font-size:13px;line-height:1.5}
+#sensor-detail{--sensor-temperature:#087b65;--sensor-humidity:#356bad}
+html[data-theme="dark"] #sensor-detail{--sensor-temperature:#5bdac1;--sensor-humidity:#87b7fc}
+#sensor-detail>form{padding:0 20px 16px}
+#sensor-detail>details{padding:0 20px;border-top:1px solid #dce4eb}
+html[data-theme="dark"] #sensor-detail>details{border-color:var(--dk-border)}
+.sensor-record-scroll{max-height:min(440px,60dvh);overflow:auto}
+.sensor-record-scroll th{position:sticky;top:0;z-index:1}
+#sensor-events{margin-top:0;padding-left:20px;color:var(--text-muted);font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:700px){
+  .sensor-firmware-panel,.sensor-claims-panel{padding:16px}
+  .sensor-disclosure,#sensor-detail>form,#sensor-detail>details{padding-inline:16px}
+}
+.sensor-firmware-panel p{margin:8px 0}
+.sensor-firmware-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.sensor-firmware-heading a{text-decoration:none}
+#sensor-firmware-downloads{display:flex;flex-wrap:wrap;gap:8px;list-style:none;margin:12px 0 16px;padding:0}
+#sensor-firmware-downloads a{text-decoration:none;white-space:normal}
+.firmware-debug-page{width:min(960px,calc(100% - 32px));margin:24px auto 48px}
+.firmware-debug-page h1{margin-top:8px}
+.firmware-debug-panel{padding:20px;margin-bottom:16px}
+.firmware-debug-panel p{margin:10px 0}
+.firmware-debug-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px}
+.firmware-debug-values dt{font-size:13px;color:var(--muted,#60718a)}
+.firmware-debug-values dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
+#debug-wifi-password{white-space:break-spaces}
+.serial-log{font:13px/1.55 ui-monospace,monospace;padding:14px;overflow:auto;overscroll-behavior:contain;overflow-anchor:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
+#debug-log{height:min(42vh,360px)}
+#usb-log{height:min(32vh,240px)}
+#usb-log-panel h3{margin:0;font-size:15px}
+html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
+.sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
+.sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
+.sensor-form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:16px 0}
+.sensor-form label{display:flex;flex-direction:column;gap:6px;flex:1 1 210px;min-width:0;font-size:13px;font-weight:600}
+.sensor-form label.archive-toggle{flex-direction:row;align-items:center}
+.sensor-form input:not([type=checkbox]),.sensor-form select{width:100%;min-width:0}
+#sensor-chart{display:block;width:100%;height:260px}
+.sensor-chart-legend{display:flex;justify-content:center;gap:8px 18px;flex-wrap:wrap;list-style:none;margin:0 0 6px;padding:0;font-size:13px}
+.sensor-chart-legend li{display:inline-flex;align-items:center;gap:7px}
+.sensor-chart-legend li::before{content:"";width:20px;border-top:3px solid var(--sensor-temperature)}
+#sensor-humidity-key::before{border-top:3px dashed var(--sensor-humidity)}
+@media(max-width:600px){.sensor-form{display:block}.sensor-form label{margin:12px 0}.sensor-form button{margin:5px 5px 5px 0}.sensor-cards{grid-template-columns:1fr}}
+
+.sensor-usb-dialog{width:min(780px,96vw);max-height:90vh;overflow:auto}.sensor-usb-dialog form>p,.sensor-usb-dialog details{margin:14px 0}.sensor-usb-dialog progress{width:100%}.sensor-claim{padding:16px 0;border-bottom:1px solid var(--border,#ddd)}.sensor-claim .sensor-form{margin-top:12px}
+
+.sensor-usb-dialog .archive-toggle{display:flex;flex-direction:row;gap:10px;white-space:normal;align-items:flex-start}.sensor-usb-dialog .archive-toggle input{flex:0 0 16px;width:16px;height:16px;margin-top:2px}.sensor-usb-dialog textarea{width:100%;max-width:100%}.sensor-usb-dialog details{min-width:0}.sensor-usb-dialog label{min-width:0}
+
+

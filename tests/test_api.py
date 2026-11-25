@@ -287,7 +287,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
         (static / name).read_bytes() for name in (
             "app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
             "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
-            "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
+            "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png",
         )
     )).hexdigest()[:16]
     assert _ASSET_FINGERPRINT == expected
@@ -307,10 +307,20 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert page.text.index('/static/settings.js?') < page.text.index('/static/app.js?')
     assert f'/static/max-admin.js?v={expected}' in page.text
     assert page.text.index('/static/max-admin.js?') < page.text.index('/static/app.js?')
-    assert f'/static/style.css?v={expected}' in page.text
+    styles = ("style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css",)
+    for i, name in enumerate(styles):
+        assert f'/static/{name}?v={expected}' in page.text
+        if i:
+            assert page.text.index(f'/static/{styles[i-1]}?') < page.text.index(f'/static/{name}?')
+    # The authenticated debug page is checked separately; its template must
+    # declare exactly the same stylesheet sequence as the main panel.
+    import re
+    template = (static.parent / "firmware-debug.html").read_text()
+    assert re.findall(r'<link rel="stylesheet" href="/static/([^?]+)\?', template) == list(styles)
+    assert re.findall(r'<link rel="stylesheet" href="/static/([^?]+)\?', page.text) == list(styles)
     assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
+    for filename in ("app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"
