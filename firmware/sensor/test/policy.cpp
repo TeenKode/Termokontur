@@ -38,6 +38,23 @@ int main() {
   assert(sensor::sample_epoch(1795520000, 2000000, 1000000) == 0);
   assert(sensor::sample_epoch(1700000000, 0, 1000000) == 0);
   assert(sensor::sample_epoch(0, 0, 1000000) == 0);
+  // Initial UTC bootstrap fails. Subsequent samples still run, but must not
+  // turn on Wi-Fi until the monotonic deadline, even without a trusted clock.
+  assert(sensor::radio_due(false, 0, 0));
+  const auto first_retry = sensor::radio_next_send(45, sensor::retry_delay(86400, 0));
+  assert(!sensor::radio_due(false, 1800, first_retry));
+  assert(!sensor::radio_due(false, 3600, first_retry));
+  assert(sensor::radio_due(false, 3645, first_retry));
+  assert(sensor::radio_due(true, 1800, first_retry));
+  assert(sensor::next_sleep_s(1800, 1800, true, first_retry, 3600) == 45);
+  // An unsuccessful retry doubles the interval, independent of wall-clock
+  // corrections or stored UTC being restored at the start of each wake.
+  const auto second_retry = sensor::radio_next_send(3690, sensor::retry_delay(86400, 1));
+  assert(second_retry == 10890);
+  for (uint64_t wake = 5400; wake < second_retry; wake += 1800)
+    assert(!sensor::radio_due(false, wake, second_retry));
+  assert(sensor::radio_due(false, second_retry, second_retry));
+  assert(sensor::radio_next_send(10, 0) == 11);
   assert(sensor::retry_delay(86400, 0) == 3600);
   assert(sensor::retry_delay(86400, 100) == 57600);
   assert(sensor::retry_delay(1800, 10) == 1800);
