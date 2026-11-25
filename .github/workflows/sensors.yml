@@ -105,8 +105,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [firmware, browser, bundle-browser]
     concurrency: firmware-release-${{ needs.firmware.outputs.version }}
+    timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,6 +116,26 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: termokontur-panel-firmware
+      - name: Wait for server Test workflow on the exact release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # PR checks do not replace checks on the final merged revision.
+          for attempt in $(seq 1 80); do
+            run=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=20" \
+              --jq '.workflow_runs | sort_by(.run_number) | last // {}')
+            status=$(jq -r '.status // "missing"' <<< "$run")
+            if [[ "$status" == completed ]]; then
+              conclusion=$(jq -r '.conclusion' <<< "$run")
+              test "$conclusion" = success || { echo "Server CI conclusion: $conclusion"; exit 1; }
+              exit 0
+            fi
+            echo "Server CI: $status (attempt $attempt)"
+            sleep 15
+          done
+          echo "Server CI did not complete in time" >&2
+          exit 1
       - name: Publish the same archive over Git
         env:
           VERSION: ${{ needs.firmware.outputs.version }}
@@ -174,7 +196,14 @@ jobs:
       - name: Publish panel only after firmware is available
         env:
           VERSION: ${{ needs.firmware.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          # Verify the public release asset as well as the immutable Git tag.
+          download_dir=$(mktemp -d)
+          trap 'rm -rf -- "$download_dir"' EXIT
+          gh release download "firmware-v$VERSION" --pattern termokontur-firmware.zip --dir "$download_dir"
+          cmp "$download_dir/termokontur-firmware.zip" termokontur-firmware.zip
           git fetch --no-tags origin "refs/tags/firmware-bundle-v$VERSION"
           git show "FETCH_HEAD:termokontur-firmware.zip" > /tmp/published-firmware.zip
           cmp /tmp/published-firmware.zip termokontur-firmware.zip
