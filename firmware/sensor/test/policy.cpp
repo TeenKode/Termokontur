@@ -65,6 +65,11 @@ int main() {
   assert(sensor::next_sleep_s(1800, 1500, true, 1010, 1000) == 10);
   assert(sensor::next_sleep_s(1800, 1500, false, 1010, 1000) == 1500);
   assert(sensor::next_sleep_s(1, 0, true, 1000, 1000) == 1);
+  assert(sensor::radio_budget_s(30, false) == 30);
+  assert(sensor::radio_budget_s(30, true) == 120);
+  assert(sensor::radio_budget_s(120, true) == 120);
+  assert(sensor::radio_budget_s(180, true) == 180);
+  assert(sensor::radio_budget_s(180, false) == 180);
   assert(sensor::http_timeout_ms(20000000) == 15000);
   assert(sensor::http_timeout_ms(3250000) == 3250);
   assert(sensor::http_timeout_ms(-1) == 1);

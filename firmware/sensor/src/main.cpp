@@ -349,6 +349,19 @@ static bool prepare_dns() {
   last_error = "dns_resolution_failed";
   return false;
 }
+static void log_wifi_link() {
+  esp_netif_ip_info_t info{};
+  if (esp_netif_get_ip_info(sta_netif, &info) == ESP_OK) {
+    char ip[16]{}, mask[16]{}, gateway[16]{};
+    inet_ntop(AF_INET, &info.ip, ip, sizeof ip);
+    inet_ntop(AF_INET, &info.netmask, mask, sizeof mask);
+    inet_ntop(AF_INET, &info.gw, gateway, sizeof gateway);
+    printf("WIFI: IPv4=%s mask=%s gateway=%s\n", ip, mask, gateway);
+  }
+  wifi_ap_record_t ap{};
+  if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+    printf("WIFI: RSSI=%d dBm channel=%u\n", (int)ap.rssi, (unsigned)ap.primary);
+}
 static bool wifi_up() {
   if (!start_wifi())
     return false;
@@ -363,13 +376,15 @@ static bool wifi_up() {
     return false;
   esp_wifi_set_max_tx_power(cfg.tx_qdbm);
   if (debug_radio && esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK)
-    puts("WIFI: could not disable modem sleep for debug");
+    puts("WIFI: could not disable modem sleep for USB registration/debug");
   for (int tries = 0; tries < 3 && available(); tries++) {
     esp_wifi_connect();
     int64_t attempt = esp_timer_get_time() + 10000000;
     while (available() && esp_timer_get_time() < attempt) {
-      if (xEventGroupGetBits(events) & 1)
+      if (xEventGroupGetBits(events) & 1) {
+        log_wifi_link();
         return prepare_dns();
+      }
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   }
@@ -434,7 +449,11 @@ static std::string post_once(const std::string &path, const std::string &body,
   if (path == "/api/sensors/bootstrap")
     printf("TLS: clock epoch=%lld; trust=%s (%u bytes)\n", (long long)time(nullptr),
            ca.empty() ? "public CA bundle" : "provisioned CA", (unsigned)ca.size());
+  const int64_t started_us = esp_timer_get_time();
+  printf("HTTPS: opening %s, timeout=%d ms\n", path.c_str(), timeout_ms());
   esp_err_t err = esp_http_client_open(h, body.size());
+  printf("HTTPS: open %s: %s in %lld ms\n", path.c_str(), esp_err_to_name(err),
+         (long long)((esp_timer_get_time() - started_us) / 1000));
   if (err == ESP_OK) {
     size_t sent = 0;
     while (sent < body.size() && available()) {
@@ -1350,7 +1369,12 @@ extern "C" void app_main() {
     }
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
-    deadline = esp_timer_get_time() + (int64_t)cfg.wifi_budget_s * 1000000;
+    // Externally powered enrollment needs several independent HTTPS requests.
+    // Use the same extended budget as BOOT diagnostics, not battery policy.
+    debug_radio = true;
+    const auto budget = sensor::radio_budget_s(cfg.wifi_budget_s, true);
+    printf("FACTORY: USB registration, Wi-Fi budget=%u s\n", (unsigned)budget);
+    deadline = esp_timer_get_time() + (int64_t)budget * 1000000;
     const bool registered = wifi_up() && sync_time() && enroll();
     stop_network();
     if (!registered) {
@@ -1442,7 +1466,7 @@ extern "C" void app_main() {
   const bool measurement_due =
       boot_debug || (cfg.enabled && (pending || uptime_now() >= rt.next_measure));
   const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
-  const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
+  const uint32_t radio_budget = sensor::radio_budget_s(cfg.wifi_budget_s, boot_debug);
   // Measure before any station connection, even after a cold boot. The
   // setup AP is already stopped by setup_ap() before the BOOT test.
   Record measurement{};
