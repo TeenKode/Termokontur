@@ -15,6 +15,11 @@ inline bool valid_ack(double value, uint64_t first, uint64_t sent_end) {
 inline uint32_t retry_delay(uint32_t send_s, uint32_t failures) {
   return std::min<uint32_t>(send_s, 3600u << std::min<uint32_t>(failures, 4));
 }
+// USB enrollment and BOOT diagnostics have an extended, bounded radio
+// budget. Normal battery operation keeps the configured limit.
+inline uint32_t radio_budget_s(uint32_t configured, bool diagnostic) {
+  return diagnostic ? std::max<uint32_t>(120, configured) : configured;
+}
 // Per-operation timeout may not exceed the shared radio budget.
 inline int http_timeout_ms(int64_t remaining_us) {
   return static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(15000, remaining_us / 1000)));
