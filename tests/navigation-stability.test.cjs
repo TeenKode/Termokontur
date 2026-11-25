@@ -272,3 +272,20 @@ test("notification audiences preserve MAX recipient selection and building filte
   fields["notification-building"].value="B";
   assert.equal(vm.runInContext('notificationTargets().map(person=>person.user_id).join(",")',context),"1,2");
 });
+
+
+test("initial session probe completes before login controls become enabled",async()=>{
+  const fields={"login-name":{disabled:true},password:{disabled:true},"login-form":{querySelector:()=>submit}};
+  const submit={disabled:true};let complete;
+  const calls=[];
+  const context=vm.createContext({$:id=>fields[id],api:()=>new Promise(resolve=>{complete=resolve;}),enterLogin:()=>calls.push("login"),enterApp:()=>calls.push("app"),refresh:async()=>{}});
+  const boot=vm.runInContext("(async "+extractFunction("bootPanel")+")",context);
+  const pending=boot();
+  assert.equal(fields.password.disabled,true);
+  assert.equal(submit.disabled,true);
+  complete({authenticated:false});
+  await pending;
+  assert.deepEqual(calls,["login"]);
+  assert.equal(fields.password.disabled,false);
+  assert.equal(submit.disabled,false);
+});

@@ -820,6 +820,7 @@ async function disableRoom(room) {
   catch(error){toast(error.message,true);}
 }
 onOperation($("login-form"),"Входим в панель…",async()=>{
+  if($("password").disabled)return;
   $("login-error").textContent="";
   try{
     const session=await api("/api/login","POST",{username:$("login-name").value,password:$("password").value});
@@ -969,7 +970,17 @@ onOperation($("reading-form"),"Записываем показание…",async
 function redrawPanelTrends(){if(selectedTab==="readings")drawChart();if(selectedTab==="overview"){renderHistoryLegend();renderBuildingSummary();drawHistoryChart();}if(selectedTab==="reports")drawReportTrend();}
 window.addEventListener("resize",()=>{if(selectedTab==="readings")drawChart();if(selectedTab==="overview")drawHistoryChart();if(selectedTab==="reports")drawReportTrend();});
 document.addEventListener("termokontur:themechange",redrawPanelTrends);
-(async function boot(){try{const result=await api("/api/session");if(result.authenticated){enterApp(result);await refresh();}else enterLogin();}catch{enterLogin();}})();
+async function bootPanel(){
+  // Do not race the initial session probe against an explicit login.
+  try{
+    const result=await api("/api/session");
+    if(result.authenticated){enterApp(result);await refresh();}
+    else enterLogin();
+  }catch{enterLogin();}
+  finally{
+    for(const field of [$("login-name"),$("password"),$("login-form").querySelector('button[type="submit"]')])field.disabled=false;
+  }
+}
 
 /* Accessible settings workspace: categories, overview and independent saves. */
 const settingsGroups = {
@@ -1897,3 +1908,6 @@ onOperation($("restore-form"),"Восстанавливаем базу…",async
     $("login-error").textContent="База восстановлена. Войдите снова.";
   }catch(error){toast(error.message,true);}
 });
+
+// All modules and event handlers are initialized before probing the session.
+void bootPanel();
