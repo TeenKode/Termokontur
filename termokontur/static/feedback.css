@@ -1,0 +1,16 @@
+/* Feedback floats above the page or the active dialog without shifting either. */
+.panel-feedback{position:fixed;z-index:10;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));width:min(420px,calc(100% - 32px));display:grid;justify-items:end;gap:8px;pointer-events:none}
+.operation-status,.toast{max-width:100%;margin:0;padding:12px 15px;border:1px solid transparent;border-radius:10px;font-size:13px;font-weight:600;line-height:1.45;box-shadow:0 8px 28px #19334d26;overflow-wrap:anywhere}
+.operation-status{border-color:#cfe6e1;background:#effaf6;color:#206a5b}
+.operation-status[data-kind="error"]{background:#fff2f2;border-color:#efb9be;color:#a33243}
+.toast{display:flex;align-items:flex-start;gap:8px;background:#176f5d;color:#fff;pointer-events:auto}
+.toast[data-kind="error"]{background:#a33243}
+#toast-message{min-width:0;max-height:min(12em,40vh);overflow:auto;padding-block:3px}
+#toast-close{display:grid;place-items:center;min-width:30px;min-height:30px;padding:0;flex:none;border:1px solid #ffffff60;border-radius:7px;background:transparent;color:inherit;font-size:19px;line-height:1}
+#toast-close:hover{background:#ffffff20}
+#toast-close:focus-visible{outline-color:#fff}
+button.operation-busy{cursor:progress;position:relative}
+button.operation-busy::before{content:"";position:absolute;top:3px;right:3px;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:operation-spin .7s linear infinite;pointer-events:none}
+@keyframes operation-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){button.operation-busy::before{animation:none;border-style:dotted}}
+

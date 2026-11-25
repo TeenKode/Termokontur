@@ -8,7 +8,7 @@ const path=require("node:path");
 const root=path.resolve(__dirname,"..");
 const source=["reports.js","notifications.js","updates.js","settings.js","max-admin.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
 const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
-const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
+const styles=["style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("");
 
 function extractFunction(name){
   const start=source.indexOf("function "+name+"(");
