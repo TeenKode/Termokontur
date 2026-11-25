@@ -6,7 +6,7 @@ const fs=require("node:fs");
 const vm=require("node:vm");
 const path=require("node:path");
 const root=path.resolve(__dirname,"..");
-const source=fs.readFileSync(path.join(root,"termokontur/static/app.js"),"utf8");
+const source=["reports.js","app.js"].map(name=>fs.readFileSync(path.join(root,"termokontur/static",name),"utf8")).join("\n");
 const chartSource=fs.readFileSync(path.join(root,"termokontur/static/charts.js"),"utf8");
 const styles=fs.readFileSync(path.join(root,"termokontur/static/style.css"),"utf8");
 
