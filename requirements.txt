@@ -4,11 +4,11 @@ fastapi==0.165.0
 uvicorn==0.54.0
 httpx[socks]==0.28.1
 python-multipart==0.0.34
-cryptography==46.0.7
+cryptography==50.0.2
 tzdata==2026.6
 paho-mqtt==2.2.0
 xlsxwriter==3.3.4
-reportlab==4.5.1
+reportlab==5.1.0
 
 # Transitive runtime dependencies (keep native and Docker installs reproducible).
 annotated-doc==0.0.7
