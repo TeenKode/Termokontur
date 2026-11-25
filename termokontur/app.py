@@ -7,12 +7,13 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, db, maintenance, sensor_firmware, sensor_mqtt, sensor_onboarding, sensors, settings
+from . import __version__, auth, audit, db, maintenance, sensor_firmware, sensor_mqtt, sensor_onboarding, sensors, settings
 from .web import access, max_api, operations, reporting, rooms
 
 ROOT = Path(__file__).resolve().parent
@@ -22,7 +23,7 @@ logger = logging.getLogger("termokontur.maintenance")
 # deployments using the same semantic version number.
 _ASSET_FINGERPRINT = hashlib.sha256(
     b"".join((ROOT / "static" / name).read_bytes() for name in (
-        "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+        "app.js", "charts.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
         "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
         "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
     ))
@@ -69,7 +70,23 @@ async def lifespan(application: FastAPI):
 
 
 async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    finally:
+        if request.method in ("POST", "PUT", "PATCH", "DELETE") and getattr(request.state, "audit_admin", False):
+            try:
+                route = getattr(request.scope.get("route"), "path", "/api")
+                # Only known object identifiers, not arbitrary form data,
+                # query parameters, credentials, certificates or tokens.
+                params = request.path_params
+                target = ", ".join(f"{key}={params[key]}" for key in (
+                    "room_id", "reading_id", "device", "firmware_id", "subscription_id", "user_id", "username", "name")
+                    if key in params)
+                await asyncio.to_thread(audit.record, request.method, route, target, status)
+            except Exception:
+                logger.exception("Admin audit write failed")
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
@@ -111,6 +128,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     application.state.failed_logins = {}
+    application.state.login_lock = Lock()
     application.middleware("http")(security_headers)
     application.add_api_route("/", index, methods=["GET"])
     application.add_api_route("/sensors/firmware-debug", firmware_debug, methods=["GET"],

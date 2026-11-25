@@ -1,6 +1,8 @@
 """Autonomous sensors: versioned SQLite schema, transactional ingest and admin API."""
 from __future__ import annotations
 
+import csv
+import io
 import hashlib
 import hmac
 import json
@@ -9,13 +11,14 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
+from ipaddress import IPv4Address
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import __version__, db, sensor_firmware, sensor_monitor
+from . import __version__, db, sensor_firmware, sensor_monitor, settings
 
 MODEL = "c3-sht40-v1"
 SensorModel = Literal["c3-sht40-v1"]
@@ -48,6 +51,44 @@ class Config(Strict):
             self.wifi_min_mv = max(self.wifi_min_mv, self.cutoff_mv)
         self.ota_min_mv = max(self.ota_min_mv, self.cutoff_mv, 3300)
         return self
+
+
+DEFAULT_SETUP_KEY = "sensor_setup_defaults"
+
+
+class SetupDefaults(Strict):
+    sensor_type: SensorType = "sht4x"
+    ssid: str = ""
+    password: str | None = Field(default=None, repr=False)
+    dns_primary: str = ""
+    dns_secondary: str = ""
+    config: Config = Field(default_factory=Config)
+
+    @field_validator("ssid")
+    @classmethod
+    def valid_ssid(cls, value: str) -> str:
+        if "\0" in value or len(value.encode("utf-8")) > 32:
+            raise ValueError("Название Wi-Fi должно занимать не более 32 байт")
+        return value
+
+    @field_validator("dns_primary", "dns_secondary")
+    @classmethod
+    def valid_dns(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        try:
+            address = IPv4Address(value)
+            if address.is_unspecified or address.is_loopback or address.packed[0] >= 224:
+                raise ValueError()
+        except ValueError:
+            raise ValueError("DNS должен быть корректным IPv4-адресом") from None
+        return str(address)
+
+
+def setup_defaults(conn: sqlite3.Connection) -> SetupDefaults:
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (DEFAULT_SETUP_KEY,)).fetchone()
+    return SetupDefaults.model_validate_json(row["value"]) if row else SetupDefaults()
 
 
 class DeviceIn(Strict):
@@ -110,6 +151,7 @@ class Sync(Strict):
     device_ack: int | None = Field(default=None, ge=1, le=9007199254740991)
     device_lost_base: int | None = Field(default=None, ge=0, le=9007199254740991)
     replay: bool = False
+    journal_end: bool = False
 
     @model_validator(mode="after")
     def sequence(self):
@@ -213,17 +255,24 @@ def router(require_admin):
         device = "tk-" + secrets.token_hex(8)
         with db.connect() as conn:
             check_room(conn, payload.room_id)
-            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model)
-                            VALUES(?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
-                            int(time.time()) + 7 * 86400, Config().model_dump_json(), db.utc_now(), payload.model))
+            defaults = setup_defaults(conn)
+            conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_hash,enrollment_until,config,created_at,model,sensor_type)
+                            VALUES(?,?,?,?,?,?,?,?,?)""", (device, payload.name.strip(), payload.room_id, digest(code),
+                            int(time.time()) + 7 * 86400, defaults.config.model_dump_json(), db.utc_now(), payload.model, defaults.sensor_type))
             event(conn, device, "created", "Регистрация разрешена администратором")
         return {"device_id": device, "code": code, "expires_in": 7 * 86400}
 
     @r.patch("/devices/{device}", dependencies=admin)
     def update_device(device: str, payload: DevicePatch):
         with db.connect() as conn:
-            get_supported_device(conn, device)
+            conn.execute("BEGIN IMMEDIATE")
+            current = get_supported_device(conn, device)
             check_room(conn, payload.room_id)
+            if current["room_id"] != payload.room_id:
+                conn.execute("INSERT OR IGNORE INTO sensor_room_history VALUES(?,0,?)", (device, current["room_id"]))
+                conn.execute("""INSERT INTO sensor_room_history VALUES(?,?,?)
+                    ON CONFLICT(device_id,starts_at) DO UPDATE SET room_id=excluded.room_id""",
+                    (device, int(time.time()), payload.room_id))
             conn.execute("UPDATE sensor_devices SET name=?,room_id=?,enabled=? WHERE id=?",
                          (payload.name.strip(), payload.room_id, payload.enabled, device))
             event(conn, device, "updated", "Изменены имя, помещение или доступ")
@@ -287,6 +336,8 @@ def router(require_admin):
     @r.post("/devices/{device}/sync")
     def sync(device: str, payload: Sync, authorization: str = Header(default="")):
         now = int(time.time())
+        retention = int(settings.get("retention_days", "0"))
+        cutoff = now - retention * 86400 if retention else 0
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = authenticate(conn, device, authorization)
@@ -305,8 +356,9 @@ def router(require_admin):
                 if rec.measured_at and rec.measured_at > now + 300:
                     raise HTTPException(422, "Измерение датировано будущим")
                 fingerprint = digest(rec.model_dump_json())
-                old = conn.execute("SELECT fingerprint FROM sensor_records WHERE device_id=? AND seq=?",
-                                   (device, rec.seq)).fetchone()
+                old = conn.execute("""SELECT fingerprint FROM sensor_records WHERE device_id=? AND seq=?
+                    UNION ALL SELECT fingerprint FROM sensor_record_receipts WHERE device_id=? AND seq=?""",
+                    (device, rec.seq, device, rec.seq)).fetchone()
                 if old:
                     if old["fingerprint"] != fingerprint:
                         raise HTTPException(409, "Содержимое существующего seq изменилось")
@@ -330,21 +382,42 @@ def router(require_admin):
                     else:
                         event(conn, device, "gap", f"Нет записей [{gap_from},{rec.seq})")
                         lost_confirmed += gap
+                if rec.measured_at is not None and rec.measured_at < cutoff:
+                    conn.execute("INSERT INTO sensor_record_receipts VALUES(?,?,?)", (device, rec.seq, fingerprint))
+                    ack = rec.seq + 1
+                    continue
+                room_id = d["room_id"]
+                if rec.measured_at is not None:
+                    assigned = conn.execute("""SELECT room_id FROM sensor_room_history
+                        WHERE device_id=? AND starts_at<=? ORDER BY starts_at DESC LIMIT 1""",
+                        (device, rec.measured_at)).fetchone()
+                    if assigned:
+                        room_id = assigned["room_id"]
                 conn.execute("""INSERT INTO sensor_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                             (device, rec.seq, d["room_id"], rec.measured_at, now, rec.boot_id, rec.uptime_s,
+                             (device, rec.seq, room_id, rec.measured_at, now, rec.boot_id, rec.uptime_s,
                               rec.time_quality, rec.temperature, rec.humidity, rec.battery_mv, rec.interval_s,
                               rec.error, fingerprint))
                 if rec.measured_at and not rec.error and -40 <= rec.temperature <= 60:
                     observed = datetime.fromtimestamp(rec.measured_at, timezone.utc).isoformat(timespec="seconds")
                     conn.execute("INSERT INTO readings(room_id,value,source,reporter,observed_at,external_id) "
-                                 "VALUES(?,?,'ha',?,?,?)", (d["room_id"], rec.temperature, "Датчик "+device,
+                                 "VALUES(?,?,'ha',?,?,?)", (room_id, rec.temperature, "Датчик "+device,
                                                         observed, f"sensor:{device}:{rec.seq}"))
                 ack = rec.seq + 1
             if replay_until is not None and not payload.records and ack < replay_until:
                 event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{replay_until})")
                 ack = replay_until
+            if payload.journal_end and replay_until is not None and ack < replay_until:
+                event(conn, device, "restore_gap", f"После восстановления в журнале нет записей [{ack},{replay_until})")
+                ack = replay_until
             if replay_until is not None and ack >= replay_until:
                 lost_confirmed = max(lost_confirmed, payload.device_lost_base)
+            if payload.journal_end and ack < payload.next_seq:
+                gap = payload.next_seq - ack
+                if gap > payload.lost - lost_confirmed:
+                    raise HTTPException(409, "Конец журнала не подтверждён счётчиком потерь")
+                event(conn, device, "gap", f"Нет записей [{ack},{payload.next_seq})")
+                lost_confirmed += gap
+                ack = payload.next_seq
             restore_pending = int(bool(d["restore_pending"] and ack == initial_ack))
             conn.execute("""UPDATE sensor_devices SET last_seen=?,firmware=?,battery_mv=?,rssi=?,boots=?,lost=?,
                          ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,
@@ -368,11 +441,39 @@ def router(require_admin):
         return {"ack_seq": ack, "time": now, "config": config, "ota": ota}
 
     @r.get("/devices/{device}/records", dependencies=admin)
-    def records(device: str, limit: int = Query(500, ge=1, le=5000)):
+    def records(device: str, limit: int = Query(500, ge=1, le=5000),
+                before_seq: int | None = Query(default=None, ge=1, le=9007199254740991)):
         with db.connect() as conn:
             get_device(conn, device)
-            return [dict(x) for x in conn.execute("SELECT * FROM sensor_records WHERE device_id=? ORDER BY seq DESC LIMIT ?",
-                                                  (device, limit))]
+            return [dict(x) for x in conn.execute("""SELECT * FROM sensor_records
+                WHERE device_id=? AND (? IS NULL OR seq<?) ORDER BY seq DESC LIMIT ?""",
+                (device, before_seq, before_seq, limit))]
+
+    @r.get("/devices/{device}/records.csv", dependencies=admin)
+    def export_records(device: str):
+        with db.connect() as conn:
+            get_device(conn, device)
+        fields = ("seq", "measured_at", "received_at", "time_quality", "temperature",
+                  "humidity", "battery_mv", "error")
+        def rows():
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(fields)
+            yield "\ufeff" + output.getvalue()
+            output.seek(0)
+            output.truncate()
+            with db.connect() as conn:
+                cursor = conn.execute("""SELECT seq,measured_at,received_at,time_quality,
+                    temperature,humidity,battery_mv,error FROM sensor_records
+                    WHERE device_id=? ORDER BY seq DESC""", (device,))
+                while batch := cursor.fetchmany(500):
+                    writer.writerows(batch)
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate()
+        return StreamingResponse(rows(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{device}.csv"',
+                     "Cache-Control": "no-store"})
 
     @r.get("/devices/{device}/events", dependencies=admin)
     def events(device: str):

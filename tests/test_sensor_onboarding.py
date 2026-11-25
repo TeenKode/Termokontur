@@ -36,6 +36,49 @@ def room():
     return db.create_room('Школа','1','101','Кабинет',18,24)
 
 
+def test_sensor_setup_defaults_require_admin(client):
+    assert client.get('/api/sensors/defaults').status_code == 401
+    assert client.put('/api/sensors/defaults', json={}).status_code == 401
+    assert client.get('/api/sensors/usb/options').status_code == 401
+
+
+def test_setup_defaults_are_reusable_and_preserve_existing_devices(admin):
+    room_id = room()['id']
+    old = admin.post('/api/sensors/devices', json={'name':'Старый датчик','room_id':room_id}).json()['device_id']
+    password = 'Sensor-Defaults-Demo '
+    path = '/api/sensors/defaults'
+    profile = {'ssid':'School-IoT','dns_primary':'10.1.1.10','sensor_type':'ds18b20',
+               'config':{'measure_s':75,'send_s':600,'version':8}}
+    saved = admin.put(path, json={**profile,'password':password})
+    assert saved.status_code == 200, saved.text
+    public = admin.get(path).json()
+    assert public['password_configured'] is True and 'password' not in public
+    options = admin.get('/api/sensors/usb/options')
+    assert options.headers['cache-control'] == 'no-store'
+    assert options.json()['password'] == password
+    assert options.json()['config']['version'] == 1
+    assert password not in admin.get('/api/sensors/bootstrap').text
+    new = admin.post('/api/sensors/devices', json={'name':'Новый датчик','room_id':room_id}).json()['device_id']
+    devices = {d['id']:d for d in admin.get('/api/sensors/devices').json()}
+    assert devices[old]['config']['measure_s'] == 1800
+    assert devices[new]['config']['measure_s'] == 75
+    assert devices[new]['sensor_type'] == 'ds18b20'
+    private, ident = identity()
+    admin.post('/api/sensors/auth/prove', json=proof(admin, private, ident)).raise_for_status()
+    fp = onboarding.fingerprint(ident['public_key'])
+    approved = admin.post(f'/api/sensors/claims/{fp}/approve', json={'name':'По сети','room_id':room_id})
+    assert approved.json()['config']['send_s'] == 600
+    admin.put(path, json={**profile,'dns_secondary':'10.1.1.11'}).raise_for_status()
+    assert admin.get('/api/sensors/usb/options').json()['password'] == password
+    admin.put(path, json={**profile,'ssid':'Other-Network'}).raise_for_status()
+    assert admin.get('/api/sensors/usb/options').json()['password'] == ''
+    admin.put(path, json={**profile,'password':password}).raise_for_status()
+    cleared = admin.put(path, json={**profile,'password':''})
+    assert cleared.json()['password_configured'] is False
+    invalid = admin.put(path, json={**profile,'password':'short'})
+    assert invalid.status_code == 422 and 'short' not in invalid.text
+
+
 def test_unknown_device_needs_admin_approval(admin):
     private, ident = identity()
     p = proof(admin, private, ident)
@@ -350,7 +393,7 @@ def test_bootstrap_uses_server_time_and_active_public_certificate(client, monkey
                      client.post('/api/sensors/bootstrap', json={})):
         assert response.status_code == 200
         assert response.json() == {'time':1794700100, 'ca':'active-public-chain', 'sync_replay':True,
-                                   'usb_powered_sync':True}
+                                   'usb_powered_sync':True, 'sync_tail_loss':True}
         assert response.headers['cache-control'] == 'no-store'
         assert response.headers['access-control-allow-origin'] == '*'
         assert 'access-control-allow-credentials' not in response.headers

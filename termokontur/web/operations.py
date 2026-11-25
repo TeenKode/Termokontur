@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, maintenance, settings, tls, updates
+from .. import auth, audit, maintenance, settings, tls, updates
 from .access import require_admin
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
@@ -34,9 +34,19 @@ class SettingsIn(BaseModel):
     alert_cooldown_minutes: int = Field(default=60, ge=5, le=1440)
 
 
+class SettingsPatchIn(BaseModel):
+    changes: dict
+    expected: dict
+
+
 class RestoreBackupIn(BaseModel):
     name: str
     password: str
+
+
+@router.get("/audit")
+def get_audit():
+    return audit.recent()
 
 
 @router.get("/settings")
@@ -52,6 +62,28 @@ def save_settings(payload: SettingsIn):
         raise HTTPException(422, str(exc)) from exc
     settings.update(data)
     return settings.public()
+
+
+@router.patch("/settings")
+def patch_settings(payload: SettingsPatchIn):
+    from .. import db
+    keys = set(payload.changes)
+    if not keys or keys != set(payload.expected) or not keys <= set(settings.ENV_DEFAULTS):
+        raise HTTPException(422, "Проверьте поля настроек")
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = settings.public(conn)
+        if any(current[key] != payload.expected[key] for key in keys):
+            raise HTTPException(409, "Настройки изменены в другой сессии. Обновите страницу и проверьте значения.")
+        try:
+            merged = SettingsIn.model_validate({**current, **payload.changes})
+            values = settings.validated(merged.model_dump())
+        except ValueError as exc:
+            raise HTTPException(422, "Проверьте значения настроек") from exc
+        conn.executemany("""INSERT INTO settings(key,value) VALUES(?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            [(key, values[key]) for key in keys])
+        return settings.public(conn)
 
 
 @router.get("/tls/sensor-ca")

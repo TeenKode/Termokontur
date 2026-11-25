@@ -8,8 +8,10 @@ PREV=/opt/termokontur-previous
 BACKUPS="$DATA/backups"
 STAGE=
 SWAPPED=0
+SERVICES_STOPPED=0
 BACKUP_FILE=
 SERVICES_SAVED=0
+METADATA_CHANGED=0
 UNITS_DIR=/etc/systemd/system
 OLD_UNITS=/opt/termokontur-previous-units
 INSTALL_UNITS=(termokontur.service termokontur-max.service termokontur-update.service termokontur-update.path)
@@ -98,6 +100,32 @@ with sqlite3.connect(sys.argv[1]) as old, sqlite3.connect(sys.argv[2]) as target
 PY
   fi
 }
+write_revision() {
+  # Run unprivileged: never follow a service-owned symlink as root.
+  # Atomic replacement also works if an old marker is not writable.
+  runuser -u termokontur -- /usr/bin/python3 - "$1" <<'PY'
+import os, sys, tempfile
+from pathlib import Path
+target = Path("/var/lib/termokontur/installed-revision")
+fd, name = tempfile.mkstemp(prefix=".installed-revision-", dir=target.parent)
+try:
+    with os.fdopen(fd, "w", encoding="ascii") as stream:
+        stream.write(sys.argv[1] + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(name, target)
+finally:
+    Path(name).unlink(missing_ok=True)
+PY
+}
+restore_metadata() {
+  install -o root -g root -m 0755 "$OLD_UNITS/updater" /usr/local/sbin/termokontur-apply-update || return 1
+  if [[ -f "$OLD_UNITS/revision" ]]; then
+    write_revision "$(cat "$OLD_UNITS/revision")"
+  else
+    runuser -u termokontur -- rm -f -- "$DATA/installed-revision"
+  fi
+}
 cleanup() {
   local result=$?
   trap - EXIT
@@ -120,8 +148,14 @@ cleanup() {
       fi
       if [[ -d "$PREV" ]]; then mv "$PREV" "$APP"; fi
       restore_db || true
+      if (( METADATA_CHANGED )); then
+        restore_metadata || echo "WARNING: could not restore updater metadata; copies retained in $OLD_UNITS" >&2
+      fi
       systemctl start termokontur.service || true
       if ! health; then echo "WARNING: rollback web health check failed" >&2; fi
+      systemctl start termokontur-max.service || true
+    elif (( SERVICES_STOPPED )); then
+      systemctl start termokontur.service || true
       systemctl start termokontur-max.service || true
     fi
     record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
@@ -169,7 +203,11 @@ chmod 0755 "$STAGE"
 
 record installing "Зависимости готовы. Подготавливаем резервную копию…" backup
 
-# Backup SQLite online without stopping the running application.
+# Quiesce both SQLite writers before taking the rollback snapshot. If any
+# later preparation fails, cleanup restarts the unchanged installation.
+SERVICES_STOPPED=1
+systemctl stop termokontur-max.service
+systemctl stop termokontur.service
 install -o termokontur -g termokontur -m 0700 -d "$BACKUPS"
 BACKUP_FILE="$BACKUPS/pre-update-$(date -u +%Y%m%dT%H%M%SZ)-$REVISION.sqlite3"
 runuser -u termokontur -- /usr/bin/python3 - "$DATA/termokontur.sqlite3" "$BACKUP_FILE" <<'PY'
@@ -180,8 +218,6 @@ PY
 runuser -u termokontur -- chmod 0600 "$BACKUP_FILE"
 record installing "Резервная копия сохранена. Переключаем приложение…" switching
 
-systemctl stop termokontur-max.service 2>/dev/null || true
-systemctl stop termokontur.service
 if [[ -d "$PREV" ]]; then rm -rf -- "$PREV"; fi
 mv "$APP" "$PREV"
 SWAPPED=1
@@ -194,6 +230,11 @@ install -d -o root -g root -m 0700 "$OLD_UNITS"
 for unit in "${INSTALL_UNITS[@]}"; do
   cp -a "$UNITS_DIR/$unit" "$OLD_UNITS/$unit"
 done
+cp -a /usr/local/sbin/termokontur-apply-update "$OLD_UNITS/updater"
+if [[ -f "$DATA/installed-revision" ]]; then
+  # Read as the service user, keep the snapshot root-owned.
+  runuser -u termokontur -- cat "$DATA/installed-revision" > "$OLD_UNITS/revision"
+fi
 SERVICES_SAVED=1
 for unit in "${INSTALL_UNITS[@]}"; do
   install -o root -g root -m 0644 "$APP/deploy/systemd/$unit" "$UNITS_DIR/$unit"
@@ -202,18 +243,16 @@ systemctl daemon-reload
 systemctl start termokontur.service
 record installing "Приложение запущено. Проверяем его доступность…" verifying
 health || { echo "Web health check failed after version swap" >&2; exit 1; }
-systemctl start termokontur-max.service || true
+systemctl start termokontur-max.service
+systemctl is-active --quiet termokontur-max.service
 systemctl enable --now termokontur-update.path
 
 record installing "Проверка завершена. Сохраняем сведения о версии…" finishing
 
 # Update the privileged updater itself last; validate it before installation.
+METADATA_CHANGED=1
 install -o root -g root -m 0755 "$APP/scripts/termokontur-apply-update" /usr/local/sbin/termokontur-apply-update
-runuser -u termokontur -- /usr/bin/python3 - "$REVISION" <<'PY'
-from pathlib import Path
-import sys
-Path("/var/lib/termokontur/installed-revision").write_text(sys.argv[1] + "\n", encoding="ascii")
-PY
+write_revision "$REVISION"
 record success "Обновление установлено: сборка ${REVISION:0:12}. Резервная копия сохранена." success
 SWAPPED=0
 exit 0

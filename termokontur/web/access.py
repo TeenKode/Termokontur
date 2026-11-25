@@ -1,6 +1,7 @@
 """Login, sessions and building-level access to the panel."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import secrets
@@ -9,7 +10,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from .. import auth, school_calendar
+from .. import auth, db, school_calendar
 
 router = APIRouter(prefix="/api")
 
@@ -24,6 +25,24 @@ def session_cookie() -> str:
     return f"{payload}:{signature(payload + ':' + str(auth.session_epoch()))}"
 
 
+def _session_digest(cookie: str) -> str:
+    return hashlib.sha256(cookie.encode()).hexdigest()
+
+
+def _revoked(cookie: str) -> bool:
+    with db.connect() as conn:
+        return conn.execute("SELECT 1 FROM session_revocations WHERE digest=? AND expires_at>?",
+                            (_session_digest(cookie), int(time.time()))).fetchone() is not None
+
+
+def _revoke(cookie: str) -> None:
+    parts = cookie.split(":")
+    expires = int(parts[2] if parts[0] == "v" else parts[0])
+    with db.connect() as conn:
+        conn.execute("DELETE FROM session_revocations WHERE expires_at<=?", (int(time.time()),))
+        conn.execute("INSERT OR IGNORE INTO session_revocations VALUES(?,?)", (_session_digest(cookie), expires))
+
+
 def authenticated(request: Request) -> bool:
     cookie = request.cookies.get("tk_session", "")
     try:
@@ -32,7 +51,7 @@ def authenticated(request: Request) -> bool:
             return False
         return hmac.compare_digest(
             mac, signature(f"{expires}:{nonce}:{auth.session_epoch()}")
-        )
+        ) and not _revoked(cookie)
     except (ValueError, KeyError):
         return False
 
@@ -48,7 +67,7 @@ def _building_session(request: Request) -> dict | None:
     except ValueError:
         return None
     account = auth.building_account(username)
-    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)):
+    if account and hmac.compare_digest(mac, _building_signature(cookie.rsplit(":", 1)[0], account)) and not _revoked(cookie):
         return account
     return None
 
@@ -70,6 +89,7 @@ def require_admin(request: Request):
     if not authenticated(request):
         raise HTTPException(401, "Войдите как администратор")
     _verify_origin(request)
+    request.state.audit_admin = True
 
 
 def scoped_access(request: Request) -> str:
@@ -118,19 +138,29 @@ def session(request: Request):
 
 @router.post("/login")
 def login(payload: Login, request: Request, response: Response):
+    _verify_origin(request)
     ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
     failed_logins = request.app.state.failed_logins
-    failures = [t for t in failed_logins.get(ip, []) if now - t < 300]
-    if len(failures) >= 5:
-        raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
+    # Reserve a slot before the expensive password verification so simultaneous
+    # requests cannot all see an empty failure counter. Bound memory globally.
+    with request.app.state.login_lock:
+        for key, times in list(failed_logins.items()):
+            recent = [t for t in times if now - t < 300]
+            if recent:
+                failed_logins[key] = recent
+            else:
+                failed_logins.pop(key, None)
+        failures = failed_logins.get(ip, [])
+        if len(failures) >= 5 or (ip not in failed_logins and len(failed_logins) >= 4096):
+            raise HTTPException(429, "Слишком много попыток входа. Повторите позже.")
+        failed_logins[ip] = [*failures, now]
     username = payload.username.strip().lower()
     viewer = auth.check_building_password(username, payload.password) if username else None
     if (username and not viewer) or (not username and not auth.check_password(payload.password)):
-        failures.append(now)
-        failed_logins[ip] = failures
         raise HTTPException(401, "Неверный пароль")
-    failed_logins.pop(ip, None)
+    with request.app.state.login_lock:
+        failed_logins.pop(ip, None)
     if viewer:
         session_data = f"v:{username}:{int(time.time()) + 8 * 3600}:{secrets.token_urlsafe(18)}"
         cookie = f"{session_data}:{_building_signature(session_data, viewer)}"
@@ -143,7 +173,9 @@ def login(payload: Login, request: Request, response: Response):
 
 
 @router.post("/logout", dependencies=[Depends(scoped_access)])
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    # Revoke this token, not every active session of the administrator.
+    _revoke(request.cookies["tk_session"])
     response.delete_cookie("tk_session", path="/", samesite="strict")
     return {"ok": True}
 

@@ -124,3 +124,43 @@ def test_temperature_alerts_do_not_spam(client):
     settings.update({"alerts_enabled":"0"})
     db.add_reading(r["id"],16,"ha")
     assert max_delivery.queue_temperature_alerts()==0
+
+
+def test_backup_rejects_missing_current_schema_column(admin, tmp_path):
+    original = maintenance.backup_path(maintenance.create_backup()["name"])
+    staged = tmp_path / "bad.sqlite3"
+    staged.write_bytes(original.read_bytes())
+    with db.connect(staged) as conn:
+        conn.execute("ALTER TABLE rooms DROP COLUMN floor")
+    reply = admin.post("/api/backups/import", content=staged.read_bytes(),
+                       headers={"Content-Type": "application/octet-stream"})
+    assert reply.status_code == 422, reply.text
+    assert "rooms" in reply.json()["detail"]
+
+
+def test_old_backup_is_validated_without_modifying_original(admin, tmp_path):
+    original = maintenance.backup_path(maintenance.create_backup()["name"])
+    staged = tmp_path / "legacy.sqlite3"
+    staged.write_bytes(original.read_bytes())
+    with db.connect(staged) as conn:
+        conn.execute("DROP TABLE sensor_factory_tickets")
+        conn.execute("PRAGMA user_version=3")
+    before = staged.read_bytes()
+    maintenance.inspect(staged)
+    assert staged.read_bytes() == before
+
+
+def test_update_backups_visible_downloadable_and_rotated(admin):
+    settings.update({"backup_interval_days": "0", "backup_keep": "1"})
+    original = maintenance.backup_path(maintenance.create_backup()["name"])
+    import os
+    old = original.parent / ("pre-update-20260101T000000Z-" + "a"*40 + ".sqlite3")
+    new = original.parent / ("pre-update-20260102T000000Z-" + "b"*40 + ".sqlite3")
+    old.write_bytes(original.read_bytes())
+    new.write_bytes(original.read_bytes())
+    os.utime(old, (100, 100))
+    os.utime(new, (200, 200))
+    assert admin.get("/api/backups/" + old.name).status_code == 200
+    assert old.name in {x["name"] for x in maintenance.list_backups()}
+    maintenance.schedule()
+    assert not old.exists() and new.exists() and original.exists()

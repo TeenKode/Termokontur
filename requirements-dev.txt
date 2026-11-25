@@ -1,2 +1,6 @@
 -r requirements.txt
-pytest>=8,<10
+pytest==9.2.0
+iniconfig==2.3.1
+packaging==26.4
+pluggy==1.7.0
+pygments==2.21.0

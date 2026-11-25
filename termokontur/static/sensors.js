@@ -1,5 +1,6 @@
 "use strict";
-let sensorDevices=[],sensorSelected=null,sensorRecords=[],sensorConfig=null,sensorLoadId=0;
+let sensorDevices=[],sensorSelected=null,sensorRecords=[],sensorConfig=null,sensorLoadId=0,sensorRefreshId=0;
+const sensorPageSize=100;
 const sensorFirmwareBase="/api/sensors/firmware/bundled";
 const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив",rejected:"Доступ отклонён",authorization_pending:"Требуется разрешение"};
 const sensorTime={unknown:"Дата неизвестна",sntp:"Сервер времени",server:"Сервер",rtc:"Часы устройства"};
@@ -10,13 +11,30 @@ const sensorConfigFields=[
   ["ota_min_mv","Минимум для OTA, мВ (0 — от 3300 мВ)",0,4200],["tx_qdbm","Мощность Wi-Fi, четверти dBm",8,78],
   ["adc_scale_ppm","Коэффициент делителя АЦП, ppm",1600000,2400000]
 ];
+function renderSensorConfigFields(container,config){
+  container.replaceChildren();
+  for(const [key,label,min,max] of sensorConfigFields){
+    const field=el("label","",label),input=el("input");
+    input.type="number";input.name=key;input.min=min;input.max=max;input.required=true;input.value=config[key];
+    field.append(input);container.append(field);
+  }
+}
+function readSensorConfig(form,base,enabled){
+  const config={...base,enabled};
+  for(const [key] of sensorConfigFields)config[key]=Number(form.elements[key].value);
+  if(config.wifi_min_mv)config.wifi_min_mv=Math.max(config.wifi_min_mv,config.cutoff_mv);
+  config.ota_min_mv=Math.max(config.ota_min_mv,config.cutoff_mv,3300);
+  return config;
+}
 function sensorWhen(epoch){return epoch?when(new Date(epoch*1000).toISOString()):"—";}
 function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";onOperation(b,"Загружаем карточку датчика…",action);return b;}
 function sensorRoomOptions(select,chosen){select.replaceChildren();for(const r of rooms)option(select,String(r.id),r.building+" · "+r.name);select.value=String(chosen||rooms[0]?.id||"");}
 async function refreshSensors(){
+  const request=++sensorRefreshId;
   $("sensor-state").textContent="Загружаем датчики…";
   try{
     const [devices,active,mqtt,claims]=await Promise.all([api("/api/sensors/devices"),api("/api/rooms"),api("/api/sensors/mqtt"),api("/api/sensors/claims")]);
+    if(request!==sensorRefreshId)return;
     sensorDevices=devices;rooms=active;
     if(typeof renderSensorClaims==="function")renderSensorClaims(claims);
     if(typeof refreshInstaller==="function")refreshInstaller().catch(()=>{});
@@ -40,12 +58,12 @@ async function refreshSensors(){
       $("sensor-mqtt-tls").checked=mqtt.tls;$("sensor-mqtt-user").value=mqtt.username;$("sensor-mqtt-prefix").value=mqtt.discovery_prefix;
     }
     $("sensor-mqtt-state").textContent=(mqtt.enabled?"MQTT включён":"MQTT выключен")+" · в очереди: "+mqtt.outbox.length+(mqtt.outbox.some(x=>x.error)?" · есть ошибки доставки":"");
-  }catch(e){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}
+  }catch(e){if(request===sensorRefreshId){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}}
 }
 async function openSensor(id,reveal=false){
   const request=++sensorLoadId;
   try{
-    const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit=5000"),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
+    const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit="+sensorPageSize),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
     if(request!==sensorLoadId)return;
     const d=sensorDevices.find(x=>x.id===id);if(!d)return;
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
@@ -55,12 +73,11 @@ async function openSensor(id,reveal=false){
     for(const id of ["sensor-device-form","sensor-config-details","sensor-ota-details"])$(id).hidden=retired;
     $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
-    const configForm=$("sensor-config-form");configForm.replaceChildren();
-    for(const [key,label,min,max] of sensorConfigFields){const l=el("label","",label),input=el("input");input.type="number";input.name=key;input.min=min;input.max=max;input.value=d.config[key];input.required=true;l.append(input);configForm.append(l);}
+    const configForm=$("sensor-config-form");renderSensorConfigFields(configForm,d.config);
     const enabled=el("label","archive-toggle",["ds18b20","bmp280"].includes(d.sensor_type)?"Измерять температуру":"Измерять температуру и влажность"),checkbox=el("input");checkbox.type="checkbox";checkbox.name="enabled";checkbox.checked=d.config.enabled;enabled.prepend(checkbox);configForm.append(enabled);
     const save=el("button","btn primary","Отправить настройки");configForm.append(save);
-    const body=$("sensor-records");body.replaceChildren();
-    for(const r of records.slice(0,100)){const tr=el("tr");cell(tr,r.seq);cell(tr,sensorWhen(r.measured_at));cell(tr,r.temperature===null?"—":r.temperature.toFixed(2));cell(tr,r.humidity===null?"—":r.humidity.toFixed(1));cell(tr,r.battery_mv?Number(r.battery_mv/1000).toFixed(2)+" В":"—");cell(tr,(sensorTime[r.time_quality]||r.time_quality)+(r.error?" · "+r.error:""));body.append(tr);}
+    renderSensorRecords();
+    $("sensor-records-more").hidden=records.length<sensorPageSize;
     $("sensor-events").replaceChildren(...events.map(x=>el("li","",sensorWhen(x.at)+" · "+x.kind+": "+x.detail)));
     const select=$("sensor-firmware");
     select.replaceChildren();option(select,"","Выберите версию");
@@ -80,10 +97,24 @@ async function openSensor(id,reveal=false){
     }
   }catch(e){toast(e.message,true);}
 }
+function renderSensorRecords(){
+  const body=$("sensor-records");body.replaceChildren();
+  for(const r of sensorRecords){const tr=el("tr");cell(tr,r.seq);cell(tr,sensorWhen(r.measured_at));cell(tr,r.temperature===null?"—":r.temperature.toFixed(2));cell(tr,r.humidity===null?"—":r.humidity.toFixed(1));cell(tr,r.battery_mv?Number(r.battery_mv/1000).toFixed(2)+" В":"—");cell(tr,(sensorTime[r.time_quality]||r.time_quality)+(r.error?" · "+r.error:""));body.append(tr);}
+}
+onOperation($("sensor-records-more"),"Загружаем предыдущие измерения…",async()=>{
+  if(!sensorSelected||!sensorRecords.length)return;
+  const selected=sensorSelected,request=sensorLoadId;
+  const page=await api("/api/sensors/devices/"+selected+"/records?limit="+sensorPageSize+"&before_seq="+sensorRecords.at(-1).seq);
+  if(request!==sensorLoadId||selected!==sensorSelected)return;
+  sensorRecords.push(...page);
+  renderSensorRecords();
+  $("sensor-records-more").hidden=page.length<sensorPageSize;
+  drawSensorChart();
+});
 function drawSensorChart(){
   const canvas=$("sensor-chart");
   if(!sensorSelected||$("view-sensors").hidden)return;
-  const points=sensorRecords.filter(r=>r.measured_at&&!r.error).slice().sort((a,b)=>a.measured_at-b.measured_at||a.seq-b.seq);
+  const points=sensorRecords.slice(0,5000).filter(r=>r.measured_at&&!r.error).slice().sort((a,b)=>a.measured_at-b.measured_at||a.seq-b.seq);
   const colors=getComputedStyle(canvas);
   const hasTemperature=points.some(p=>Number.isFinite(p.temperature)),hasHumidity=points.some(p=>Number.isFinite(p.humidity));
   show("sensor-temperature-key",hasTemperature);show("sensor-humidity-key",hasHumidity);
@@ -116,7 +147,7 @@ onOperation($("sensor-add-form"),"Создаём код подключения�
 onOperation($("sensor-refresh"),"Обновляем список датчиков…",async()=>{await refreshSensors();if(sensorSelected)await openSensor(sensorSelected);});
 onOperation($("sensor-device-form"),"Сохраняем датчик…",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
 onOperation($("sensor-rekey"),"Отзываем доступ датчика…",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
-onOperation($("sensor-config-form"),"Сохраняем настройки датчика…",async e=>{e.preventDefault();try{const body={...sensorConfig};for(const [key] of sensorConfigFields)body[key]=Number(e.target.elements[key].value);body.enabled=e.target.elements.enabled.checked;await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
+onOperation($("sensor-config-form"),"Сохраняем настройки датчика…",async e=>{e.preventDefault();try{const body=readSensorConfig(e.target,sensorConfig,e.target.elements.enabled.checked);await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
 $("sensor-firmware").addEventListener("change",()=>{
   $("sensor-ota-assign").disabled=!$("sensor-firmware").value;
 });
@@ -150,6 +181,6 @@ onOperation($("sensor-mqtt-form"),"Сохраняем настройки MQTT…
     toast("Настройки MQTT сохранены");
   }catch(error){toast(error.message,true);}
 });
-$("sensor-export").addEventListener("click",()=>{const keys=["seq","measured_at","received_at","time_quality","temperature","humidity","battery_mv","error"],lines=[keys.join(","),...sensorRecords.map(r=>keys.map(k=>JSON.stringify(r[k]??"")).join(","))];const url=URL.createObjectURL(new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"}));const a=el("a");a.href=url;a.download=sensorSelected+".csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+$("sensor-export").addEventListener("click",()=>{if(!sensorSelected)return;const link=el("a");link.href="/api/sensors/devices/"+encodeURIComponent(sensorSelected)+"/records.csv";link.download=sensorSelected+".csv";link.click();});
 window.addEventListener("resize",drawSensorChart);
 document.addEventListener("termokontur:themechange",drawSensorChart);

@@ -285,7 +285,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     expected = sha256(b"".join(
         (static / name).read_bytes() for name in (
-            "app.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+            "app.js", "charts.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
             "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
             "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
         )
@@ -296,10 +296,11 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert page.headers["cache-control"] == "no-store"
     assert "__ASSET_FINGERPRINT__" not in page.text
     assert f'/static/app.js?v={expected}' in page.text
+    assert f'/static/charts.js?v={expected}' in page.text
     assert f'/static/style.css?v={expected}' in page.text
     assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
+    for filename in ("app.js", "charts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"
@@ -345,3 +346,67 @@ def test_reading_corrections_api_and_authentication(client):
     assert changes[0]["old_value"] == 21
     assert changes[0]["new_value"] == 22
     assert client.get("/api/readings/999999/corrections").status_code == 404
+
+
+def test_admin_audit_excludes_credentials_and_requires_admin(admin):
+    token = "sensitive-test-token-do-not-log-123"
+    assert admin.put("/api/settings/max-token",json={"value":token}).status_code == 200
+    room = admin.post("/api/rooms",json={"building":"Школа","name":"101"}).json()
+    assert admin.patch("/api/rooms/"+str(room["id"]),json={"name":"102"}).status_code == 200
+    result = admin.get("/api/audit")
+    assert result.status_code == 200
+    assert token not in result.text
+    records = result.json()
+    assert records[0]["method"] == "PATCH" and records[0]["target"] == "room_id="+str(room["id"])
+    assert any(r["route"] == "/api/settings/max-token" for r in records)
+    assert admin.post("/api/logout").status_code == 200
+    assert admin.get("/api/audit").status_code == 401
+
+
+def test_logout_revokes_copied_cookie_without_revoking_other_sessions(admin):
+    original = admin.cookies.get("tk_session")
+    assert admin.post("/api/login",json={"password":"this-is-a-test-admin-password"}).status_code == 200
+    other = admin.cookies.get("tk_session")
+    assert other != original
+    assert admin.post("/api/logout").status_code == 200
+    assert admin.get("/api/session",headers={"Cookie":"tk_session="+other}).json()["authenticated"] is False
+    assert admin.get("/api/session",headers={"Cookie":"tk_session="+original}).json()["authenticated"] is True
+    assert admin.get("/api/rooms",headers={"Cookie":"tk_session="+other}).status_code == 401
+
+
+def test_login_limit_reserves_parallel_attempts(client, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from termokontur import auth
+    import time
+    def reject(_):
+        time.sleep(0.1)
+        return False
+    monkeypatch.setattr(auth, "check_password", reject)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        statuses = list(pool.map(lambda _: client.post("/api/login",json={"password":"wrong"}).status_code, range(10)))
+    assert statuses.count(401) == 5
+    assert statuses.count(429) == 5
+    assert client.post("/api/login",json={"password":"wrong"},headers={"Origin":"https://foreign.example"}).status_code == 403
+
+
+def test_login_limit_cleans_expired_addresses(client, monkeypatch):
+    from termokontur import auth
+    import time
+    client.app.state.failed_logins["expired"] = [time.monotonic()-301]
+    monkeypatch.setattr(auth,"check_password",lambda _: False)
+    assert client.post("/api/login",json={"password":"wrong"}).status_code == 401
+    assert "expired" not in client.app.state.failed_logins
+
+
+def test_settings_patch_does_not_overwrite_other_fields(admin):
+    base = admin.get("/api/settings").json()
+    def patch(key, value):
+        return admin.patch("/api/settings", json={"changes": {key: value}, "expected": {key: base[key]}})
+    assert patch("organization_name", "Новая школа").status_code == 200
+    assert patch("stale_hours", 48).status_code == 200
+    assert patch("organization_name", "Старое окно").status_code == 409
+    final = admin.get("/api/settings").json()
+    assert final["organization_name"] == "Новая школа"
+    assert final["stale_hours"] == 48
+    assert patch("stale_hours", 0).status_code == 409
+    assert admin.patch("/api/settings",json={"changes":{"max_token":"secret"},"expected":{"max_token":None}}).status_code == 422

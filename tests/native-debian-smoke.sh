@@ -35,7 +35,13 @@ case "$verb" in
   start)
     if [[ "${1:-}" == "termokontur.service" ]]; then start_web; fi ;;
   stop)
-    if [[ "${1:-}" == "termokontur.service" ]]; then stop_web; fi ;;
+    if [[ "${1:-}" == "termokontur.service" ]]; then
+      if [[ "${TEST_BREAK_UPGRADE:-0}" == "1" && -f /run/termokontur-test.pid && ! -f /tmp/tk-late-reading ]]; then
+        touch /tmp/tk-late-reading
+        runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); c.execute("INSERT INTO readings(room_id,value,source,observed_at) SELECT id,23.5,\x27manual\x27,\x272026-01-01T00:00:00+00:00\x27 FROM rooms WHERE name=\x27101\x27"); c.commit()'
+      fi
+      stop_web
+    fi ;;
   restart)
     if [[ "${1:-}" == "termokontur.service" ]]; then
       stop_web
@@ -57,17 +63,35 @@ if [[ "${1:-}" == "clone" ]]; then
     printf '\nraise RuntimeError("intentional CI upgrade failure")\n' >> "$destination/termokontur/app.py"
     printf '\n# Changed requirements for the rollback test\n' >> "$destination/requirements.txt"
   fi
+  if [[ "${TEST_BREAK_FINISH:-0}" == 1 ]]; then
+    printf '\n# Intentional staged updater difference for rollback\n' >> "$destination/scripts/termokontur-apply-update"
+  fi
   exit 0
 fi
 exec /usr/bin/git "$@"
 SH
 chmod 0755 /usr/local/bin/git
+# Fail only the final success status, after the updater and revision were replaced.
+cat >/usr/local/bin/runuser <<'SH'
+#!/usr/bin/env bash
+if [[ "${TEST_BREAK_FINISH:-0}" == 1 && "${6:-}" == success && "${8:-}" == success ]]; then
+  echo "intentional final status write failure" >&2
+  exit 1
+fi
+exec /usr/sbin/runuser "$@"
+SH
+chmod 0755 /usr/local/bin/runuser
 export PATH="/usr/local/bin:$PATH"
 # Trust only the read-only CI checkout, never every repository.
 git config --global --add safe.directory /src
 
-cd /src
+if [[ -f /legacy/scripts/install-debian.sh ]]; then
+  cd /legacy
+else
+  cd /src
+fi
 bash scripts/install-debian.sh
+cd /src
 test -e /etc/systemd/system/termokontur-update.service
 grep -q 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/termokontur.service
 test -x /usr/local/sbin/termokontur-apply-update
@@ -89,9 +113,20 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   -d '{"building":"CI Test","name":"101","min_temp":18,"max_temp":24}' \
   http://127.0.0.1:8092/api/rooms >/dev/null
 
+if [[ -f /legacy/scripts/install-debian.sh ]]; then
+  echo "Testing actual upgrade from 1.2.4"
+  runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); assert c.execute("PRAGMA user_version").fetchone()[0] == 4; c.execute("INSERT INTO readings(room_id,value,source,observed_at) SELECT id,21.7,\x27manual\x27,\x272026-01-01T00:00:00+00:00\x27 FROM rooms WHERE name=\x27101\x27"); c.commit()'
+  runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
+  runuser -u termokontur -- touch /var/lib/termokontur/update-request
+  /usr/local/sbin/termokontur-apply-update
+  grep -q '"state": "success"' /var/lib/termokontur/update-status.json
+  runuser -u termokontur -- python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/termokontur/termokontur.sqlite3"); assert c.execute("PRAGMA user_version").fetchone()[0] >= 8; assert c.execute("SELECT value FROM readings").fetchone()[0] == 21.7'
+  curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
+fi
+
 echo "Begin native updater smoke assertions"
 # Force a change to exercise the actual stage/swap path of the updater.
-printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
+runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
 runuser -u termokontur -- touch /var/lib/termokontur/update-request
 PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update
 echo "Updater returned; validating post-update state"
@@ -110,7 +145,7 @@ curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
 
 # Inject a startup failure into the staged application; rollback must bring
 # back the previous working files and SQLite data.
-printf '%040d\n' 0 > /var/lib/termokontur/installed-revision
+runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
 runuser -u termokontur -- touch /var/lib/termokontur/update-request
 if TEST_BREAK_UPGRADE=1 /usr/local/sbin/termokontur-apply-update; then
   echo "Broken upgrade unexpectedly succeeded" >&2
@@ -130,4 +165,22 @@ done
 test "$recovered" = 1
 curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
   http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
+curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies \
+  http://127.0.0.1:8092/api/readings | grep -q '23.5'
+# Also exercise failure after the privileged updater and revision are replaced.
+echo "Testing rollback of privileged updater and revision after final status failure"
+cp /usr/local/sbin/termokontur-apply-update /tmp/updater-before
+runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 1 > /var/lib/termokontur/installed-revision'
+cp /var/lib/termokontur/installed-revision /tmp/revision-before
+runuser -u termokontur -- touch /var/lib/termokontur/update-request
+if TEST_BREAK_FINISH=1 PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update; then
+  echo "Final status failure unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
+grep -q 'finishing' /var/lib/termokontur/update-status.json
+cmp /tmp/updater-before /usr/local/sbin/termokontur-apply-update
+cmp /tmp/revision-before /var/lib/termokontur/installed-revision
+curl --silent --show-error --fail http://127.0.0.1:8092/health
+curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/readings | grep -q '23.5'
 echo "Debian 13 native install, update and rollback smoke succeeded."

@@ -625,6 +625,7 @@ static std::string post(const std::string &path, const std::string &body,
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
 static bool server_supports_usb_sync = false;
+static bool server_supports_tail_loss = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -653,6 +654,7 @@ static bool sync_time() {
   std::string certificate = root->valuestring;
   server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
   server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
+  server_supports_tail_loss = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_tail_loss"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -914,8 +916,7 @@ static void ota(cJSON *meta, uint16_t mv) {
 }
 static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
                  bool allow_ota) {
-  // Reuse the trusted server time and Wi-Fi connection obtained before the
-  // first measurement. Keep both operations within one radio-on budget.
+  // Reuse the trusted server time and Wi-Fi connection if already obtained.
   if (!time_prepared) {
     if (!wifi_up())
       return false;
@@ -930,9 +931,9 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     return false;
   uint64_t cursor = state.ack;
   bool replaying = false;
+  // The journal is scanned before measurement and maintained by its sole
+  // writer. Each transmitted record is still checked against its Flash CRC.
   for (int page = 0; page < 64 && available(); page++) {
-    if (!journal.scan())
-      return false;
     uint64_t lost = state.lost_base + journal.missing(state.ack, state.next);
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
@@ -987,6 +988,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
         count++;
         max_sent = r.seq + 1;
       }
+    // A short final page proves that no additional entries remain in this
+    // journal. Older servers never receive this optional capability.
+    const bool journal_end = server_supports_tail_loss && count < 32;
+    if (journal_end) cJSON_AddBoolToObject(j, "journal_end", true);
     auto body = stringify(j);
     cJSON_Delete(j);
     auto response = post("/api/sensors/devices/" + device + "/sync", body);
@@ -1003,7 +1008,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     }
     auto ack_node = cJSON_GetObjectItemCaseSensitive(j, "ack_seq");
     double ack_num = cJSON_IsNumber(ack_node) ? ack_node->valuedouble : 0;
-    const uint64_t ack_limit = replaying && count == 0 ? state.ack : max_sent;
+    const uint64_t ack_limit = journal_end ? state.next : (replaying && count == 0 ? state.ack : max_sent);
     if (!sensor::valid_ack(ack_num, cursor, ack_limit)) {
       cJSON_Delete(j);
       last_error = "invalid_ack";
@@ -1238,6 +1243,7 @@ static void usb_setup_task(void *) {
             add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
             cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
             cJSON_AddBoolToObject(out,"verified_setup",true);
+            cJSON_AddBoolToObject(out,"provisioned",setup_provisioned);
           } else if (cmd == "setup_wifi") {
             usb_setup_wifi(out);
           } else if (cmd == "arm_boot_debug") {
@@ -1606,23 +1612,31 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool clock_after_sample = sensor::needs_clock_after_sample(
-      measurement.quality != 0, measured, wifi_allowed);
+  const bool bootstrap_after_sample = sensor::needs_bootstrap_after_sample(
+      measurement.quality != 0, measured, wifi_allowed, usb_without_battery);
   bool time_prepared = false;
-  if (clock_after_sample && !charging()) {
+  if (bootstrap_after_sample && !charging()) {
     deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     if (wifi_up()) time_prepared = sync_time();
-    if (time_prepared) {
+    if (time_prepared && !measurement.quality) {
       const auto restored = sensor::sample_epoch(time(nullptr), sampled_us, esp_timer_get_time());
       if (restored) {
         measurement.timestamp = restored;
         measurement.quality = 2;
         printf("SENSOR: timestamp restored after measurement (%lld)\n", (long long)restored);
       }
-    } else {
+    } else if (!time_prepared) {
       stop_network();
-      puts("SENSOR: no trusted time; preserving measurement with unknown UTC");
+      if (!usb_without_battery) puts("SENSOR: no trusted time; preserving measurement with unknown UTC");
     }
+  }
+  // An unsupported USB sample would prevent an older panel from accepting
+  // subsequent battery-powered readings in the same journal.
+  if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
+    if (charging()) boot_debug_result("Отладка прервана зарядкой.");
+    else if (!time_prepared) boot_debug_result("USB-замер пропущен. Проверьте связь с сервером.");
+    else boot_debug_result("Обновите панель для отправки замера по USB без аккумулятора.");
+    sleep_for(cfg.measure_s);
   }
   if (measured) {
     rt.next_measure = measurement.uptime + cfg.measure_s;
@@ -1641,10 +1655,10 @@ extern "C" void app_main() {
   auto now = time(nullptr);
   const bool factory_pending = !factory_ticket.empty();
   if ((boot_debug || factory_pending || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed && !charging()) {
-    if (!clock_after_sample)
+    if (!bootstrap_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     // Reuse the time connection; if it failed, retry at the next wake.
-    bool ok = (!clock_after_sample || time_prepared) &&
+    bool ok = (!bootstrap_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
     now = time(nullptr);
@@ -1658,7 +1672,7 @@ extern "C" void app_main() {
       rt.failures++;
       rt.next_send = now + backoff;
     }
-  } else if (clock_after_sample) {
+  } else if (bootstrap_after_sample) {
     stop_network();
   }
   if (boot_debug) {

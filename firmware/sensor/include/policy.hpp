@@ -24,10 +24,10 @@ inline bool http_retryable(int status, bool open_failed, bool replay_safe, bool 
   return (status <= 0 && (open_failed || replay_safe)) ||
          (replay_safe && (status == 200 || status == 502 || status == 503 || status == 504));
 }
-// Only obtain UTC after sampling when there is no trusted RTC timestamp.
-inline bool needs_clock_after_sample(bool trusted_clock, bool measured,
-                                     bool wifi_allowed) {
-  return !trusted_clock && measured && wifi_allowed;
+// USB diagnostics also need to confirm that the server accepts missing voltage.
+inline bool needs_bootstrap_after_sample(bool trusted_clock, bool measured,
+                                         bool wifi_allowed, bool usb_powered) {
+  return measured && wifi_allowed && (!trusted_clock || usb_powered);
 }
 // Derive the timestamp of this newly sampled record from authenticated UTC
 // and a monotonic clock in the same boot. Never extrapolate across RESET.

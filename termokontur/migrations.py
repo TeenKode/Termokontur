@@ -76,7 +76,35 @@ def _factory_tickets(conn: sqlite3.Connection, _: str) -> None:
     )""")
 
 
-_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets)
+def _sensor_history(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_room_history (
+        device_id TEXT NOT NULL REFERENCES sensor_devices(id),
+        starts_at INTEGER NOT NULL, room_id INTEGER NOT NULL REFERENCES rooms(id),
+        PRIMARY KEY(device_id, starts_at))""")
+    conn.execute("INSERT OR IGNORE INTO sensor_room_history SELECT id,0,room_id FROM sensor_devices")
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_record_receipts (
+        device_id TEXT NOT NULL REFERENCES sensor_devices(id),
+        seq INTEGER NOT NULL, fingerprint TEXT NOT NULL,
+        PRIMARY KEY(device_id, seq))""")
+
+
+def _session_revocations(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS session_revocations (
+        digest TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS session_revocations_expiry ON session_revocations(expires_at)")
+
+def _max_delivery_failures(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS max_delivery_failures (
+        event_id TEXT PRIMARY KEY REFERENCES max_outbox(event_id) ON DELETE CASCADE,
+        status_code INTEGER NOT NULL, failed_at TEXT NOT NULL)""")
+
+def _admin_audit(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS admin_audit (
+        id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL,
+        method TEXT NOT NULL, route TEXT NOT NULL, target TEXT NOT NULL,
+        status INTEGER NOT NULL)""")
+
+_MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors, _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures, _admin_audit)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

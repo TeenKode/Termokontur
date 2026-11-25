@@ -46,13 +46,13 @@ class FactoryPrepare(sensors.Strict):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
     sensor_type: sensors.SensorType
-    config: sensors.Config = Field(default_factory=sensors.Config)
+    config: sensors.Config | None = None
 
 
 class Onboard(Proof):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
-    config: sensors.Config = Field(default_factory=sensors.Config)
+    config: sensors.Config | None = None
 
 
 class Approval(sensors.Strict):
@@ -130,8 +130,7 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
         conn.execute("UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,enrollment_hash=NULL WHERE id=?", (old['id'],))
     if not d:
         device = "tk-" + secrets.token_hex(8)
-        conf = config or sensors.Config()
-        conf.version = 1
+        conf = (config or sensors.setup_defaults(conn).config).model_copy(update={"version": 1})
         conn.execute("""INSERT INTO sensor_devices(id,name,room_id,hardware_id,enrollment_until,config,created_at,sensor_type)
                      VALUES(?,?,?,?,0,?,?,?)""", (device, name.strip(), room_id, identity['hardware_id'],
                      conf.model_dump_json(), db.utc_now(), sensor_type or identity['sensor_type']))
@@ -167,7 +166,7 @@ def router(require_admin):
         if len(certificate.encode("utf-8")) > 8000:
             raise HTTPException(503, "Цепочка сертификатов превышает 8000 байт")
         return JSONResponse({'time': int(time.time()), 'ca': certificate, 'sync_replay': True,
-                             'usb_powered_sync': True}, headers={
+                             'usb_powered_sync': True, 'sync_tail_loss': True}, headers={
             'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
         })
 
@@ -254,9 +253,41 @@ def router(require_admin):
                          "WHERE id=(SELECT device_id FROM sensor_identities WHERE fingerprint=?)", (fp,))
         return {'status':'rejected'}
 
+    def defaults_response(profile: sensors.SetupDefaults):
+        return JSONResponse({**profile.model_dump(exclude={"password"}), "password_configured": bool(profile.password)},
+                            headers={"Cache-Control": "no-store"})
+
+    @r.get('/defaults', dependencies=admin)
+    def get_defaults():
+        with db.connect() as conn:
+            return defaults_response(sensors.setup_defaults(conn))
+
+    @r.put('/defaults', dependencies=admin)
+    def save_defaults(profile: sensors.SetupDefaults):
+        if profile.password:
+            if not profile.ssid:
+                raise HTTPException(422, "Укажите сеть Wi-Fi для пароля")
+            if "\0" in profile.password or not 8 <= len(profile.password.encode("utf-8")) <= 63:
+                raise HTTPException(422, "Пароль Wi-Fi должен занимать от 8 до 63 байт")
+        with db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = sensors.setup_defaults(conn)
+            # Omission preserves the password only for the same Wi-Fi network.
+            password = profile.password
+            if password is None and current.ssid == profile.ssid:
+                password = current.password
+            saved = profile.model_copy(update={"password": password, "config": profile.config.model_copy(update={"version": 1})})
+            conn.execute("""INSERT INTO settings(key,value) VALUES(?,?)
+                            ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                         (sensors.DEFAULT_SETUP_KEY, saved.model_dump_json()))
+        return defaults_response(saved)
+
     @r.get('/usb/options', dependencies=admin)
     def options():
-        return {'config':sensors.Config().model_dump()}
+        with db.connect() as conn:
+            profile = sensors.setup_defaults(conn)
+        return JSONResponse({**profile.model_dump(), "password": profile.password or ""},
+                            headers={"Cache-Control": "no-store"})
 
     @r.post('/usb/prepare', dependencies=admin)
     def prepare_factory(payload: FactoryPrepare):
@@ -274,12 +305,12 @@ def router(require_admin):
             conn.execute("DELETE FROM sensor_factory_tickets WHERE hardware_id=?", (payload.hardware_id,))
             if conn.execute("SELECT count(*) FROM sensor_factory_tickets").fetchone()[0] >= 512:
                 raise HTTPException(503, 'Слишком много разрешений заводской настройки')
-            payload.config.version = 1
+            config = (payload.config or sensors.setup_defaults(conn).config).model_copy(update={"version": 1})
             conn.execute("""INSERT INTO sensor_factory_tickets
                          (ticket_hash,hardware_id,name,room_id,sensor_type,config,expires)
                          VALUES(?,?,?,?,?,?,?)""",
                          (sensors.digest(ticket), payload.hardware_id, payload.name.strip(),
-                          payload.room_id, payload.sensor_type, payload.config.model_dump_json(), now+86400))
+                          payload.room_id, payload.sensor_type, config.model_dump_json(), now+86400))
         return JSONResponse({'ticket': ticket, 'expires_in': 86400}, headers={'Cache-Control':'no-store'})
 
     @r.get('/usb/check/{hardware_id}', dependencies=admin)
