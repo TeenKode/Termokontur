@@ -10,11 +10,13 @@ from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from time import monotonic, sleep
+from threading import local
 from zoneinfo import ZoneInfo
 
 from . import migrations
 
 BUSY_TIMEOUT = 15
+_transaction = local()
 
 
 def utc_now() -> str:
@@ -25,6 +27,11 @@ def db_path() -> Path:
 
 @contextmanager
 def connect(path: Path | None = None):
+    # Reuse the connection only during a synchronous MAX command.
+    active = getattr(_transaction, "connection", None)
+    if path is None and active is not None:
+        yield active
+        return
     path = path if path is not None else db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT)
@@ -38,6 +45,30 @@ def connect(path: Path | None = None):
         raise
     finally:
         conn.close()
+
+
+@contextmanager
+def atomic():
+    """One synchronous command and all nested default DB operations.
+
+    No await or network I/O inside this scope. Exceptions must escape so
+    command effects and the durable reply roll back together.
+    """
+    if getattr(_transaction, "connection", None) is not None:
+        raise RuntimeError("Nested atomic transaction")
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _transaction.connection = conn
+        try:
+            yield conn
+        finally:
+            del _transaction.connection
+
+
+def begin(conn: sqlite3.Connection, *, immediate: bool = False) -> None:
+    if conn is getattr(_transaction, "connection", None):
+        return
+    conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
 
 
 def _enable_wal(conn: sqlite3.Connection) -> None:
@@ -452,7 +483,7 @@ def bind_code(user_id: str, code: str, event_id: str | None = None) -> dict | No
     with connect() as conn:
         # A write transaction ensures a code can be consumed by exactly one user.
         # BEGIN IMMEDIATE serializes simultaneous bind attempts before lookup.
-        conn.execute("BEGIN IMMEDIATE")
+        begin(conn, immediate=True)
         if event_id:
             previous = conn.execute(
                 """SELECT r.id AS room_id, r.building, r.name FROM max_bind_events e

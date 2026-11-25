@@ -50,7 +50,7 @@ def enqueue(update: dict) -> bool:
     key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     now = db.utc_now()
     stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
-    with db.connect() as conn:
+    with db.atomic() as conn:
         cur = conn.execute("""
             INSERT INTO max_inbox(event_id, state, updated_at)
             VALUES (?, 'processing', ?)
@@ -58,50 +58,41 @@ def enqueue(update: dict) -> bool:
             WHERE state='processing' AND max_inbox.updated_at<?
         """, (key, now, stale))
         claimed = bool(cur.rowcount)
-    if not claimed:
-        with db.connect() as conn:
-            row=conn.execute("SELECT state FROM max_inbox WHERE event_id=?", (key,)).fetchone()
-        if row and row["state"] == "processing":
-            # Do not ACK a webhook or advance a polling marker while another
-            # worker may have applied an effect but not persisted its reply.
-            raise ProcessingPending("MAX event is still being processed")
-        return False
-    try:
+        if not claimed:
+            row = conn.execute("SELECT state FROM max_inbox WHERE event_id=?", (key,)).fetchone()
+            if row and row["state"] == "processing":
+                # Preserve the recovery policy for legacy processing claims.
+                raise ProcessingPending("MAX event is still being processed")
+            return False
         from .bot import process_update
         from .max_ui import keyboard
         response = process_update(update)
-        with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if response:
-                uid, reply = response
-                conn.execute("""
-                    INSERT OR IGNORE INTO max_outbox(event_id, user_id, text, next_retry_at)
-                    VALUES (?, ?, ?, ?)
-                """, (key, uid, reply[:4000], now))
-                is_callback = update.get("update_type") == "message_callback"
-                callback_id = (update.get("callback") or {}).get("callback_id") if is_callback else None
-                # The button belongs to this bot's message; keep its ID so
-                # later text commands can edit the menu rather than post anew.
-                source_mid = ((update.get("message") or {}).get("body") or {}).get("mid") if is_callback else None
-                recipient = ((update.get("message") or {}).get("recipient") or {})
-                chat_id = recipient.get("chat_id") if recipient.get("chat_type") == "dialog" else None
-                if not isinstance(chat_id, (str, int)) or not str(chat_id).lstrip("-").isdigit():
-                    chat_id = None
-                conn.execute("""
-                    INSERT OR IGNORE INTO max_outbox_ui(
-                        event_id, buttons_json, callback_id, origin_mid, chat_id
-                    ) VALUES (?, ?, ?, ?, ?)
-                """, (key, json.dumps(keyboard(uid), ensure_ascii=False),
-                      callback_id, str(source_mid) if source_mid else None,
-                      str(chat_id) if chat_id is not None else None))
+        if response:
+            uid, reply = response
             conn.execute("""
-                UPDATE max_inbox SET state='complete', updated_at=?
-                WHERE event_id=?
-            """, (db.utc_now(), key))
-    except Exception:
-        with db.connect() as conn:
-            conn.execute("DELETE FROM max_inbox WHERE event_id=? AND state='processing'", (key,))
-        raise
+                INSERT OR IGNORE INTO max_outbox(event_id, user_id, text, next_retry_at)
+                VALUES (?, ?, ?, ?)
+            """, (key, uid, reply[:4000], now))
+            is_callback = update.get("update_type") == "message_callback"
+            callback_id = (update.get("callback") or {}).get("callback_id") if is_callback else None
+            # The button belongs to this bot's message; keep its ID so
+            # later text commands can edit the menu rather than post anew.
+            source_mid = ((update.get("message") or {}).get("body") or {}).get("mid") if is_callback else None
+            recipient = ((update.get("message") or {}).get("recipient") or {})
+            chat_id = recipient.get("chat_id") if recipient.get("chat_type") == "dialog" else None
+            if not isinstance(chat_id, (str, int)) or not str(chat_id).lstrip("-").isdigit():
+                chat_id = None
+            conn.execute("""
+                INSERT OR IGNORE INTO max_outbox_ui(
+                    event_id, buttons_json, callback_id, origin_mid, chat_id
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (key, json.dumps(keyboard(uid), ensure_ascii=False),
+                  callback_id, str(source_mid) if source_mid else None,
+                  str(chat_id) if chat_id is not None else None))
+        conn.execute("""
+            UPDATE max_inbox SET state='complete', updated_at=?
+            WHERE event_id=?
+        """, (db.utc_now(), key))
     return True
 
 def diagnostics() -> dict:
