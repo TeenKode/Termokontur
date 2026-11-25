@@ -84,7 +84,8 @@ static std::string ssid, password, server, device, code, token, ca,
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
-  int64_t next_send, cool_until, sleep_started_us;
+  uint64_t next_send_uptime;
+  int64_t cool_until, sleep_started_us;
   uint32_t failures;
   bool charging;
   bool clock_valid;
@@ -93,11 +94,14 @@ struct Runtime {
   uint32_t crc;
 };
 RTC_DATA_ATTR static Runtime rt;
-static constexpr uint32_t RTC_MAGIC = 0x544b5234;
+static constexpr uint32_t RTC_MAGIC = 0x544b5235;
 static int64_t wall_time_us() {
   timeval tv{};
   gettimeofday(&tv, nullptr);
   return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
+static uint64_t uptime_now() {
+  return rt.uptime + esp_timer_get_time() / 1000000;
 }
 static bool charging() { return gpio_get_level(CHARGE_PIN) == 0; }
 static bool usb_host_for_setup(bool after_reset) {
@@ -1518,23 +1522,6 @@ extern "C" void app_main() {
     timeval tv{(time_t)state.saved_time, 0};
     settimeofday(&tv, nullptr);
   }
-  const auto *part = esp_partition_find_first(
-      ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
-  if (!part)
-    sleep_for(3600);
-  PartitionFlash flash(part);
-  sensor::Journal journal(flash);
-  if (!journal.scan()) {
-    printf("Journal read/corruption error\n");
-    sleep_for(3600);
-  }
-  if (!journal.entries().empty() &&
-      journal.entries().back().seq >= state.next) {
-    printf("NVS sequence behind journal; preserve data\n");
-    sleep_for(3600);
-  }
-  if (state.ack > state.next || state.next > 9007199254740000ULL)
-    sleep_for(3600);
   vTaskDelay(pdMS_TO_TICKS(500));
   uint16_t mv = battery_mv();
   // An explicitly armed BOOT test on a connected USB host is externally
@@ -1561,6 +1548,23 @@ extern "C" void app_main() {
     rt.charging = true;
     sleep_for(cfg.measure_s);
   }
+  const auto *part = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
+  if (!part)
+    sleep_for(3600);
+  PartitionFlash flash(part);
+  sensor::Journal journal(flash);
+  if (!journal.scan()) {
+    printf("Journal read/corruption error\n");
+    sleep_for(3600);
+  }
+  if (!journal.entries().empty() &&
+      journal.entries().back().seq >= state.next) {
+    printf("NVS sequence behind journal; preserve data\n");
+    sleep_for(3600);
+  }
+  if (state.ack > state.next || state.next > 9007199254740000ULL)
+    sleep_for(3600);
   state.boots++;
   if (!save_state())
     sleep_for(3600);
@@ -1578,7 +1582,7 @@ extern "C" void app_main() {
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
-      boot_debug || (cfg.enabled && rt.uptime + esp_timer_get_time() / 1000000 >= rt.next_measure);
+      boot_debug || (cfg.enabled && (pending || uptime_now() >= rt.next_measure));
   const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   const uint32_t radio_budget = boot_debug ? std::max<uint32_t>(120, cfg.wifi_budget_s) : cfg.wifi_budget_s;
   // Measure before any station connection, even after a cold boot. The
@@ -1612,7 +1616,8 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool bootstrap_after_sample = sensor::needs_bootstrap_after_sample(
+  const bool send_due = sensor::radio_due(boot_debug, uptime_now(), rt.next_send_uptime);
+  const bool bootstrap_after_sample = send_due && sensor::needs_bootstrap_after_sample(
       measurement.quality != 0, measured, wifi_allowed, usb_without_battery);
   bool time_prepared = false;
   if (bootstrap_after_sample && !charging()) {
@@ -1652,25 +1657,21 @@ extern "C" void app_main() {
     }
     rt.pending = false;
   }
-  auto now = time(nullptr);
-  const bool factory_pending = !factory_ticket.empty();
-  if ((boot_debug || factory_pending || rt.next_send == 0 || now >= rt.next_send) && wifi_allowed && !charging()) {
+  if (send_due && wifi_allowed && !charging()) {
     if (!bootstrap_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     // Reuse the time connection; if it failed, retry at the next wake.
     bool ok = (!bootstrap_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, !boot_debug);
     stop_network();
-    now = time(nullptr);
     if (ok) {
       rt.failures = 0;
-      rt.next_send =
-          now + (state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s)
-                                        : cfg.send_s);
+      rt.next_send_uptime = sensor::radio_next_send(uptime_now(),
+          state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s);
     } else {
       uint32_t backoff = (last_error == "authorization_pending" || !factory_ticket.empty()) ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
-      rt.failures++;
-      rt.next_send = now + backoff;
+      if (rt.failures < 4) rt.failures++;
+      rt.next_send_uptime = sensor::radio_next_send(uptime_now(), backoff);
     }
   } else if (bootstrap_after_sample) {
     stop_network();
@@ -1689,11 +1690,11 @@ extern "C" void app_main() {
   }
   if (charging())
     rt.charging = true;
-  auto remaining = (int64_t)rt.next_measure - (int64_t)rt.uptime -
-                   esp_timer_get_time() / 1000000;
+  const auto uptime = uptime_now();
+  auto remaining = (int64_t)rt.next_measure - (int64_t)uptime;
   // A send interval shorter than the sampling interval must wake the device
   // for its independent radio deadline, without forcing another sample.
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
-      wifi_allowed && time_quality != 0, rt.next_send, time(nullptr));
-  sleep_for((last_error == "authorization_pending" || !factory_ticket.empty()) ? std::min<uint32_t>(sleep_s, 300) : sleep_s);
+      wifi_allowed, rt.next_send_uptime, uptime);
+  sleep_for(sleep_s);
 }
