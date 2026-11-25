@@ -107,6 +107,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: termokontur-panel-firmware
@@ -165,6 +167,26 @@ jobs:
               --title "Прошивки Термоконтура $VERSION" \
               --notes "Заводской образ и обновление OTA для ESP32-C3 в панели $VERSION."
           fi
+      # The production branch is a release pointer, never the development head.
+      # Both immutable binary distribution routes must succeed first.
+      - name: Publish panel only after firmware is available
+        env:
+          VERSION: ${{ needs.firmware.outputs.version }}
+        run: |
+          git fetch --no-tags origin "refs/tags/firmware-bundle-v$VERSION"
+          git show "FETCH_HEAD:termokontur-firmware.zip" > /tmp/published-firmware.zip
+          cmp /tmp/published-firmware.zip termokontur-firmware.zip
+          if git ls-remote --exit-code origin refs/heads/stable >/dev/null; then
+            git fetch --no-tags origin refs/heads/stable
+            if git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+              echo "Stable already points to this or a newer release."
+              exit 0
+            fi
+          else
+            test "$?" -eq 2
+          fi
+          # No force: a delayed older build must never roll back stable.
+          git push origin "$GITHUB_SHA:refs/heads/stable"
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15

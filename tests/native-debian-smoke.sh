@@ -55,9 +55,24 @@ chmod 0755 /usr/local/bin/systemctl
 cat >/usr/local/bin/git <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "${1:-}" == "-C" && "${3:-}" == "show" && "${4:-}" == "HEAD:termokontur-firmware.zip" && -f "$2/termokontur-firmware.zip" ]]; then
+  cat "$2/termokontur-firmware.zip"
+  exit 0
+fi
 if [[ "${1:-}" == "clone" ]]; then
   destination="${!#}"
   mkdir -p "$destination"
+  for arg in "$@"; do
+    if [[ "$arg" == firmware-bundle-v* ]]; then
+      [[ "${TEST_NO_BUNDLE:-0}" != 1 ]] || exit 1
+      if [[ "${TEST_WRONG_BUNDLE:-0}" == 1 ]]; then
+        cp /tmp/tk-wrong-firmware.zip "$destination/termokontur-firmware.zip"
+      else
+        cp /tmp/tk-firmware.zip "$destination/termokontur-firmware.zip"
+      fi
+      exit 0
+    fi
+  done
   cp -r /src/. "$destination/"
   if [[ "${TEST_BREAK_UPGRADE:-0}" == "1" ]]; then
     printf '\nraise RuntimeError("intentional CI upgrade failure")\n' >> "$destination/termokontur/app.py"
@@ -84,6 +99,10 @@ chmod 0755 /usr/local/bin/runuser
 export PATH="/usr/local/bin:$PATH"
 # Trust only the read-only CI checkout, never every repository.
 git config --global --add safe.directory /src
+release_version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' /src/termokontur/__init__.py)"
+release_revision="$(git -C /src rev-parse HEAD)"
+python3 /src/tests/make-firmware-fixture.py "$release_version" "$release_revision" /tmp/tk-firmware.zip
+python3 /src/tests/make-firmware-fixture.py "$release_version" "$(printf '%040d' 9)" /tmp/tk-wrong-firmware.zip
 
 if [[ -f /legacy/scripts/install-debian.sh ]]; then
   cd /legacy
@@ -124,6 +143,22 @@ if [[ -f /legacy/scripts/install-debian.sh ]]; then
   curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
 fi
 
+# The new updater must fail closed while the binary is unavailable or points
+# to another source revision, without replacing the live installation.
+for broken in TEST_NO_BUNDLE TEST_WRONG_BUNDLE; do
+  runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
+  runuser -u termokontur -- touch /var/lib/termokontur/update-request
+  before_pid="$(cat /run/termokontur-test.pid)"
+  if env "$broken=1" PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update; then
+    echo "Unpublished or mismatched binary accepted: $broken" >&2
+    exit 1
+  fi
+  grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
+  test "$(cat /run/termokontur-test.pid)" = "$before_pid"
+  test "$(cat /var/lib/termokontur/installed-revision)" = "$(printf '%040d' 0)"
+  curl --silent --show-error --fail http://127.0.0.1:8092/health >/dev/null
+done
+
 echo "Begin native updater smoke assertions"
 # Force a change to exercise the actual stage/swap path of the updater.
 runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
@@ -132,6 +167,7 @@ PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update
 echo "Updater returned; validating post-update state"
 cat /var/lib/termokontur/update-status.json
 grep -q '"state": "success"' /var/lib/termokontur/update-status.json
+cmp /tmp/tk-firmware.zip "/var/lib/termokontur/firmware/$release_version.zip"
 grep -q 'Готовое Python-окружение проверено и скопировано' /var/lib/termokontur/update-status.json
 echo "Checking previous application backup"
 test -d /opt/termokontur-previous

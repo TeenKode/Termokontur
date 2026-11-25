@@ -187,7 +187,7 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert checked.json()["available"]
     first = admin.post("/api/update/request", json={})
     assert first.status_code == 200
-    assert (db.db_path().parent/"update-request").read_text().strip() == "main"
+    assert (db.db_path().parent/"update-request").read_text().strip() == "stable"
     assert admin.post("/api/update/request", json={}).status_code == 409
     assert admin.get("/api/update/status").json()["state"] == "queued"
 
@@ -285,7 +285,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     static = Path(__file__).resolve().parents[1] / "termokontur" / "static"
     expected = sha256(b"".join(
         (static / name).read_bytes() for name in (
-            "app.js", "charts.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
+            "app.js", "charts.js", "reports.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
             "sensor-usb.mjs", "firmware-debug.mjs", "sensor-log.mjs",
             "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png",
         )
@@ -297,10 +297,12 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert "__ASSET_FINGERPRINT__" not in page.text
     assert f'/static/app.js?v={expected}' in page.text
     assert f'/static/charts.js?v={expected}' in page.text
+    assert f'/static/reports.js?v={expected}' in page.text
+    assert page.text.index('/static/reports.js?') < page.text.index('/static/app.js?')
     assert f'/static/style.css?v={expected}' in page.text
     assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "charts.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
+    for filename in ("app.js", "charts.js", "reports.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "vendor/esptool.bundle.js", "style.css", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"

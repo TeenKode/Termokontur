@@ -1,7 +1,7 @@
 """Native Debian LXC update status and version metadata.
 
 The unprivileged web worker only writes a request marker; the privileged
-fixed-action systemd updater applies the hardcoded upstream main branch.
+fixed-action systemd updater applies the hardcoded upstream stable release branch.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import httpx
 from . import __version__, db
 
 SYSTEMD_PATH = Path("/etc/systemd/system/termokontur-update.path")
-GITHUB_HEAD = "https://api.github.com/repos/TeenKode/Termokontur/commits/main"
+GITHUB_HEAD = "https://api.github.com/repos/TeenKode/Termokontur/commits/stable"
 GITHUB_VERSION = "https://raw.githubusercontent.com/TeenKode/Termokontur/{sha}/termokontur/__init__.py"
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\x27](\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)["\x27]$', re.M)
@@ -172,7 +172,7 @@ def check() -> dict:
     result["available"] = sha != result["installed_revision"]
     result["latest_revision"] = sha
     result["latest_version"] = None
-    # Fetch version from the *same* pinned commit, not a moving main reference.
+    # Fetch version from the *same* pinned commit, not a moving branch reference.
     try:
         version_response = httpx.get(GITHUB_VERSION.format(sha=sha), timeout=6.0, headers={
             "User-Agent": "Termokontur-update-checker",
@@ -200,7 +200,7 @@ def request() -> dict:
     marker = directory() / "update-request"
     try:
         with marker.open("x", encoding="ascii") as fp:
-            fp.write("main\n")
+            fp.write("stable\n")
         marker.chmod(0o600)
     except FileExistsError as exc:
         raise RuntimeError("Обновление уже ожидает выполнения") from exc
