@@ -47,6 +47,15 @@ struct Flash {
   virtual size_t size() const = 0;
   virtual ~Flash() = default;
 };
+// Sequence numbers are transported as exact JSON integers. Never rewind
+// acknowledged or reserved sequences; only advance from committed Flash.
+inline constexpr uint64_t sequence_limit = 9007199254740000ULL;
+inline bool recover_next(uint64_t ack, uint64_t &next, uint64_t newest) {
+  if (!ack || !next || ack > next || next > sequence_limit ||
+      newest >= sequence_limit) return false;
+  next = std::max(next, newest + 1);
+  return true;
+}
 class Journal {
   Flash &flash;
   std::vector<Entry> entries_;
