@@ -4,6 +4,16 @@
 #include <cmath>
 #include <string>
 namespace sensor {
+// Public-key computation uses the bootloader entropy source, which must
+// not be enabled while RF or ADC is active. Cache success only.
+template<class Prepare>
+bool prepare_identity(bool key_valid, bool radio_active, bool &ready, Prepare prepare) {
+  if (!key_valid) return false;
+  if (ready) return true;
+  if (radio_active || !prepare()) return false;
+  ready = true;
+  return true;
+}
 // Allow the battery input to settle after power-up or radio shutdown,
 // without repeating a delay already spent on initialization.
 inline uint32_t battery_settle_remaining_ms(int64_t elapsed_us) {
