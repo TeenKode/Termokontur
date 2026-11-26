@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <functional>
 
 namespace sensor {
 // One sensor per board. GPIO5 is reserved for DHT / externally powered 1-Wire.
@@ -47,9 +48,25 @@ inline bool values(Record &r, double t, double h) {
   r.humidity = lround(h * 1000);
   return true;
 }
-inline void wait_ms(unsigned ms) { vTaskDelay(pdMS_TO_TICKS(ms) + 1); }
+using CancelCheck = std::function<bool()>;
+inline bool cancelled(const CancelCheck *check) { return check && (*check)(); }
+// Long sensor conversions must not delay the charging gate for seconds.
+inline bool wait_sensor_ms(unsigned ms, const CancelCheck *check = nullptr) {
+  if (cancelled(check)) return false;
+  // Convert once, preserving the original minimum delay even on coarse ticks.
+  auto ticks = pdMS_TO_TICKS(ms) + 1;
+  const auto slice = std::max<decltype(ticks)>(1, pdMS_TO_TICKS(20));
+  while (ticks > 0) {
+    const auto step = std::min(ticks, slice);
+    vTaskDelay(step);
+    ticks -= step;
+    if (cancelled(check)) return false;
+  }
+  return true;
+}
 // Release open-drain lines and clock a stuck slave out of a partial transfer.
-inline bool recover_i2c(bool pullup = false) {
+inline bool recover_i2c(bool pullup = false, const CancelCheck *check = nullptr) {
+  if (cancelled(check)) return false;
   constexpr auto sda = GPIO_NUM_6, scl = GPIO_NUM_7;
   for (auto pin : {sda, scl}) {
     gpio_reset_pin(pin); // Restore GPIO mux after the peripheral releases it.
@@ -57,8 +74,9 @@ inline bool recover_i2c(bool pullup = false) {
     gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT_OD);
     gpio_set_pull_mode(pin, pullup ? GPIO_PULLUP_ONLY : GPIO_FLOATING);
   }
-  auto high = [](gpio_num_t pin) {
+  auto high = [check](gpio_num_t pin) {
     for (int i = 0; i < 100; ++i) {
+      if (cancelled(check)) return false;
       if (gpio_get_level(pin)) return true;
       esp_rom_delay_us(10);
     }
@@ -69,11 +87,13 @@ inline bool recover_i2c(bool pullup = false) {
   if (!high(scl)) return false;
   if (gpio_get_level(sda)) return true; // An idle bus needs no recovery pulses.
   for (int i = 0; i < 9 && !gpio_get_level(sda); ++i) {
+    if (cancelled(check)) return false;
     gpio_set_level(scl, 0); esp_rom_delay_us(5);
     gpio_set_level(scl, 1);
     if (!high(scl)) return false;
     esp_rom_delay_us(5);
   }
+  if (cancelled(check)) return false;
   gpio_set_level(scl, 0); gpio_set_level(sda, 0); esp_rom_delay_us(5);
   gpio_set_level(scl, 1);
   if (!high(scl)) { gpio_set_level(sda, 1); return false; }
@@ -91,7 +111,12 @@ struct I2C {
   uint32_t speed;
   bool ready = false;
   int last_status = ESP_OK;
-  explicit I2C(uint32_t hz = 100000, bool pullup = false) : speed(hz) {
+  const CancelCheck *check;
+  bool active() const { return !cancelled(check); }
+  bool wait(unsigned ms) const { return wait_sensor_ms(ms, check); }
+  explicit I2C(uint32_t hz = 100000, bool pullup = false, const CancelCheck *cancel = nullptr)
+      : speed(hz), check(cancel) {
+    if (!active()) return;
     i2c_master_bus_config_t c{};
     c.i2c_port = I2C_NUM_0;
     c.sda_io_num = GPIO_NUM_6; c.scl_io_num = GPIO_NUM_7;
@@ -108,7 +133,7 @@ struct I2C {
     if (bus) i2c_del_master_bus(bus);
   }
   bool select(uint8_t a) {
-    if (!ready) return false;
+    if (!ready || !active()) return false;
     if (dev && address == a) return true;
     if (dev) {
       last_status = i2c_master_bus_rm_device(dev);
@@ -124,22 +149,22 @@ struct I2C {
     return last_status == ESP_OK;
   }
   bool probe(uint8_t a) {
-    if (!ready) return false;
+    if (!ready || !active()) return false;
     last_status = i2c_master_probe(bus, a, 40);
     return last_status == ESP_OK;
   }
   bool write(uint8_t a, const uint8_t *b, size_t n) {
-    if (!select(a)) return false;
+    if (!select(a) || !active()) return false;
     last_status = i2c_master_transmit(dev, b, n, 150);
     return last_status == ESP_OK;
   }
   bool read(uint8_t a, uint8_t *b, size_t n) {
-    if (!select(a)) return false;
+    if (!select(a) || !active()) return false;
     last_status = i2c_master_receive(dev, b, n, 150);
     return last_status == ESP_OK;
   }
   bool reg(uint8_t a, uint8_t reg, uint8_t *b, size_t n) {
-    if (!select(a)) return false;
+    if (!select(a) || !active()) return false;
     last_status = i2c_master_transmit_receive(dev, &reg, 1, b, n, 150);
     return last_status == ESP_OK;
   }
@@ -147,8 +172,9 @@ struct I2C {
 template<class Cancel>
 inline void scan_i2c(Cancel cancelled) {
   if (cancelled()) return;
-  if (!recover_i2c(true)) { puts("I2C scan: bus held low"); return; }
-  I2C bus(50000, true);
+  const CancelCheck check = cancelled;
+  if (!recover_i2c(true, &check)) { puts("I2C scan: bus held low or cancelled"); return; }
+  I2C bus(50000, true, &check);
   if (!bus.ready) { printf("I2C scan: init error=%d\n", bus.last_status); return; }
   unsigned found = 0;
   for (unsigned a = 8; a <= 0x77 && !cancelled(); ++a) {
@@ -171,10 +197,10 @@ inline bool sht(I2C &bus, bool sht3, Record &r, bool reset = false) {
     if (reset) {
       const uint8_t rst3[] = {0x30, 0xa2}, rst4 = 0x94;
       if (!bus.write(a, sht3 ? rst3 : &rst4, sht3 ? 2 : 1)) return false;
-      wait_ms(10);
+      if (!bus.wait(10)) return false;
     }
     if (!bus.write(a, sht3 ? cmd : &cmd4, sht3 ? 2 : 1)) return false;
-    wait_ms(20);
+    if (!bus.wait(20)) return false;
     if (!bus.read(a, b, sizeof b)) return false;
     ok = true; break;
   }
@@ -185,18 +211,18 @@ inline bool sht(I2C &bus, bool sht3, Record &r, bool reset = false) {
                 std::clamp(sht3 ? 100 * raw : -6 + 125 * raw, 0.0, 100.0));
 }
 inline bool aht20(I2C &bus, Record &r) {
-  wait_ms(40);
+  if (!bus.wait(40)) return false;
   uint8_t status;
   if (!bus.read(0x38, &status, 1)) return false;
   if (!(status & 8)) {
     uint8_t init[] = {0xbe, 0x08, 0x00};
     if (!bus.write(0x38, init, 3)) return false;
-    wait_ms(10);
+    if (!bus.wait(10)) return false;
     if (!bus.read(0x38, &status, 1) || !(status & 8)) return false;
   }
   uint8_t cmd[] = {0xac, 0x33, 0x00}, b[7];
   if (!bus.write(0x38, cmd, 3)) return false;
-  wait_ms(85);
+  if (!bus.wait(85)) return false;
   for (int attempt = 0; attempt < 10; ++attempt) {
     if (!bus.read(0x38, b, 7)) return false;
     if (!(b[0] & 0x80)) {
@@ -206,7 +232,7 @@ inline bool aht20(I2C &bus, Record &r) {
       uint32_t t = (uint32_t(b[3] & 15) << 16) | (b[4] << 8) | b[5];
       return values(r, t * 200.0 / 1048576 - 50, h * 100.0 / 1048576);
     }
-    wait_ms(10);
+    if (!bus.wait(10)) return false;
   }
   return false;
 }
@@ -225,28 +251,28 @@ inline bool bmp280(I2C &bus, Record &r) {
   if (!address) return false; // Refuse BME280 (0x60), wiring faults and wrong modules.
   uint8_t reset[] = {0xe0, 0xb6};
   if (!bus.write(address, reset, sizeof(reset))) return false;
-  wait_ms(5);
+  if (!bus.wait(5)) return false;
   bool ready = false;
   for (int i = 0; i < 20; ++i) {
     if (!bus.reg(address, 0xf3, &id, 1)) return false;
     if (!(id & 0x01)) { ready = true; break; } // NVM calibration copied.
-    wait_ms(5);
+    if (!bus.wait(5)) return false;
   }
-  if (!ready) return false;
+  if (!ready || !active()) return false;
   uint8_t cal[6];
   if (!bus.reg(address, 0x88, cal, sizeof(cal))) return false;
   // Sanity-check calibration: all 0xff/0x00 is characteristic of a bus fault.
   if (!u16(cal) || u16(cal) == 0xffff || !s16(cal + 2)) return false;
   uint8_t forced[] = {0xf4, 0x21}; // temperature oversampling x1, pressure skipped, forced mode
   if (!bus.write(address, forced, sizeof(forced))) return false;
-  wait_ms(10);
+  if (!bus.wait(10)) return false;
   ready = false;
   for (int i = 0; i < 20; ++i) {
     if (!bus.reg(address, 0xf3, &id, 1)) return false;
     if (!(id & 0x08)) { ready = true; break; }
-    wait_ms(5);
+    if (!bus.wait(5)) return false;
   }
-  if (!ready) return false;
+  if (!ready || !active()) return false;
   uint8_t raw[3];
   if (!bus.reg(address, 0xfa, raw, sizeof(raw))) return false;
   int adc = (int(raw[0]) << 12) | (int(raw[1]) << 4) | (raw[2] >> 4);
@@ -265,20 +291,30 @@ inline bool bme280(I2C &bus, Record &r) {
   if (!a) return false; // BMP280 (0x58) has no humidity channel.
   uint8_t reset[] = {0xe0, 0xb6};
   if (!bus.write(a, reset, 2)) return false;
-  wait_ms(5);
+  if (!bus.wait(5)) return false;
   bool ready = false;
   for (int i = 0; i < 20; ++i) {
     if (!bus.reg(a, 0xf3, &id, 1)) return false;
     if (!(id & 1)) { ready = true; break; }
-    wait_ms(5);
+    if (!bus.wait(5)) return false;
   }
-  if (!ready) return false;
+  if (!ready || !active()) return false;
   uint8_t cal[26], hc[7];
   if (!bus.reg(a, 0x88, cal, sizeof cal) || !bus.reg(a, 0xe1, hc, sizeof hc)) return false;
+  if (!u16(cal) || u16(cal) == 0xffff || !s16(cal + 2) ||
+      std::all_of(hc, hc + sizeof hc, [](uint8_t b) { return b == 0; }) ||
+      std::all_of(hc, hc + sizeof hc, [](uint8_t b) { return b == 0xff; }))
+    return false;
   uint8_t hum[] = {0xf2, 0x01}, forced[] = {0xf4, 0x21}; // x1 T/H, pressure off, forced.
   if (!bus.write(a, hum, 2) || !bus.write(a, forced, 2)) return false;
-  wait_ms(15);
-  if (!bus.reg(a, 0xf3, &id, 1) || (id & 8)) return false;
+  if (!bus.wait(15)) return false;
+  ready = false;
+  for (int i = 0; i < 20; ++i) {
+    if (!bus.reg(a, 0xf3, &id, 1)) return false;
+    if (!(id & 8)) { ready = true; break; }
+    if (!bus.wait(5)) return false;
+  }
+  if (!ready) return false;
   uint8_t b[8];
   if (!bus.reg(a, 0xf7, b, sizeof b)) return false;
   int t = (int(b[3]) << 12) | (b[4] << 4) | (b[5] >> 4);
@@ -314,11 +350,15 @@ inline bool decode_dht(const uint8_t *b, bool dht22, Record &r) {
   if (dht22 ? (b[2] & 128) : (b[3] & 128)) t = -t;
   return values(r, t, dht22 ? ((b[0] << 8) | b[1]) / 10.0 : b[0] + b[1] / 10.0);
 }
-inline bool dht(bool dht22, Record &r) {
+inline bool dht(bool dht22, Record &r, const CancelCheck *check = nullptr) {
+  if (cancelled(check)) return false;
   line_init();
-  wait_ms(2000);
+  if (!wait_sensor_ms(2000, check)) return false;
   gpio_set_level(DATA_PIN, 0);
-  wait_ms(dht22 ? 2 : 20);
+  if (!wait_sensor_ms(dht22 ? 2 : 20, check)) {
+    gpio_set_level(DATA_PIN, 1);
+    return false;
+  }
   uint8_t b[5] = {};
   portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
   portENTER_CRITICAL(&mux);
@@ -331,7 +371,7 @@ inline bool dht(bool dht22, Record &r) {
     b[i / 8] = (b[i / 8] << 1) | (esp_timer_get_time() - start > 45);
   }
   portEXIT_CRITICAL(&mux);
-  if (!ok) return false;
+  if (!ok || cancelled(check)) return false;
   return decode_dht(b, dht22, r);
 }
 
@@ -370,30 +410,45 @@ inline bool decode_ds18b20(const uint8_t *b, Record &r) {
   r.humidity = NO_HUMIDITY;
   return true;
 }
-inline bool ds18b20(Record &r) {
+inline bool ds18b20(Record &r, const CancelCheck *check = nullptr) {
+  if (cancelled(check)) return false;
   line_init();
   if (!ow_reset()) return false;
   ow_byte(0x33); // READ ROM: only one externally powered DS18B20 is supported.
-  uint8_t rom[8]; for (auto &b : rom) b = ow_byte();
+  uint8_t rom[8]; for (auto &b : rom) {
+    if (cancelled(check)) return false;
+    b = ow_byte();
+  }
   if (dallas_crc(rom, 7) != rom[7]) { r.error = 1; return false; }
-  if (rom[0] != 0x28 || !ow_reset()) return false;
-  ow_byte(0xcc); ow_byte(0x44);
-  wait_ms(800);
-  if (!(ow_byte() & 1) || !ow_reset()) return false;
-  ow_byte(0xcc); ow_byte(0xbe);
-  uint8_t b[9]; for (auto &v : b) v = ow_byte();
+  if (rom[0] != 0x28 || cancelled(check) || !ow_reset()) return false;
+  ow_byte(0xcc);
+  if (cancelled(check)) return false;
+  ow_byte(0x44);
+  if (!wait_sensor_ms(800, check)) return false;
+  if (!(ow_byte() & 1) || cancelled(check) || !ow_reset()) return false;
+  ow_byte(0xcc);
+  if (cancelled(check)) return false;
+  ow_byte(0xbe);
+  uint8_t b[9]; for (auto &v : b) {
+    if (cancelled(check)) return false;
+    v = ow_byte();
+  }
   return decode_ds18b20(b, r);
 }
 
-inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr, unsigned attempt = 1) {
+inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr,
+                        unsigned attempt = 1, const CancelCheck *check = nullptr) {
   if (io_status) *io_status = ESP_OK;
   r.error = 0;
+  r.temperature = 0;
+  r.humidity = NO_HUMIDITY;
+  if (cancelled(check) || !type || !supported(type)) { r.error = 2; return false; }
   bool ok;
-  if (!strcmp(type, "dht11") || !strcmp(type, "dht22")) ok = dht(!strcmp(type, "dht22"), r);
-  else if (!strcmp(type, "ds18b20")) ok = ds18b20(r);
+  if (!strcmp(type, "dht11") || !strcmp(type, "dht22")) ok = dht(!strcmp(type, "dht22"), r, check);
+  else if (!strcmp(type, "ds18b20")) ok = ds18b20(r, check);
   else {
     const bool fallback = attempt > 1;
-    I2C bus(fallback ? 50000 : 100000, fallback);
+    I2C bus(fallback ? 50000 : 100000, fallback, check);
     if (!strcmp(type, "sht4x") || !strcmp(type, "sht3x")) ok = sht(bus, !strcmp(type, "sht3x"), r, fallback);
     else if (!strcmp(type, "aht20")) ok = aht20(bus, r);
     else if (!strcmp(type, "bme280")) ok = bme280(bus, r);
@@ -401,28 +456,35 @@ inline bool read_sensor(const char *type, Record &r, int *io_status = nullptr, u
     else ok = false;
     if (io_status) *io_status = bus.last_status;
   }
-  if (!ok && !r.error) r.error = 2;
+  if (cancelled(check)) ok = false;
+  if (!ok) {
+    if (!r.error) r.error = 2;
+    r.temperature = 0;
+    r.humidity = NO_HUMIDITY;
+  }
   return ok;
 }
 // Shared by scheduled measurements and diagnostics. Cancellation preserves charging policy.
 template<class Cancel>
 inline bool read_sensor_retry(const char *type, Record &r, Cancel cancelled,
                               unsigned *attempts = nullptr) {
-  const bool i2c = is_i2c(type);
+  const CancelCheck check = cancelled;
+  const bool i2c = type && is_i2c(type);
   if (attempts) *attempts = 0;
   for (unsigned i = 1; i <= 3; ++i) {
     if (cancelled()) return false;
     if (attempts) *attempts = i;
     int status = ESP_OK;
-    if (read_sensor(type, r, &status, i)) return !cancelled();
+    if (read_sensor(type, r, &status, i, &check)) return !cancelled();
+    if (cancelled()) return false;
     printf("SENSOR: %s attempt %u/3 failed: error=%u io_status=%d\n",
-           type, i, unsigned(r.error), status);
+           type ? type : "(null)", i, unsigned(r.error), status);
     if (i < 3 && !cancelled()) {
       if (i2c && r.error == 2) {
-        bool recovered = recover_i2c(true);
+        bool recovered = recover_i2c(true, &check);
         printf("SENSOR: I2C recovery %s; SDA=%d SCL=%d; next=50kHz\n", recovered ? "OK" : "line stuck", gpio_get_level(GPIO_NUM_6), gpio_get_level(GPIO_NUM_7));
       }
-      wait_ms(50);
+      if (!wait_sensor_ms(50, &check)) return false;
     }
   }
   return !cancelled();
