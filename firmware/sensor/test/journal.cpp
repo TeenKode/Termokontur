@@ -35,6 +35,18 @@ struct Memory : sensor::Flash {
   }
 };
 int main() {
+  // Recovery must not reuse committed, acknowledged or reserved IDs.
+  {
+    uint64_t next = 2;
+    assert(sensor::recover_next(1, next, 5) && next == 6);
+    assert(sensor::recover_next(1, next, 5) && next == 6);
+    assert(sensor::recover_next(4, next, 0) && next == 6);
+    assert(!sensor::recover_next(7, next, 9) && next == 6);
+    assert(!sensor::recover_next(0, next, 9));
+    assert(!sensor::recover_next(1, next, UINT64_MAX));
+    assert(sensor::recover_next(1, next, sensor::sequence_limit - 1));
+    assert(next == sensor::sequence_limit);
+  }
   for (int cut = 0; cut <= 64; cut++) {
     Memory f;
     sensor::Journal j(f);
@@ -48,6 +60,9 @@ int main() {
     sensor::Journal recovered(f);
     assert(recovered.scan());
     assert(recovered.entries().front().seq == 1);
+    uint64_t next = 2;
+    assert(sensor::recover_next(1, next, recovered.entries().back().seq));
+    assert(next == (ok ? 3 : 2));
     if (ok)
       assert(recovered.entries().back().seq == 2);
     assert(recovered.append(a));
