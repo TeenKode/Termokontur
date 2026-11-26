@@ -67,6 +67,8 @@ static int64_t deadline = 0;
 static std::string last_error;
 static Config cfg;
 static State state;
+static sensor::StateCheckpoint state_checkpoint;
+static bool boot_count_pending = false;
 static std::string ssid, password, server, device, code, token, ca,
     sensor_type = "sht4x", setup_password, factory_ticket, dns_primary, dns_secondary;
 struct Runtime {
@@ -145,11 +147,18 @@ static bool save_blob(const char *key, const void *p, size_t n) {
 static int load_blob(const char *key, void *p, size_t n) {
   return sensor::load_blob(nv, key, p, n);
 }
-static bool save_state() { return save_blob("state", &state, sizeof state); }
+static bool persist_state(const State &candidate) {
+  const bool ok = state_checkpoint.save(candidate, [](const State &value) {
+    return save_blob("state", &value, sizeof value);
+  });
+  if (ok) boot_count_pending = false;
+  return ok;
+}
+static bool save_state() { return persist_state(state); }
 static bool save_next_sequence(uint64_t next) {
   State candidate = state;
   candidate.next = next;
-  if (!save_blob("state", &candidate, sizeof candidate)) return false;
+  if (!persist_state(candidate)) return false;
   state = candidate;
   return true;
 }
@@ -244,6 +253,10 @@ static void stop_network() {
 }
 [[noreturn]] static void sleep_for(uint32_t seconds) {
   stop_network();
+  // Preserve the wake counter even when no measurement or sync was due.
+  // Flash sequence recovery remains mandatory before normal operation.
+  if (boot_count_pending && !save_state())
+    puts("NVS: deferred wake counter checkpoint failed");
   seconds = std::max<uint32_t>(1, seconds);
   const bool charger_present = charging();
   rt.charging = rt.charging || charger_present;
@@ -687,7 +700,7 @@ static bool finish_provision_intent(cJSON *j) {
   if (final_json.empty()) return false;
   const bool ok = sensor::finish_setup_transaction(
       [&] { return save_blob("config", &candidate, sizeof candidate); },
-      [&] { return save_blob("state", &next, sizeof next); },
+      [&] { return persist_state(next); },
       [&] { return save_blob("provision", final_json.c_str(), final_json.size() + 1); });
   if (ok) { cfg = candidate; state = next; }
   return ok;
@@ -813,7 +826,7 @@ static void ota(cJSON *meta, uint16_t mv) {
   }
   if (attempt.ota_failures >= 3) return;
   ++attempt.ota_failures;
-  if (!save_blob("state", &attempt, sizeof attempt)) return;
+  if (!persist_state(attempt)) return;
   state = attempt;
   std::string path =
       "/api/sensors/devices/" + device + "/firmware/" + std::to_string(id);
@@ -1806,6 +1819,7 @@ extern "C" void app_main() {
     printf("State CRC/schema invalid; preserve Flash\n");
     sleep_for(3600);
   }
+  if (loaded == 1) state_checkpoint.loaded(state);
   int config_loaded = load_blob("config", &cfg, sizeof cfg);
   if (config_loaded < 0 || !valid_config(cfg)) {
     printf("Config invalid; using defaults\n");
@@ -1843,7 +1857,7 @@ extern "C" void app_main() {
     puts("OTA: local storage self-test passed; image confirmed");
     State confirmed = state;
     confirmed.ota_failures = 0;
-    if (save_blob("state", &confirmed, sizeof confirmed)) state = confirmed;
+    if (persist_state(confirmed)) state = confirmed;
     else puts("OTA: could not reset attempt counter");
   }
   if (rt.clock_valid && time(nullptr) >= 1700000000)
@@ -1952,8 +1966,13 @@ extern "C" void app_main() {
   if (state.next != previous_next)
     printf("Recovered next sequence from committed journal: %llu -> %llu\n",
            (unsigned long long)previous_next, (unsigned long long)state.next);
-  state.boots++;
-  if (!save_state())
+  if (state.boots != UINT32_MAX) {
+    ++state.boots;
+    boot_count_pending = true;
+  }
+  // A recovered cursor must be made durable immediately. Otherwise fold
+  // the diagnostic wake counter into the next measurement/ACK checkpoint.
+  if (state.next != previous_next && !save_state())
     sleep_for(3600);
   // Retry the exact RTC payload, including legacy pre-reserved IDs.
   // A new-format retry may have committed Flash but not the NVS cursor.
@@ -1971,6 +1990,8 @@ extern "C" void app_main() {
   if (charging()) sleep_for(cfg.measure_s);
   if (console.action == ConsoleAction::reboot) {
     stop_network();
+    if (boot_count_pending && !save_state())
+      puts("NVS: deferred wake counter checkpoint failed");
     sensor::serial::flush_uart();
     if (usb_serial_jtag_is_connected()) vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
