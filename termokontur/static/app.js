@@ -341,8 +341,8 @@ function renderHeatmap(){
       const datum=room.daily[day];
       const value=datum?.average;
       const status=value==null?"no-data":value<room.min_temp?"low":value>room.max_temp?"high":"normal";
-      const td=cell(tr,value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1}),"heatmap-value "+status);
-      td.title=room.building+" · "+room.name+" · "+fullDay(day)+": "+temperature(value)+(datum?", измерений: "+datum.count:"");
+      const td=cell(tr,value==null?"—":(status==="low"?"↓ ":status==="high"?"↑ ":"")+Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1}),"heatmap-value "+status);
+      td.title=room.building+" · "+room.name+" · "+fullDay(day)+": "+temperature(value)+" · "+({low:"Ниже нормы",high:"Выше нормы",normal:"В норме","no-data":"Нет данных"})[status]+(datum?", измерений: "+datum.count:"");
     }
     cell(tr,temperature(room.average),"heatmap-summary");
     cell(tr,room.days_reported+" / "+historyData.days);
@@ -383,8 +383,8 @@ function renderHistory(){
   renderHeatmap();
   if(hasReadings)drawHistoryChart();
 }
-const buildingPalette=["#087b65","#356bad","#ad591d","#7951af","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
-const darkBuildingPalette=["#5bdac1","#87b7fc","#f6ae68","#bfa0f6","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
+const buildingPalette=["#984516","#245f9e","#196f58","#72569f","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
+const darkBuildingPalette=["#F2A66D","#79B7F5","#57C9AD","#B6A2E8","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
 function buildingColor(index){const palette=document.documentElement.dataset.theme==="dark"?darkBuildingPalette:buildingPalette;return palette[index%palette.length];}
 function renderHistoryLegend(){
   const legend=$("history-legend");legend.replaceChildren();
