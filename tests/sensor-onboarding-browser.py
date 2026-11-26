@@ -176,6 +176,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator("#overview-status")).to_have_value("missing")
                 expect(page.locator("#search-rooms")).to_have_value("Кабинет 101")
                 page.locator('[data-overview-status=""]').click()
+                assert page.evaluate('''async () => {
+                    const fonts=await Promise.all([document.fonts.load('600 16px Manrope','Термоконтур'),document.fonts.load('400 13px "JetBrains Mono"','Температура 22.4')]);
+                    return fonts.every(group=>group.length>0&&group.every(face=>face.status==='loaded'));
+                }''')
+                assert page.locator('.sidebar .brand-icon').evaluate('img=>img.complete&&img.naturalWidth>0')
                 original_size=page.viewport_size
                 page.set_viewport_size({"width":1440,"height":900})
                 page.evaluate("window.termokonturTheme.setPreference('dark')")

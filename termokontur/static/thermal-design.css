@@ -1,3 +1,5 @@
+@font-face{font-family:Manrope;src:url("fonts/Manrope.ttf") format("truetype");font-weight:200 800;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Mono";src:url("fonts/JetBrainsMono.ttf") format("truetype");font-weight:100 800;font-style:normal;font-display:swap}
 /* Termokontur Design System v0.2. Loaded after feature-specific styles.
    Existing routes, dialogs and API contracts are intentionally unchanged. */
 :root,html[data-theme="light"]{
@@ -126,3 +128,20 @@ html[data-theme="dark"] .heatmap-table .heatmap-value.normal{color:#a3e1cb}
   .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-table-panel .table-scroll{max-height:65vh;overflow:auto}
 }
 @media(max-width:1279px){#sensor-detail:not([hidden]){position:relative;scroll-margin-top:76px}}
+
+/* Local typography and restrained duotone telemetry. */
+.dashboard-eyebrow{display:inline-flex;align-items:center;gap:7px}
+.tk-telemetry-icon{display:inline-block;width:21px;height:21px;flex:none}
+.tk-thermometer{color:var(--tk-accent)}
+.tk-coverage{color:var(--tk-ok)}
+.panel-version,.firmware-debug-values dd,#sensor-detail-state{font-family:"JetBrains Mono",ui-monospace,monospace}
+html[data-theme] .dashboard-hero-coverage .dashboard-eyebrow{color:var(--tk-muted)}
+html[data-theme] .theme-preview{background:#eff2f5;border-color:#d6dee6}
+html[data-theme] .theme-preview::before{background:#e3e8ed}
+html[data-theme] .theme-preview::after{background:#e9b18e;box-shadow:0 21px #fff,0 42px #fff}
+html[data-theme] .theme-preview-dark{background:#10161c;border-color:#34414d}
+html[data-theme] .theme-preview-dark::before{background:#181f27}
+html[data-theme] .theme-preview-dark::after{background:#f2a66d;box-shadow:0 21px #25313b,0 42px #25313b}
+html[data-theme] .theme-preview-system{background:linear-gradient(90deg,#eff2f5 50%,#10161c 50%)}
+html[data-theme] .theme-preview-system::before{background:linear-gradient(90deg,#e3e8ed 50%,#181f27 50%)}
+html[data-theme] .theme-preview-system::after{background:linear-gradient(90deg,#e9b18e 50%,#f2a66d 50%);box-shadow:0 21px #8291a0,0 42px #8291a0}

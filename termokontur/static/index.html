@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#101d31">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png?v=__ASSET_FINGERPRINT__">
+  <meta name="theme-color" content="#10161c">
+  <link rel="icon" type="image/svg+xml" href="/static/thermal-brand.svg?v=__ASSET_FINGERPRINT__">
   <link rel="apple-touch-icon" sizes="192x192" href="/static/icon-192.png?v=__ASSET_FINGERPRINT__">
   <title>Термоконтур — мониторинг температуры</title>
   <script src="/static/theme.js?v=__ASSET_FINGERPRINT__"></script>
@@ -38,7 +38,7 @@
   <section id="login-screen" class="login-screen">
     <div class="login-card">
       <button type="button" class="theme-toggle login-theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
-      <div class="brand large"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
+      <div class="brand large"><img class="brand-icon" src="/static/thermal-brand.svg?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
       <h1>Контроль температуры</h1>
       <p>Температура помещений и история измерений.</p>
       <form id="login-form">
@@ -57,7 +57,7 @@
 
   <div id="app-root" class="shell" hidden>
     <aside class="sidebar">
-      <div class="brand"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
+      <div class="brand"><img class="brand-icon" src="/static/thermal-brand.svg?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
       <button type="button" id="tk-collapse" class="btn secondary tk-collapse" aria-label="Свернуть меню" aria-controls="sidebar-menu" aria-pressed="false">Свернуть меню</button>
       <button type="button" id="navigation-toggle" class="navigation-toggle" aria-expanded="false" aria-controls="sidebar-menu">Разделы</button>
       <div id="sidebar-menu" class="sidebar-menu">
@@ -96,13 +96,13 @@
         </div>
         <div class="dashboard-hero">
           <div class="dashboard-hero-main">
-            <span class="dashboard-eyebrow">Средняя за сегодня</span>
+            <span class="dashboard-eyebrow"><svg class="tk-telemetry-icon tk-thermometer" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 14V5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0Z" fill="currentColor" fill-opacity=".14" stroke="currentColor" stroke-width="1.7"/><path d="M12 9v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="18" r="2" fill="currentColor"/></svg>Средняя за сегодня</span>
             <div class="dashboard-hero-value" id="avg-today">—</div>
             <p id="avg-today-desc" hidden>Показаний пока нет</p>
             <span id="avg-change" class="dashboard-change" hidden></span>
           </div>
           <div class="dashboard-hero-coverage">
-            <span class="dashboard-eyebrow">Охват за сегодня</span>
+            <span class="dashboard-eyebrow"><svg class="tk-telemetry-icon tk-coverage" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5" width="16" height="17" rx="3" fill="currentColor" fill-opacity=".14" stroke="currentColor" stroke-width="1.7"/><rect x="8" y="2" width="8" height="5" rx="2" fill="currentColor"/><path d="m8 14 3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Охват за сегодня</span>
             <strong id="today-coverage">—</strong>
             <progress id="coverage-progress" max="100" value="0" aria-label="Доля помещений с показаниями сегодня" hidden></progress>
             <p id="today-coverage-desc" hidden></p>
