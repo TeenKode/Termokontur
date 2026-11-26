@@ -4,14 +4,15 @@
 struct Memory : sensor::Flash {
   std::vector<uint8_t> data;
   int budget = -1;
-  size_t reads = 0;
+  size_t reads = 0, fail_read_at = SIZE_MAX;
   bool erase_fail = false, read_fail = false;
   explicit Memory(size_t sectors = 2) : data(sectors * 4096, 255) {}
   size_t size() const override { return data.size(); }
   bool read(size_t o, void *p, size_t n) override {
     ++reads;
-    if (read_fail)
+    if (read_fail || reads == fail_read_at)
       return false;
+    assert(o <= data.size() && n <= data.size() - o);
     memcpy(p, data.data() + o, n);
     return true;
   }
@@ -133,6 +134,55 @@ int main() {
     r.seq = sensor::sequence_limit;
     assert(!sensor::commit_measurement(j, r, 7, sensor::sequence_limit,
                                        [](uint64_t) { return true; }));
+  }
+  // Production partition: 384 KiB = 6144 slots. Scan in 384 reads,
+  // without changing CRC handling, sorting or first free-slot selection.
+  {
+    Memory f(96);
+    sensor::Journal j(f);
+    sensor::Record r{};
+    for (uint64_t seq : {9u, 2u, 7u}) {
+      r.seq = seq;
+      assert(j.append(r));
+    }
+    const auto before = f.reads;
+    assert(j.scan());
+    assert(f.reads - before == 384);
+    assert(j.entries().size() == 3);
+    assert(j.entries()[0].seq == 2 && j.entries()[1].seq == 7 && j.entries()[2].seq == 9);
+    assert(j.missing(2, 10) == 5);
+    assert(j.missing(7, 9) == 1);
+    assert(j.missing(9, 9) == 0 && j.missing(10, 2) == 0);
+    f.fail_read_at = f.reads + 3;
+    assert(!j.scan());
+    f.fail_read_at = SIZE_MAX;
+    assert(j.scan() && j.entries().size() == 3);
+    // A CRC-invalid committed slot is not accepted and must not be reused.
+    f.data[0] ^= 1;
+    assert(j.scan() && j.entries().size() == 2);
+    r.seq = 10;
+    assert(j.append(r));
+    assert(j.entries().back().offset == 3 * sizeof(sensor::Slot));
+  }
+  {
+    // Non-multiple of the read batch: never read beyond the last full slot.
+    Memory f(1);
+    f.data.resize(17 * sizeof(sensor::Slot) + 3);
+    sensor::Journal j(f);
+    assert(j.scan() && f.reads == 2);
+  }
+  {
+    // Reclaim the sector with the smallest newest sequence, not simply
+    // the physically first sector. Preserve the other sector's records.
+    Memory f(2);
+    sensor::Journal j(f);
+    sensor::Record r{};
+    for (uint64_t seq = 65; seq <= 128; ++seq) { r.seq = seq; assert(j.append(r)); }
+    for (uint64_t seq = 1; seq <= 64; ++seq) { r.seq = seq; assert(j.append(r)); }
+    r.seq = 129;
+    assert(j.append(r));
+    assert(j.entries().size() == 65 && j.entries().front().seq == 65);
+    assert(j.entries().back().offset == 4096);
   }
   // A second append must not read the whole partition twice again.
   {

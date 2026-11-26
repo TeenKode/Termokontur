@@ -75,17 +75,24 @@ public:
     scanned = false;
     entries_.clear();
     free_offset = SIZE_MAX;
-    for (size_t off = 0; off + sizeof(Slot) <= flash.size();
-         off += sizeof(Slot)) {
-      Slot s;
-      if (!flash.read(off, &s, sizeof s))
+    // Read 16 complete slots at once. CRC and commit validation are
+    // unchanged; only the number of Flash driver calls is reduced.
+    Slot block[16];
+    const size_t slots = flash.size() / sizeof(Slot);
+    for (size_t first = 0; first < slots;) {
+      const size_t count = std::min<size_t>(16, slots - first);
+      if (!flash.read(first * sizeof(Slot), block, count * sizeof(Slot)))
         return false;
-      if (blank(s)) {
-        if (free_offset == SIZE_MAX)
-          free_offset = off;
-      } else if (s.commit == 0x544b434d && s.record.seq &&
-                 s.crc == crc32(&s.record, sizeof s.record))
-        entries_.push_back({s.record.seq, static_cast<uint32_t>(off)});
+      for (size_t i = 0; i < count; ++i) {
+        const auto &s = block[i];
+        const size_t off = (first + i) * sizeof(Slot);
+        if (blank(s)) {
+          if (free_offset == SIZE_MAX) free_offset = off;
+        } else if (s.commit == 0x544b434d && s.record.seq &&
+                   s.crc == crc32(&s.record, sizeof s.record))
+          entries_.push_back({s.record.seq, static_cast<uint32_t>(off)});
+      }
+      first += count;
     }
     std::sort(entries_.begin(), entries_.end(),
               [](auto a, auto b) { return a.seq < b.seq; });
@@ -105,35 +112,35 @@ public:
     return r.seq == e.seq;
   }
   uint64_t missing(uint64_t first, uint64_t end) const {
-    uint64_t count = 0;
-    for (auto e : entries_)
-      if (e.seq >= first && e.seq < end)
-        ++count;
-    return end >= first && end - first >= count ? end - first - count : 0;
+    if (end <= first) return 0;
+    const auto lower = [](const Entry &entry, uint64_t seq) { return entry.seq < seq; };
+    const auto begin = std::lower_bound(entries_.begin(), entries_.end(), first, lower);
+    const auto finish = std::lower_bound(begin, entries_.end(), end, lower);
+    const auto count = static_cast<uint64_t>(finish - begin);
+    return end - first >= count ? end - first - count : 0;
   }
   bool append(const Record &r) {
     if (!r.seq || (!scanned && !scan()))
       return false;
-    for (auto e : entries_)
-      if (e.seq == r.seq) {
-        Record old;
-        return read(e, old) && !memcmp(&old, &r, sizeof r);
-      }
+    const auto existing = std::lower_bound(entries_.begin(), entries_.end(), r.seq,
+        [](const Entry &entry, uint64_t seq) { return entry.seq < seq; });
+    if (existing != entries_.end() && existing->seq == r.seq) {
+      Record old;
+      return read(*existing, old) && !memcmp(&old, &r, sizeof r);
+    }
     if (free_offset == SIZE_MAX) {
       // Reclaim the sector whose newest valid entry is oldest. Erase
       // failure is returned and never followed by an assumed-success write.
-      uint64_t oldest = UINT64_MAX;
-      size_t sector = 0;
-      for (size_t off = 0; off < flash.size(); off += 4096) {
-        uint64_t newest = 0;
-        for (auto e : entries_)
-          if (e.offset >= off && e.offset < off + 4096)
-            newest = std::max(newest, e.seq);
-        if (newest < oldest) {
-          oldest = newest;
-          sector = off;
-        }
+      const size_t sectors = flash.size() / 4096;
+      if (!sectors || flash.size() % 4096) return false;
+      // One pass over the index instead of one pass for every sector.
+      std::vector<uint64_t> newest(sectors, 0);
+      for (const auto &e : entries_) {
+        const size_t index = e.offset / 4096;
+        newest[index] = std::max(newest[index], e.seq);
       }
+      const size_t sector = static_cast<size_t>(
+          std::min_element(newest.begin(), newest.end()) - newest.begin()) * 4096;
       scanned = false;
       if (!flash.erase(sector, 4096) || !scan() || free_offset == SIZE_MAX)
         return false;
