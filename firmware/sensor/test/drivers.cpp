@@ -15,6 +15,28 @@ int main() {
     assert(r.error == 2); // Disconnected lines never turn into successful zeros.
   }
   assert(supported("bmp280"));
+  // HAL allocation failures and probe timeout must not leak handles or
+  // produce a successful sample. Retry can use a newly initialized bus.
+  {
+    mock::clear();
+    mock::samples[0x44] = {0xbe,0xef,0x92,0xbe,0xef,0x92};
+    Record r{};
+    int io = ESP_OK;
+    mock::fail_bus_init = true;
+    assert(!read_sensor("sht4x", r, &io) && io == ESP_ERR_TIMEOUT);
+    assert(mock::live_bus == 0 && mock::live_dev == 0 && mock::transactions == 0);
+    mock::fail_bus_init = false;
+    mock::fail_device_add = true;
+    assert(!read_sensor("sht4x", r, &io) && io == ESP_ERR_TIMEOUT);
+    assert(mock::live_bus == 0 && mock::live_dev == 0 && mock::transactions == 0);
+    mock::fail_device_add = false;
+    mock::timeout_address = 0x44;
+    assert(!read_sensor("sht4x", r, &io) && io == ESP_ERR_TIMEOUT);
+    assert(mock::live_bus == 0 && mock::live_dev == 0 && mock::transactions == 0);
+    mock::timeout_address = -1;
+    assert(read_sensor("sht4x", r, &io) && io == ESP_OK && r.error == 0);
+    assert(mock::live_bus == 0 && mock::live_dev == 0);
+  }
   assert(!supported(nullptr) && !is_i2c(nullptr));
   {
     mock::clear();
