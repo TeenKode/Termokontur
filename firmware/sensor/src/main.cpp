@@ -242,7 +242,7 @@ static bool load_provision() {
   }
   return sensor::supported(sensor_type.c_str()) && !ssid.empty() && server.rfind("https://", 0) == 0 &&
          ((device.size() == 19 && (!code.empty() || !token.empty())) ||
-          (code.empty() && !sensor::identity::public_key().empty()));
+          (code.empty() && sensor::identity::has_key()));
 }
 static void stop_network() {
   if (net_started) {
@@ -290,6 +290,13 @@ static void wifi_event(void *, esp_event_base_t base, int32_t id, void *data) {
 static bool start_wifi(bool ap = false) {
   if (charging())
     return false;
+  // Prepare before RF initialization, including token renewal after a 401.
+  // Ordinary sample-only wakes never reach this operation.
+  if (!sensor::identity::prepare_public(net_started)) {
+    last_error = "identity_prepare_failed";
+    return false;
+  }
+  if (charging()) return false;
   if (!events) {
     events = xEventGroupCreate();
     esp_netif_init();
@@ -748,7 +755,7 @@ static bool identity_authenticate() {
   auto expected = "TK-AUTH-1\n" + challenge + "\n" + sensor::identity::fingerprint() + "\n" +
                   sensor::identity::hardware_id() + "\n" + sensor_type + "\n" + firmware_version();
   if (challenge.size() != 64 || message != expected) return false;
-  auto signature = sensor::identity::sign(message);
+  auto signature = sensor::identity::sign(message, true);
   if (signature.empty()) return false;
   j = identity_payload(); add(j, "challenge", challenge); add(j, "signature", signature);
   if (!factory_ticket.empty()) add(j, "setup_ticket", factory_ticket);
@@ -1381,6 +1388,10 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
   }
   case Command::hello: {
     std::lock_guard<std::mutex> lock(provision_mutex);
+    if (charging() || !sensor::identity::prepare_public(net_started)) {
+      add(out, "error", "Не удалось подготовить ключ устройства.");
+      break;
+    }
     num(out, "protocol", 1);
     add(out, "public_key", sensor::identity::public_key());
     add(out, "fingerprint", sensor::identity::fingerprint());
@@ -1519,7 +1530,9 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
     usb_arm_boot_debug(out);
     break;
   case Command::sign: {
-    const auto signature = sensor::identity::sign(text(request, "message"));
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    const auto signature = charging() ? std::string{} :
+        sensor::identity::sign(text(request, "message"), net_started);
     if (signature.empty()) add(out, "error", "Не удалось подтвердить плату. Повторите подключение.");
     else add(out, "signature", signature);
     break;
