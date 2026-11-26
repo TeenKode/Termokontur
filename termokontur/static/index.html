@@ -21,6 +21,7 @@
   <link rel="stylesheet" href="/static/max-staff.css?v=__ASSET_FINGERPRINT__">
   <link rel="stylesheet" href="/static/reports.css?v=__ASSET_FINGERPRINT__">
   <link rel="stylesheet" href="/static/charts.css?v=__ASSET_FINGERPRINT__">
+  <link rel="stylesheet" href="/static/thermal-design.css?v=__ASSET_FINGERPRINT__">
   <script src="/static/charts.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/reports.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/notifications.js?v=__ASSET_FINGERPRINT__" defer></script>
@@ -57,18 +58,19 @@
   <div id="app-root" class="shell" hidden>
     <aside class="sidebar">
       <div class="brand"><img class="brand-icon" src="/static/icon-192.png?v=__ASSET_FINGERPRINT__" width="35" height="35" alt="" aria-hidden="true"><span>термо<span class="brand-accent">контур</span></span></div>
+      <button type="button" id="tk-collapse" class="btn secondary tk-collapse" aria-label="Свернуть меню" aria-controls="sidebar-menu" aria-pressed="false">Свернуть меню</button>
       <button type="button" id="navigation-toggle" class="navigation-toggle" aria-expanded="false" aria-controls="sidebar-menu">Разделы</button>
       <div id="sidebar-menu" class="sidebar-menu">
         <nav class="navigation" aria-label="Разделы">
-          <button type="button" data-tab="overview" class="nav-button active" aria-current="page"><span class="nav-icon" aria-hidden="true">▦</span>Обзор</button>
-          <button type="button" data-tab="readings" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">≋</span>Измерения</button>
-          <button type="button" data-tab="rooms" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">▤</span>Помещения</button>
-          <button type="button" data-tab="reports" class="nav-button"><span class="nav-icon" aria-hidden="true">▥</span>Отчёты</button>
-          <button type="button" data-tab="staff" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">♙</span>Сотрудники</button>
-          <button type="button" data-tab="sensors" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">◉</span>Датчики</button>
-          <button type="button" data-tab="settings" class="nav-button" data-admin-only><span class="nav-icon" aria-hidden="true">⚙</span>Настройки</button>
+          <button type="button" data-tab="overview" class="nav-button active" aria-current="page" aria-label="Обзор" title="Обзор"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-label">Обзор</span></button>
+          <button type="button" data-tab="readings" class="nav-button" data-admin-only aria-label="Измерения" title="Измерения"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 5-8 4 3"/></svg></span><span class="nav-label">Измерения</span></button>
+          <button type="button" data-tab="rooms" class="nav-button" data-admin-only aria-label="Помещения" title="Помещения"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V3h16v18M9 21v-5h6v5M8 7h2m4 0h2M8 11h2m4 0h2"/></svg></span><span class="nav-label">Помещения</span></button>
+          <button type="button" data-tab="reports" class="nav-button" aria-label="Отчёты" title="Отчёты"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h12l4 4v14H4zM16 3v4h4M8 17v-4m4 4V9m4 8v-6"/></svg></span><span class="nav-label">Отчёты</span></button>
+          <button type="button" data-tab="staff" class="nav-button" data-admin-only aria-label="Сотрудники" title="Сотрудники"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="4"/><path d="M2 21v-3a8 8 0 0 1 16 0v3M18 4a4 4 0 0 1 0 7m2 3a6 6 0 0 1 2 5v2"/></svg></span><span class="nav-label">Сотрудники</span></button>
+          <button type="button" data-tab="sensors" class="nav-button" data-admin-only aria-label="Датчики" title="Датчики"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 2v3m6-3v3m-6 14v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/><circle cx="12" cy="12" r="2"/></svg></span><span class="nav-label">Датчики</span></button>
+          <button type="button" data-tab="settings" class="nav-button" data-admin-only aria-label="Настройки" title="Настройки"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M10 2h4l1 3 3 1 3 3-2 3 2 3-3 3-3 1-1 3h-4l-1-3-3-1-3-3 2-3-2-3 3-3 3-1z"/></svg></span><span class="nav-label">Настройки</span></button>
         </nav>
-        <div class="sidebar-foot"><button type="button" id="logout" class="logout-btn">Выйти</button></div>
+        <div class="sidebar-foot"><button type="button" id="logout" class="logout-btn" title="Выйти" aria-label="Выйти"><span aria-hidden="true">↪</span> <span class="logout-label">Выйти</span></button></div>
       </div>
     </aside>
     <main class="main">
@@ -229,7 +231,9 @@
           </details>
         </div>
         <article class="panel sensor-claims-panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
+        <div class="sensor-presentation"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
         <div id="sensor-cards" class="sensor-cards"></div>
+        <div id="tk-sensor-table" class="panel sensor-table-panel" hidden><div class="table-scroll" tabindex="0" role="region" aria-label="Таблица датчиков"><table><thead><tr><th scope="col">Датчик</th><th scope="col">Помещение</th><th scope="col">Состояние</th><th scope="col">Последний замер</th><th scope="col">Напряжение</th><th scope="col">Последняя связь</th><th scope="col">Прошивка</th><th scope="col">Действия</th></tr></thead><tbody id="tk-sensor-rows"></tbody></table></div></div>
         <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
         <details id="sensor-rejected-panel" class="panel sensor-disclosure" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
         <div id="sensor-detail" class="panel" hidden>
@@ -458,6 +462,7 @@
                   <label class="theme-choice"><input type="radio" name="theme-preference" value="dark"><span class="theme-preview theme-preview-dark" aria-hidden="true"></span><span class="theme-choice-title">Тёмная</span><small>Тёмный фон</small></label>
                 </div>
                 <p class="hint">Тема применяется сразу и сохраняется в этом браузере.</p>
+                <label class="tk-density" for="tk-density">Плотность таблиц<select id="tk-density"><option value="compact">Компактная</option><option value="normal">Стандартная</option><option value="wide">Свободная</option></select></label>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="notifications" hidden>
