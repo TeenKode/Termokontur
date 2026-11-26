@@ -34,6 +34,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "policy.hpp"
+#include "boot_debug.hpp"
 #include "sensor_drivers.hpp"
 #include "serial_console.hpp"
 #include "setup_password.hpp"
@@ -56,6 +57,7 @@ using sensor::valid_config;
 static constexpr gpio_num_t CHARGE_PIN = GPIO_NUM_4;
 static constexpr gpio_num_t BOOT_PIN = GPIO_NUM_9;
 static constexpr uint32_t BOOT_DEBUG_WINDOW_S = 300;
+static uint32_t boot_debug_duration_s = BOOT_DEBUG_WINDOW_S;
 static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
@@ -1073,14 +1075,23 @@ static esp_err_t setup_page(httpd_req_t *req) {
 }
 static std::mutex provision_mutex;
 static bool deferred_configuration = false;
-static void usb_arm_boot_debug(cJSON *out) {
+static void usb_arm_boot_debug(cJSON *out, const cJSON *request) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (setup_state != SetupState::waiting || charging()) {
     add(out, "error", "Для отладки по BOOT откройте режим настройки и отключите зарядку.");
   } else if (!setup_provisioned) {
     add(out, "error", "Сначала настройте Wi-Fi и подключите датчик к серверу.");
   } else {
-    num(out, "duration_s", BOOT_DEBUG_WINDOW_S);
+    // Omitted duration retains the original five-minute USB protocol.
+    const auto *duration = cJSON_GetObjectItemCaseSensitive(request, "duration_s");
+    if (duration && (!cJSON_IsNumber(duration) ||
+                     !sensor::boot_debug_duration(duration->valuedouble))) {
+      add(out, "error", "Выберите 300, 900, 1800 или 3600 секунд.");
+      return;
+    }
+    boot_debug_duration_s = duration ? static_cast<uint32_t>(duration->valuedouble)
+                                     : BOOT_DEBUG_WINDOW_S;
+    num(out, "duration_s", boot_debug_duration_s);
     setup_state = SetupState::boot_debug;
   }
 }
@@ -1527,7 +1538,7 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
     usb_setup_wifi(out);
     break;
   case Command::arm_boot_debug:
-    usb_arm_boot_debug(out);
+    usb_arm_boot_debug(out, request);
     break;
   case Command::sign: {
     std::lock_guard<std::mutex> lock(provision_mutex);
@@ -1721,36 +1732,51 @@ static bool setup_ap(bool provisioned) {
   return outcome == SetupState::boot_debug;
 }
 
-static bool wait_for_boot_debug() {
-  if (charging()) return false;
-  const int64_t end = esp_timer_get_time() + BOOT_DEBUG_WINDOW_S * 1000000LL;
+enum class BootWait { pressed, expired, charging, low_battery, invalid_battery };
+static BootWait wait_for_boot_debug(uint32_t duration_s) {
+  if (charging()) return BootWait::charging;
+  const int64_t end = esp_timer_get_time() + int64_t(duration_s) * 1000000LL;
+  // Both wake pins must be configured; a failed sleep setup falls back
+  // to short polling and every exit disables the temporary GPIO sources.
   const bool wake_enabled = gpio_wakeup_enable(BOOT_PIN, GPIO_INTR_LOW_LEVEL) == ESP_OK &&
       gpio_wakeup_enable(CHARGE_PIN, GPIO_INTR_LOW_LEVEL) == ESP_OK &&
       esp_sleep_enable_gpio_wakeup() == ESP_OK;
-  puts("BOOT: ждём короткого нажатия для замера и отправки.");
-  // Wait for release if BOOT was already held during setup.
-  while (!gpio_get_level(BOOT_PIN) && !charging() && esp_timer_get_time() < end)
-    vTaskDelay(pdMS_TO_TICKS(20));
-  bool pressed = false;
-  while (!charging() && esp_timer_get_time() < end) {
-    if (!gpio_get_level(BOOT_PIN)) {
-      vTaskDelay(pdMS_TO_TICKS(20));
-      if (!gpio_get_level(BOOT_PIN) && !charging()) {
-        pressed = true;
-        break;
-      }
+  printf("BOOT: ждём короткого нажатия, окно=%u с.\n", (unsigned)duration_s);
+  sensor::BootPress button;
+  BootWait result = BootWait::expired;
+  // Allow the ADC input to settle after the setup access point shuts down.
+  int64_t next_power_check = esp_timer_get_time() + 500000;
+  while (esp_timer_get_time() < end) {
+    if (charging()) { result = BootWait::charging; break; }
+    const auto now = esp_timer_get_time();
+    const bool usb = usb_serial_jtag_is_connected();
+    if (!usb && now >= next_power_check) {
+      if (charging()) { result = BootWait::charging; break; }
+      const auto mv = battery_mv();
+      if (charging()) { result = BootWait::charging; break; }
+      if (mv < 2000 || mv > 5000) { result = BootWait::invalid_battery; break; }
+      if (mv < cfg.cutoff_mv) { result = BootWait::low_battery; break; }
+      next_power_check = esp_timer_get_time() + 60000000LL;
     }
-    const int64_t remaining = end - esp_timer_get_time();
-    // Keep the USB Serial/JTAG connection alive when the host is watching.
-    if (wake_enabled && !usb_serial_jtag_is_connected() && remaining > 0 &&
+    if (esp_timer_get_time() >= end) break;
+    if (button.update(gpio_get_level(BOOT_PIN) == 0, esp_timer_get_time())) {
+      result = BootWait::pressed;
+      break;
+    }
+    // Do not sleep on a level-low wake source while a button is held.
+    // Periodic timer wakes check battery without enabling Wi-Fi.
+    const auto remaining = std::min(end, next_power_check) - esp_timer_get_time();
+    if (wake_enabled && !usb && button.can_sleep() && remaining > 0 &&
         esp_sleep_enable_timer_wakeup(remaining) == ESP_OK && esp_light_sleep_start() == ESP_OK)
       continue;
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(10) + 1);
   }
   gpio_wakeup_disable(BOOT_PIN);
   gpio_wakeup_disable(CHARGE_PIN);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-  return pressed && !charging();
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  if (charging()) return BootWait::charging;
+  return result;
 }
 
 static void boot_debug_result(const std::string &message) {
@@ -1925,9 +1951,22 @@ extern "C" void app_main() {
   bool boot_debug = false;
   if (setup_requested) {
     if (!setup_ap(provisioned)) sleep_for(1800);
-    if (!wait_for_boot_debug()) {
-      boot_debug_result(charging() ? "Отладка прервана зарядкой." : "Время ожидания нажатия истекло.");
-      sleep_for(cfg.measure_s);
+    const auto wait = wait_for_boot_debug(boot_debug_duration_s);
+    if (wait != BootWait::pressed) {
+      switch (wait) {
+      case BootWait::charging:
+        boot_debug_result("Отладка прервана зарядкой.");
+        sleep_for(cfg.measure_s);
+      case BootWait::low_battery:
+        boot_debug_result("Отладка завершена: напряжение ниже порога.");
+        sleep_for(21600);
+      case BootWait::invalid_battery:
+        boot_debug_result("Отладка завершена: напряжение недоступно.");
+        sleep_for(3600);
+      default:
+        boot_debug_result("Время ожидания нажатия истекло.");
+        sleep_for(cfg.measure_s);
+      }
     }
     boot_debug = true;
     debug_radio = true;
