@@ -273,6 +273,33 @@ function renderDaily() {
     details.querySelector(".daily-tags").replaceChildren(...labels);
   }
 }
+function renderAttention(selected){
+  const list=$("tk-attention-items"),empty=$("tk-attention-empty"),count=$("tk-attention-count");
+  if(!list||!empty||!count)return;
+  const priority={above:0,below:1,missing:2};
+  const issues=selected.filter(r=>Object.hasOwn(priority,r.status)).sort((a,b)=>priority[a.status]-priority[b.status]);
+  count.textContent=String(issues.length);
+  empty.hidden=Boolean(issues.length);
+  empty.textContent=selected.length?"Нет помещений, требующих внимания.":"Помещения пока не добавлены.";
+  list.replaceChildren();
+  for(const room of issues.slice(0,8)){
+    const item=el("li","tk-attention-item");
+    const link=el("button","tk-attention-link");link.type="button";
+    const label=room.status==="missing"&&room.last_at?"Устарело":statuses[room.status];
+    const text=el("span","tk-attention-room");text.append(el("strong","",room.name),el("small","",room.building));
+    const detail=el("span","tk-attention-value "+room.status);
+    detail.append(el("strong","",room.status==="missing"?"—":temperature(room.last_temp)),el("small","",label));
+    link.append(text,detail);
+    link.addEventListener("click",()=>{
+      $("overview-status").value=room.status==="missing"?"missing":"alert";
+      $("search-rooms").value=room.name;renderOverview();
+      $("latest-readings-title").focus({preventScroll:true});
+      $("latest-readings").scrollIntoView({block:"start"});
+    });
+    item.append(link);list.append(item);
+  }
+  if(issues.length>8){const item=el("li","tk-attention-more"),button=el("button","btn secondary","Показать все ("+issues.length+")");button.type="button";button.addEventListener("click",()=>document.querySelector('[data-overview-status=""]').click());item.append(button);list.append(item);}
+}
 function renderOverview() {
   const building=$("building-filter").value;
   const selected=overview.filter(r=>!building||r.building===building);
@@ -282,6 +309,7 @@ function renderOverview() {
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
+  renderAttention(selected);
   const search=$("search-rooms").value.trim().toLocaleLowerCase("ru");
   const status=$("overview-status").value;
   const filtered=selected.filter(room=>{
