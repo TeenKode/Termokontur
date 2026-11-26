@@ -45,6 +45,16 @@ int main() {
   encoded = original;
   encoded.pop_back();
   assert(!sensor::decode_blob(encoded, &restored, sizeof restored));
+  // A missing record is safe; any failure reading an existing record
+  // must prevent normal operation, even if no intent can be decoded.
+  assert(sensor::provision_recovery_allowed(true, false, 0, false));
+  assert(sensor::provision_recovery_allowed(false, true, 1, true));
+  for (int result : {-1, 0, 1}) {
+    assert(!sensor::provision_recovery_allowed(false, false, result, true));
+    assert(!sensor::provision_recovery_allowed(false, true, result, false));
+    if (result != 1)
+      assert(!sensor::provision_recovery_allowed(false, true, result, true));
+  }
   // Model a reboot after each component commit: the intent stays durable
   // until every component has been applied. Reapplying is idempotent.
   for (int cut = 0; cut <= 3; ++cut) {
