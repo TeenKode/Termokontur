@@ -71,6 +71,69 @@ int main() {
     a.temperature = 1;
     assert(!recovered.append(a));
   }
+  // Exercise the real commit order, including every Flash byte boundary
+  // and the failure window between a committed record and NVS persistence.
+  for (int cut = 0; cut <= 64; ++cut) {
+    Memory f;
+    sensor::Journal j(f);
+    sensor::Record r{};
+    r.seq = 1;
+    uint64_t stored_next = 1;
+    unsigned writes = 0;
+    const auto save = [&](uint64_t n) { ++writes; stored_next = n; return true; };
+    f.budget = cut;
+    const bool ok = sensor::commit_measurement(j, r, 1, stored_next, save);
+    assert(ok == (cut == 64));
+    assert(writes == (ok ? 1u : 0u));
+    assert(stored_next == (ok ? 2u : 1u));
+    f.budget = -1;
+    sensor::Journal reboot(f);
+    assert(reboot.scan());
+    const auto newest = reboot.entries().empty() ? 0 : reboot.entries().back().seq;
+    assert(sensor::recover_next(1, stored_next, newest));
+    assert(stored_next == (ok ? 2u : 1u));
+    // RTC retained: retry must be idempotent, whether already committed or not.
+    assert(sensor::commit_measurement(reboot, r, 1, stored_next, save));
+    assert(stored_next == 2 && reboot.entries().size() == 1);
+  }
+  {
+    Memory f;
+    sensor::Journal j(f);
+    sensor::Record r{};
+    r.seq = 1;
+    uint64_t stored_next = 1;
+    assert(!sensor::commit_measurement(j, r, 1, stored_next, [](uint64_t) { return false; }));
+    assert(stored_next == 1 && j.entries().size() == 1);
+    // Full reset (RTC lost) recovers from Flash without reusing the ID.
+    sensor::Journal reboot(f);
+    assert(reboot.scan());
+    assert(sensor::recover_next(1, stored_next, reboot.entries().back().seq));
+    assert(stored_next == 2);
+    auto save = [&](uint64_t n) { stored_next = n; return true; };
+    // RTC retained: a duplicate must match the original record exactly.
+    assert(sensor::commit_measurement(reboot, r, 1, stored_next, save));
+    r.temperature = 1;
+    assert(!sensor::commit_measurement(reboot, r, 1, stored_next, save));
+    r.seq = 3;
+    assert(!sensor::commit_measurement(reboot, r, 1, stored_next, save));
+    r.seq = 1;
+    assert(!sensor::commit_measurement(reboot, r, 2, stored_next, save));
+    r.seq = 2;
+    assert(sensor::commit_measurement(reboot, r, 1, stored_next, save));
+    assert(stored_next == 3 && reboot.missing(1, 3) == 0);
+  }
+  {
+    // Upgrade compatibility: older firmware reserves a sequence before Flash.
+    Memory f;
+    sensor::Journal j(f);
+    sensor::Record r{};
+    r.seq = 7;
+    assert(sensor::commit_measurement(j, r, 7, 8, [](uint64_t) { return false; }));
+    assert(j.entries().size() == 1 && j.entries().front().seq == 7);
+    r.seq = sensor::sequence_limit;
+    assert(!sensor::commit_measurement(j, r, 7, sensor::sequence_limit,
+                                       [](uint64_t) { return true; }));
+  }
   // A second append must not read the whole partition twice again.
   {
     Memory f;
