@@ -7,26 +7,41 @@ import secrets
 from . import db, settings
 
 
-def upload_times(device: dict, *, complete: bool = False) -> tuple[int, int]:
+def applied_config(device: dict) -> dict | None:
     config = device["config"]
-    seen = device["last_complete_sync"] if complete else device["last_seen"]
-    last = seen or int(datetime.fromisoformat(device["created_at"]).timestamp())
-    scheduled = last + config["send_s"]
-    grace = min(3600, max(900, config["measure_s"] * 2))
+    if device["last_seen"] is None or device["config_version"] == config["version"]:
+        return config
+    previous = device.get("previous_config")
+    return json.loads(previous) if previous else None
+
+
+def upload_times(device: dict, *, complete: bool = False) -> tuple[int, int] | None:
+    config = applied_config(device)
+    scheduled = device["next_send_hint"]
+    if scheduled is None:
+        if config is None:
+            return None
+        seen = device["last_complete_sync"] if complete else device["last_seen"]
+        last = seen or int(datetime.fromisoformat(device["created_at"]).timestamp())
+        scheduled = last + config["send_s"]
+    grace = min(3600, max(900, config["measure_s"] * 2)) if config else 3600
     return scheduled, scheduled + grace
 
 
 def battery_warning(device: dict) -> bool:
     battery = device["battery_mv"]
-    return bool(battery and battery <= min(4200, max(device["config"]["cutoff_mv"], device["config"]["wifi_min_mv"]) + 150))
+    config = applied_config(device)
+    return bool(battery and config and battery <= min(4200, max(config["cutoff_mv"], config["wifi_min_mv"]) + 150))
 
 
 def by_room(conn, building="") -> dict[int, list[dict]]:
     groups = defaultdict(list)
     for row in conn.execute("""
-        SELECT d.id,d.name,d.room_id,d.config,d.created_at,d.last_seen,d.last_complete_sync,
-               d.battery_mv,r.building,r.name AS room
+        SELECT d.id,d.name,d.room_id,d.config,d.config_version,d.created_at,d.last_seen,
+               d.last_complete_sync,d.next_send_hint,d.battery_mv,h.config AS previous_config,
+               r.building,r.name AS room
         FROM sensor_devices d JOIN rooms r ON r.id=d.room_id
+        LEFT JOIN sensor_config_history h ON h.device_id=d.id AND h.version=d.config_version
         WHERE d.token_hash IS NOT NULL AND d.enabled=1 AND r.active=1 AND (?='' OR r.building=?)
     """, (building, building)):
         device = dict(row)
@@ -42,9 +57,9 @@ def waiting_until(devices, day_start: int, day_end: int, now: int) -> int | None
         created = int(datetime.fromisoformat(device["created_at"]).timestamp())
         if created >= day_end or (device["last_complete_sync"] or 0) >= day_end:
             continue
-        _, deadline = upload_times(device, complete=True)
-        if deadline > max(now, day_start):
-            deadlines.append(deadline)
+        times = upload_times(device, complete=True)
+        if times and times[1] > max(now, day_start):
+            deadlines.append(times[1])
     return max(deadlines, default=None)
 
 
@@ -66,8 +81,8 @@ def queue_alerts(now: datetime | None = None) -> int:
                     for r in conn.execute("SELECT * FROM sensor_alert_state")}
         for devices in by_room(conn).values() if recipients else ():
             for sensor in devices:
-                _, deadline = upload_times(sensor)
-                overdue = epoch > deadline
+                times = upload_times(sensor)
+                overdue = times is not None and epoch > times[1]
                 issue = "offline" if overdue else "battery" if battery_warning(sensor) else None
                 if issue is None:
                     continue

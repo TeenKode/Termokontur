@@ -34,10 +34,11 @@
     </header>
 
     <section class="panel firmware-debug-panel">
-      <h2>USB-подключение</h2>
-      <p class="hint">Подключите ESP32‑C3 к компьютеру кабелем с передачей данных. Если плата спит, коротко нажмите RESET и затем выберите порт.</p>
+      <h2>Подключение к COM-порту</h2>
+      <p class="hint">Встроенный USB открывает режим настройки. Для записи пробуждений используйте внешний USB–UART 3,3 В и питание платы от аккумулятора.</p>
       <div class="heading-actions">
         <button type="button" id="debug-connect" class="btn primary" disabled>Подключить USB</button>
+        <button type="button" id="debug-connect-uart" class="btn secondary" disabled>Подключить UART0</button>
         <button type="button" id="debug-disconnect" class="btn secondary" disabled>Отключить</button>
       </div>
       <p id="debug-connection" role="status">Ожидаем подключения платы.</p>
@@ -77,7 +78,7 @@
 
     <section class="panel firmware-debug-panel">
       <h2>Приёмочный тест датчика</h2>
-      <p class="hint">Без изменения настроек: проверка USB, версии и 5 пробных замеров. Для сети, аккумулятора и OTA предусмотрены отдельные ручные шаги.</p>
+      <p class="hint">Проверяет USB, версию и 5 локальных замеров.</p>
       <div class="heading-actions">
         <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
         <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
@@ -92,7 +93,7 @@
 
     <section class="panel firmware-debug-panel">
       <div class="sensor-firmware-heading">
-        <h2>Журнал USB</h2>
+        <h2>Журнал и команды COM</h2>
         <div class="heading-actions">
           <button type="button" id="debug-log-end" class="btn secondary" disabled>К последней строке</button>
           <button type="button" id="debug-clear" class="btn secondary" disabled>Очистить</button>
@@ -100,6 +101,22 @@
         </div>
       </div>
       <pre id="debug-log" class="serial-log" tabindex="0" role="region" aria-label="Журнал платы"></pre>
+      <form id="debug-command-form" class="firmware-debug-command">
+        <label>Команда <input id="debug-command" autocomplete="off" spellcheck="false" maxlength="12240" placeholder="help" required disabled></label>
+        <label class="inline-check"><input id="debug-command-on-wake" type="checkbox" disabled> При следующем пробуждении</label>
+        <div class="heading-actions">
+          <button id="debug-command-send" class="btn primary" disabled>Отправить</button>
+          <button id="debug-command-cancel" type="button" class="btn secondary" disabled>Отменить ожидание</button>
+        </div>
+      </form>
+      <p id="debug-command-state" class="hint" role="status"></p>
+      <div class="heading-actions">
+        <button type="button" id="debug-delivery-start" class="btn secondary" disabled>Проверить доставку</button>
+        <button type="button" id="debug-delivery-stop" class="btn secondary" disabled>Остановить проверку доставки</button>
+      </div>
+      <p class="hint">На тестовой плате с UART0. Запишет три замера в журнал подключённого датчика.</p>
+      <p id="debug-delivery-state" role="status"></p>
+      <ol id="debug-delivery-results" hidden></ol>
     </section>
   </main>
 </body>

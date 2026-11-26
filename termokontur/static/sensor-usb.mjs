@@ -56,6 +56,19 @@ export class SensorSerial {
   }
 }
 
+export function parseSerialCommand(value) {
+  const match = /^([a-z][a-z0-9_]*)(?:\s+(.*))?$/s.exec(value.trim());
+  if (!match) throw Error("Введите команду, например help.");
+  let args = {};
+  if (match[2]) {
+    try { args = JSON.parse(match[2]); }
+    catch { throw Error("Параметры команды должны быть JSON-объектом."); }
+    if (!args || typeof args !== "object" || Array.isArray(args))
+      throw Error("Параметры команды должны быть JSON-объектом.");
+  }
+  return {name: match[1], args};
+}
+
 export async function verifyIdentity(hello,expectedHardware=null) {
   if(hello.protocol!==1||!/^04[a-f0-9]{128}$/.test(hello.public_key)||!/^[a-f0-9]{12}$/.test(hello.hardware_id))throw Error("Плата не поддерживает настройку по USB. Нужна прошивка 0.1.4 или новее.");
   const bytes=Uint8Array.from(hello.public_key.match(/../g),b=>parseInt(b,16));

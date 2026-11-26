@@ -90,7 +90,11 @@ def drain():
     import paho.mqtt.client as mqtt
     with db.connect() as conn:
         # Also refresh stale availability once per worker cycle after successful sends.
-        for row in conn.execute("SELECT * FROM sensor_devices WHERE last_seen IS NOT NULL"):
+        for row in conn.execute("""
+            SELECT d.*,h.config AS previous_config FROM sensor_devices d
+            LEFT JOIN sensor_config_history h ON h.device_id=d.id AND h.version=d.config_version
+            WHERE d.last_seen IS NOT NULL
+        """):
             if sensors.public_device(row)["status"] in ("stale", "disabled"):
                 conn.execute("INSERT OR IGNORE INTO sensor_mqtt_outbox(device_id) VALUES(?)", (row["id"],))
         pending = [dict(x) for x in conn.execute("SELECT * FROM sensor_mqtt_outbox WHERE next_retry<=? LIMIT 20", (int(time.time()),))]

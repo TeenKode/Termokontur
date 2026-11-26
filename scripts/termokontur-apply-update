@@ -17,6 +17,7 @@ OLD_UNITS=/opt/termokontur-previous-units
 INSTALL_UNITS=(termokontur.service termokontur-max.service termokontur-update.service termokontur-update.path)
 
 CURRENT_PHASE=preparing
+UPDATE_FAILURE_MESSAGE=
 UPDATE_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 record() {
   local state="$1" message="$2" phase="${3:-}"
@@ -194,7 +195,7 @@ cleanup() {
     if (( rollback_failed )); then
       record failed "Сбой на этапе: $CURRENT_PHASE. Восстановление не подтверждено. Не запускайте новое обновление до проверки журнала termokontur-update.service и резервных копий." failed || true
     else
-      record failed "Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service" failed || true
+      record failed "${UPDATE_FAILURE_MESSAGE:-Сбой на этапе: $CURRENT_PHASE. Действующая версия сохранена или выполнен откат. Подробности: journalctl -u termokontur-update.service}" failed || true
     fi
   fi
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
@@ -217,6 +218,29 @@ REVISION=$(runuser -u termokontur -- git -C "$STAGE" rev-parse HEAD)
 if [[ -f "$DATA/installed-revision" ]] && [[ "$(cat "$DATA/installed-revision")" == "$REVISION" ]]; then
   record success "Уже установлена актуальная сборка." success
   exit 0
+fi
+
+# Use the installed comparison code. An older checkout may predate this guard.
+if ! downgrade_reason=$(
+  cd "$APP" && runuser -u termokontur -- /usr/bin/python3 - "$STAGE/termokontur/__init__.py" <<'PY'
+import sys
+from pathlib import Path
+
+from termokontur import __version__
+from termokontur.release_version import read_source_version, version_order
+
+candidate = read_source_version(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if version_order(candidate) < version_order(__version__):
+    print(f"Понижение версии заблокировано. Установлена {__version__}, в stable доступна {candidate}.")
+PY
+); then
+  UPDATE_FAILURE_MESSAGE="Не удалось сверить установленную версию с версией в стабильном канале."
+  exit 1
+fi
+if [[ -n "$downgrade_reason" ]]; then
+  UPDATE_FAILURE_MESSAGE="$downgrade_reason"
+  echo "$downgrade_reason" >&2
+  exit 1
 fi
 
 record installing "Исходный код получен. Подготавливаем Python…" downloading

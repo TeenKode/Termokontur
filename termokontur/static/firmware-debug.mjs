@@ -1,12 +1,14 @@
-import {SensorSerial, verifyIdentity} from "./sensor-usb.mjs";
+import {SensorSerial, parseSerialCommand, verifyIdentity} from "./sensor-usb.mjs";
 import {createSerialLog} from "./sensor-log.mjs";
 import {runBenchTest, manualChecks} from "./firmware-test.mjs";
+import {runDeliveryTest} from "./firmware-delivery.mjs";
 
 const field = name => document.getElementById("debug-" + name);
 const panelVersion = field("panel-version").textContent;
 const supported = Boolean(window.isSecureContext && navigator.serial);
 const log = field("log");
 const journal = createSerialLog(log, field("log-end"), 65536);
+const serialLines = new EventTarget();
 const diagnostics = ["firmware", "hardware", "sensor-type", "pending", "temperature", "humidity", "battery"];
 const clock = new Intl.DateTimeFormat("ru-RU", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const number = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 2});
@@ -14,12 +16,20 @@ const measurementErrors = {
   sensor_crc: "Датчик вернул неверную контрольную сумму.",
   sensor_io: "Нет ответа датчика. Проверьте тип модуля и подключение.",
 };
+const deliveryErrors = {
+  wifi_below_battery_threshold: "Напряжение аккумулятора ниже порога Wi-Fi.",
+  measurements_disabled: "Измерения отключены в настройках датчика.",
+  sleep: "Плата ушла в сон до завершения отправки.",
+};
 
 let serial = null;
+let uartMode = false;
+let queuedCommand = null;
 let connecting = false;
 let checking = false;
 let bootArmed = false;
 let testing = false, testCancelled = false, testReport = null;
+let delivery = null;
 let auto = false, timer = null, successes = 0, failures = 0;
 function stats() { field("stats").textContent = "Успешно: "+successes+" · Ошибок: "+failures; }
 function stopAuto() { auto = false; clearTimeout(timer); timer = null; controls(); }
@@ -30,18 +40,27 @@ function scheduleAuto() {
 
 function controls() {
   field("connect").disabled = !supported || connecting || Boolean(serial);
+  field("connect-uart").disabled = field("connect").disabled;
   field("disconnect").disabled = !serial;
-  const queriesDisabled = !serial || checking || bootArmed || testing;
-  for (const name of ["identify", "wifi", "boot"]) field(name).disabled = queriesDisabled || auto;
+  const commandsDisabled = !serial || checking || bootArmed || testing || auto || Boolean(delivery);
+  const queriesDisabled = !serial || uartMode || checking || bootArmed || testing;
+  for (const name of ["identify", "boot"]) field(name).disabled = queriesDisabled || auto;
+  field("wifi").disabled = field("wifi-details").hidden && (queriesDisabled || auto);
   field("measure").disabled = queriesDisabled || auto;
-  field("auto").disabled = !serial || bootArmed || testing || (checking && !auto);
+  field("auto").disabled = !serial || uartMode || bootArmed || testing || (checking && !auto);
   field("auto").textContent = auto ? "Остановить автозамер" : "Запустить автозамер";
   field("interval").disabled = auto || testing;
   field("test-start").disabled = queriesDisabled || auto;
   field("test-stop").disabled = !testing || testCancelled;
   field("test-report").disabled = !testReport || testing;
+  field("delivery-start").disabled = commandsDisabled || !uartMode || Boolean(queuedCommand);
+  field("delivery-stop").disabled = !delivery || delivery.signal.aborted;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
+  field("command").disabled = commandsDisabled || Boolean(queuedCommand);
+  field("command-send").disabled = field("command").disabled;
+  field("command-on-wake").disabled = field("command").disabled || !uartMode;
+  field("command-cancel").disabled = !queuedCommand;
 }
 
 function appendLog(line) {
@@ -52,8 +71,45 @@ function appendLog(line) {
 
 function serialLog(line) {
   const clean = line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  if (delivery) serialLines.dispatchEvent(new CustomEvent("line", {detail:clean.trimStart()}));
   appendLog(clean.replace(/^\s*SETUP password:.*$/i, "SETUP password: [скрыт]"));
   if (bootArmed && clean.startsWith("BOOT: ")) field("result").textContent = clean.slice(6);
+  if (queuedCommand && serial && !checking && clean.trimStart().startsWith("TK READY ")) {
+    const command = queuedCommand;
+    queuedCommand = null;
+    void sendSerialCommand(command);
+  }
+}
+
+async function sendSerialCommand(command) {
+  const connection = serial;
+  if (!connection || checking) return;
+  checking = true;
+  field("command-state").textContent = "Ждём ответа на " + command.name + "…";
+  controls();
+  try {
+    const reply = await connection.request(command.name, command.args);
+    if (command.name === "hello") await verifyIdentity(reply);
+    if (serial !== connection) return;
+    if (command.name === "hello") showIdentity(reply);
+    if (command.name === "test_measurement") showMeasurement(reply);
+    if (command.name === "setup_wifi") setSetupWifi(reply);
+    const result = JSON.stringify(reply, (key, value) =>
+      /^(id|password|token|secret|code|ca|factory_ticket)$/i.test(key) ? undefined : value);
+    appendLog(command.name + " → " + result);
+    field("command-state").textContent = "Ответ получен.";
+  } catch (error) {
+    if (serial !== connection) return;
+    const message = uartMode && error.name === "USBTimeoutError" ?
+      "Плата не ответила через UART0. Проверьте подключение и дождитесь строки TK READY." : error.message;
+    field("command-state").textContent = message;
+    appendLog(command.name + " → " + message);
+  } finally {
+    if (serial === connection) {
+      checking = false;
+      controls();
+    }
+  }
 }
 
 function showIdentity(hello) {
@@ -138,6 +194,10 @@ async function checkBoard(command) {
 async function closePort(connection, message) {
   if (serial !== connection) return;
   serial = null;
+  uartMode = false;
+  queuedCommand = null;
+  delivery?.abort();
+  field("command-state").textContent = "";
   if(testing)testCancelled=true;
   stopAuto();
   checking = false;
@@ -151,21 +211,23 @@ async function closePort(connection, message) {
   appendLog(message);
 }
 
-field("connect").addEventListener("click", async () => {
+async function connectBoard(external) {
   if (!supported || connecting || serial) return;
   connecting = true;
   controls();
   try {
-    const port = await navigator.serial.requestPort({filters: [{usbVendorId: 0x303a}]});
+    const port = await navigator.serial.requestPort(external ? {} : {filters: [{usbVendorId: 0x303a}]});
     const connection = new SensorSerial(port, 15000, serialLog);
     await connection.open();
     serial = connection;
+    uartMode = external;
+    field("command-on-wake").checked = external;
     successes = failures = 0; stats();
     for (const name of diagnostics) field(name).textContent = "—";
-    field("connection").textContent = "Плата подключена · 115200 бод.";
+    field("connection").textContent = external ? "Адаптер UART0 подключён · 115200 бод." : "Плата подключена · 115200 бод.";
     appendLog(field("connection").textContent);
     void connection.reading.then(() => closePort(connection, "Связь с платой завершилась. Подключите USB снова."));
-    void checkBoard("hello");
+    if (!external) void checkBoard("hello");
   } catch (error) {
     field("connection").textContent = error.name === "NotFoundError" ? "Порт не выбран." :
       "Не удалось открыть порт. Закройте USB-мастер или другой монитор порта.";
@@ -173,6 +235,30 @@ field("connect").addEventListener("click", async () => {
     connecting = false;
     controls();
   }
+}
+
+field("connect").addEventListener("click", () => connectBoard(false));
+field("connect-uart").addEventListener("click", () => connectBoard(true));
+field("command-form").addEventListener("submit", event => {
+  event.preventDefault();
+  if (field("command-send").disabled) return;
+  try {
+    const command = parseSerialCommand(field("command").value);
+    if (uartMode && field("command-on-wake").checked) {
+      queuedCommand = command;
+      field("command-state").textContent = command.name + " ожидает пробуждения платы.";
+      controls();
+    } else {
+      void sendSerialCommand(command);
+    }
+  } catch (error) {
+    field("command-state").textContent = error.message;
+  }
+});
+field("command-cancel").addEventListener("click", () => {
+  queuedCommand = null;
+  field("command-state").textContent = "Ожидание отменено.";
+  controls();
 });
 
 field("disconnect").addEventListener("click", () => {
@@ -186,6 +272,57 @@ field("auto").addEventListener("click", () => {
   auto = true; controls(); void checkBoard("test_measurement");
 });
 field("boot").addEventListener("click", () => checkBoard("arm_boot_debug"));
+
+async function deliveryApi(path, signal) {
+  const response = await fetch(path, {cache:"no-store", signal:AbortSignal.any([signal, AbortSignal.timeout(5000)])});
+  if (!response.ok) throw Error("Не удалось проверить журнал на сервере. HTTP " + response.status + ".");
+  return response.json();
+}
+
+field("delivery-start").addEventListener("click", async () => {
+  if (field("delivery-start").disabled) return;
+  const controller = new AbortController();
+  delivery = controller;
+  const state = field("delivery-state"), results = field("delivery-results");
+  results.replaceChildren(); results.hidden = true;
+  state.textContent = "Загружаем список датчиков…";
+  controls();
+  try {
+    const attempts = await runDeliveryTest(serial, serialLines, {
+      signal:controller.signal,
+      listDevices:signal => deliveryApi("/api/sensors/devices", signal),
+      readRecord:async (id, seq, signal) => (await deliveryApi(
+        `/api/sensors/devices/${encodeURIComponent(id)}/records?limit=1&before_seq=${seq + 1}`, signal))[0],
+      onState:message => {state.textContent = message;},
+      onTrial:trial => {
+        const ok = trial.stored && trial.acknowledged;
+        const row = results.children[trial.index - 1] || document.createElement("li");
+        const result = trial.recovered ? "Запись догружена при повторной отправке" : ok ? "Запись подтверждена сервером" :
+          trial.stored ? "Запись на сервере, плата не получила подтверждение" :
+          trial.acknowledged ? "Плата получила подтверждение, запись в журнале сервера не найдена" : "Запись пока не доставлена";
+        const reason = trial.measurementError ? measurementErrors[trial.measurementError] :
+          !ok && trial.stage ? "Сбой на этапе " + trial.stage :
+          !ok && trial.error && trial.error !== "-" ? deliveryErrors[trial.error] || trial.error : "";
+        row.textContent = `№${trial.seq} · ${result}${reason ? ". " + reason : ""}`;
+        if (!row.parentNode) results.append(row);
+        results.hidden = false;
+      },
+    });
+    const immediate = attempts.filter(trial => trial.stored && trial.acknowledged).length;
+    const recovered = attempts.filter(trial => trial.recovered).length;
+    state.textContent = `Сразу подтверждено ${immediate} из ${attempts.length} записей.` +
+      (recovered ? ` С повторной доставкой — ${immediate + recovered} из ${attempts.length}.` : "");
+  } catch (error) {
+    state.textContent = controller.signal.aborted ? "Проверка остановлена." :
+      error.name === "TimeoutError" ? "Панель не ответила при проверке журнала." : deliveryErrors[error.message] || error.message;
+  } finally {
+    controller.abort();
+    delivery = null;
+    controls();
+  }
+});
+field("delivery-stop").addEventListener("click", () => { delivery?.abort(); controls(); });
+
 const manual = new Map();
 for(const [id, description] of manualChecks){
   const label=document.createElement("label");
@@ -239,7 +376,10 @@ field("test-report").addEventListener("click",()=>{
 });
 field("wifi").addEventListener("click", () => {
   if (field("wifi-details").hidden) void checkBoard("setup_wifi");
-  else setSetupWifi(null);
+  else {
+    setSetupWifi(null);
+    controls();
+  }
 });
 field("clear").addEventListener("click", () => {
   journal.clear();

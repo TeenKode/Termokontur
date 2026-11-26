@@ -28,6 +28,10 @@ html[data-theme="dark"] #sensor-detail>details{border-color:var(--dk-border)}
 .firmware-debug-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px 20px}
 .firmware-debug-values dt{font-size:13px;color:var(--muted,#60718a)}
 .firmware-debug-values dd{margin:4px 0 0;font-weight:650;overflow-wrap:anywhere}
+.firmware-debug-command{display:grid;gap:10px;margin-top:14px}
+.firmware-debug-command>label:first-child{display:grid;gap:6px}
+.firmware-debug-command .inline-check{display:flex;align-items:center;gap:8px}
+.firmware-debug-command .inline-check input{width:auto}
 #debug-wifi-password{white-space:break-spaces}
 .serial-log{font:13px/1.55 ui-monospace,monospace;padding:14px;overflow:auto;overscroll-behavior:contain;overflow-anchor:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#101d31;color:#d5e3f4;border-radius:10px;margin:12px 0 0}
 #debug-log{height:min(42vh,360px)}
@@ -36,6 +40,9 @@ html[data-theme="dark"] #sensor-detail>details{border-color:var(--dk-border)}
 html[data-theme="dark"] .firmware-debug-values dt{color:var(--dk-muted)}
 .sensor-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px}
 .sensor-card{margin:0;padding:20px}.sensor-card h2{overflow-wrap:anywhere}
+.sensor-sync-times{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;margin:10px 0;font-size:13px}
+.sensor-sync-times dt{color:var(--text-muted)}
+.sensor-sync-times dd{margin:0}
 .sensor-form{display:flex;flex-wrap:wrap;align-items:end;gap:14px;padding:16px 0}
 .sensor-form label{display:flex;flex-direction:column;gap:6px;flex:1 1 210px;min-width:0;font-size:13px;font-weight:600}
 .sensor-form label.archive-toggle{flex-direction:row;align-items:center}
