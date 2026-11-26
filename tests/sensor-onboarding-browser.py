@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#sensor-cards')).to_be_hidden()
                 page.select_option('#tk-sensor-view','cards')
                 expect(page.locator('#tk-sensor-table')).to_be_hidden()
-                expect(page.locator('#sensor-cards')).to_be_visible()
+                assert page.locator('#sensor-cards').evaluate('el=>!el.hidden')
                 firmware_url = f'/api/sensors/firmware/bundled/{version}'
                 expect(page.locator('#sensor-bundled-status')).to_contain_text(version)
                 with page.expect_download() as download:
@@ -310,6 +310,10 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 other_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 102'}).json()
                 page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-rows tr')).to_contain_text('Данные получены')
+                page.select_option('#tk-sensor-view','cards')
+                expect(page.locator('.sensor-card')).to_be_visible()
                 # Rejected reconfiguration must leave the previous USB settings in place.
                 for omit_provisioned in (False, True):
                     page.evaluate('(value)=>window.simOmitProvisioned=value',omit_provisioned)
