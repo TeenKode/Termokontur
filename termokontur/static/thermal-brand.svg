@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Термоконтур">
+<defs><linearGradient id="thermal" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#8EA4FF"/><stop offset=".5" stop-color="#F7BA91"/><stop offset="1" stop-color="#FF827F"/></linearGradient></defs>
+<rect x="1" y="1" width="62" height="62" rx="15" fill="#1B242D"/>
+<rect x="7" y="7" width="50" height="50" rx="13" fill="none" stroke="url(#thermal)" stroke-width="2.5"/>
+<rect x="13" y="13" width="38" height="38" rx="10" fill="none" stroke="url(#thermal)" stroke-width="1.7" opacity=".65"/>
+<path d="M28 35V22a4 4 0 0 1 8 0v13a9 9 0 1 1-8 0Z" fill="#1B242D" stroke="#F7BA91" stroke-width="2.8"/>
+<path d="M32 25v16" stroke="#F2A66D" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="43" r="4" fill="#F2A66D"/>
+</svg>

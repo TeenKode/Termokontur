@@ -168,7 +168,61 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 except Exception as exc:
                     log.seek(0)
                     raise AssertionError(f"Login failed: {page.locator('#login-error').inner_text()}; JS errors: {errors}; server: {log.read()[-5000:]}") from exc
+                # Real panel design regression: navigate every existing route and keep
+                # the original USB/API tests below, using the same authenticated session.
+                expect(page.locator("#tk-attention-items")).to_contain_text("Кабинет 101")
+                expect(page.locator("#tk-attention-count")).to_have_text("1")
+                page.locator("#tk-attention-items button").first.click()
+                expect(page.locator("#overview-status")).to_have_value("missing")
+                expect(page.locator("#search-rooms")).to_have_value("Кабинет 101")
+                page.locator('[data-overview-status=""]').click()
+                assert page.evaluate('''async () => {
+                    const fonts=await Promise.all([document.fonts.load('600 16px Manrope','Термоконтур'),document.fonts.load('400 13px "JetBrains Mono"','Температура 22.4')]);
+                    return fonts.every(group=>group.length>0&&group.every(face=>face.status==='loaded'));
+                }''')
+                assert page.locator('.sidebar .brand-icon').evaluate('img=>img.complete&&img.naturalWidth>0')
+                original_size=page.viewport_size
+                page.set_viewport_size({"width":1440,"height":900})
+                page.evaluate("window.termokonturTheme.setPreference('dark')")
+                assert page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--tk-bg').trim()") == '#10161c'
+                collapse=page.locator('#tk-collapse')
+                collapse.click()
+                expect(collapse).to_have_attribute('aria-pressed','true')
+                collapse.click()
+                expect(collapse).to_have_attribute('aria-pressed','false')
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    for width in (390,768,1024,1366,1920):
+                        page.set_viewport_size({"width":width,"height":900})
+                        for tab in ('overview','readings','rooms','reports','staff','sensors','settings'):
+                            if width<1024:
+                                page.locator('#navigation-toggle').click()
+                            page.locator(f'[data-tab="{tab}"]').click()
+                            expect(page.locator(f'#view-{tab}')).to_be_visible()
+                            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), (mode,width,tab)
+                            if width==1366 or width==390:
+                                if tab=="sensors":
+                                    expect(page.locator("#sensor-state")).not_to_have_text("Загружаем датчики…")
+                                if tab=="overview":
+                                    expect(page.locator("#history-content")).to_be_visible()
+                                page.evaluate("window.scrollTo(0,0)")
+                                page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-design-{mode}-{width}-{tab}.png')
+                page.set_viewport_size(original_size)
+                page.evaluate("window.termokonturTheme.setPreference('light')")
+                page.click('[data-tab="settings"]')
+                # Select the actual appearance navigation by its visible label.
+                page.get_by_role('button',name='Внешний вид',exact=True).click()
+                page.select_option('#tk-density','compact')
+                assert page.evaluate("document.documentElement.dataset.density") == 'compact'
+                assert page.evaluate("localStorage.getItem('termokontur-density')") == 'compact'
+                page.select_option('#tk-density','normal')
                 page.click('[data-tab="sensors"]')
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-table')).to_be_visible()
+                expect(page.locator('#sensor-cards')).to_be_hidden()
+                page.select_option('#tk-sensor-view','cards')
+                expect(page.locator('#tk-sensor-table')).to_be_hidden()
+                assert page.locator('#sensor-cards').evaluate('el=>!el.hidden')
                 firmware_url = f'/api/sensors/firmware/bundled/{version}'
                 expect(page.locator('#sensor-bundled-status')).to_contain_text(version)
                 with page.expect_download() as download:
@@ -274,6 +328,31 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 other_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 102'}).json()
                 page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-rows tr')).to_contain_text('Данные получены')
+                page.select_option('#tk-sensor-view','cards')
+                expect(page.locator('.sensor-card')).to_be_visible()
+                expect(page.locator('.tk-sensor-temperature')).to_contain_text('21,5')
+                page.fill('#tk-sensor-search','нет такого датчика')
+                expect(page.locator('#tk-sensor-no-match')).to_be_visible()
+                expect(page.locator('.sensor-card')).to_be_hidden()
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-rows tr')).to_be_hidden()
+                page.fill('#tk-sensor-search','Кабинет 101')
+                expect(page.locator('#tk-sensor-rows tr')).to_be_visible()
+                page.fill('#tk-sensor-search','')
+                page.select_option('#tk-sensor-view','cards')
+                page.click('[data-tab="overview"]')
+                page.click('#refresh')
+                expect(page.locator('#avg-today')).to_contain_text('21,5')
+                expect(page.locator('#history-content')).to_be_visible()
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    page.evaluate("window.scrollTo(0,0)")
+                    page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-live-overview-{mode}.png',full_page=True)
+                page.evaluate("window.termokonturTheme.setPreference('light')")
+                page.click('[data-tab="sensors"]')
+                expect(page.locator('.sensor-card')).to_be_visible()
                 # Rejected reconfiguration must leave the previous USB settings in place.
                 for omit_provisioned in (False, True):
                     page.evaluate('(value)=>window.simOmitProvisioned=value',omit_provisioned)
@@ -287,6 +366,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     expect(page.locator('#usb-status')).to_contain_text('Смените помещение в карточке датчика')
                     assert page.evaluate('window.savedUSB')==saved
                     page.click('#usb-close')
+                page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
+                expect(page.locator("#sensor-detail")).to_be_visible()
+                page.screenshot(path=SCREENSHOTS/"termokontur-sensors-master-detail.png")
+                page.click("#tk-sensor-close")
+                expect(page.locator("#sensor-detail")).to_be_hidden()
                 page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
                 page.locator('#sensor-detail summary').filter(has_text='Обновление прошивки').click()
                 page.select_option('#sensor-firmware', f'bundled:{version}')

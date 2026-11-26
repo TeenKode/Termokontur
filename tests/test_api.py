@@ -290,7 +290,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
         (static / name).read_bytes() for name in (
             "app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
             "sensor-usb.mjs", "firmware-debug.mjs", "firmware-test.mjs", "firmware-delivery.mjs", "sensor-log.mjs",
-            "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png",
+            "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "thermal-design.css", "thermal-brand.svg", "fonts/Manrope.ttf", "fonts/JetBrainsMono.ttf", "theme.js", "icon-32.png", "icon-192.png",
         )
     )).hexdigest()[:16]
     assert _ASSET_FINGERPRINT == expected
@@ -310,7 +310,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert page.text.index('/static/settings.js?') < page.text.index('/static/app.js?')
     assert f'/static/max-admin.js?v={expected}' in page.text
     assert page.text.index('/static/max-admin.js?') < page.text.index('/static/app.js?')
-    styles = ("style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css",)
+    styles = ("style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "thermal-design.css",)
     for i, name in enumerate(styles):
         assert f'/static/{name}?v={expected}' in page.text
         if i:
@@ -323,7 +323,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     assert re.findall(r'<link rel="stylesheet" href="/static/([^?]+)\?', page.text) == list(styles)
     assert f'/static/theme.js?v={expected}' in page.text
 
-    for filename in ("app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "firmware-test.mjs", "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png"):
+    for filename in ("app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "sensors.js", "sensor-onboarding.js", "sensor-usb.mjs", "firmware-test.mjs", "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "thermal-design.css", "thermal-brand.svg", "fonts/Manrope.ttf", "fonts/JetBrainsMono.ttf", "theme.js", "icon-32.png", "icon-192.png"):
         asset = client.get(f"/static/{filename}?v={expected}")
         assert asset.status_code == 200
         assert asset.headers["cache-control"] == "no-store"
@@ -337,7 +337,18 @@ def test_brand_favicon_and_logo(client):
     page = client.get("/")
     assert page.status_code == 200
     assert page.text.count('class="brand-icon"') == 2
-    assert '/static/icon-32.png?v=' in page.text
+    assert '/static/thermal-brand.svg?v=' in page.text
+    assert page.text.count('src="/static/thermal-brand.svg?v=') == 2
+    svg = client.get('/static/thermal-brand.svg')
+    assert svg.status_code == 200
+    assert svg.headers['content-type'].startswith('image/svg+xml')
+    assert '<linearGradient' in svg.text and '<svg' in svg.text
+    for font in ('Manrope', 'JetBrainsMono'):
+        response = client.get(f'/static/fonts/{font}.ttf')
+        assert response.status_code == 200
+        assert response.content[:4] == b'\x00\x01\x00\x00'
+        license = client.get(f'/static/fonts/{font}-OFL.txt')
+        assert license.status_code == 200 and 'SIL OPEN FONT LICENSE' in license.text
     assert '/static/icon-192.png?v=' in page.text
     for size in (32, 192):
         response = client.get(f"/static/icon-{size}.png")

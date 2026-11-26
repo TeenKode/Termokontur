@@ -1,0 +1,169 @@
+@font-face{font-family:Manrope;src:url("fonts/Manrope.ttf") format("truetype");font-weight:200 800;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Mono";src:url("fonts/JetBrainsMono.ttf") format("truetype");font-weight:100 800;font-style:normal;font-display:swap}
+/* Termokontur Design System v0.2. Loaded after feature-specific styles.
+   Existing routes, dialogs and API contracts are intentionally unchanged. */
+:root,html[data-theme="light"]{
+  color-scheme:light;--tk-bg:#eff2f5;--tk-side:#e3e8ed;--tk-panel:#fff;--tk-raised:#f9fbff;--tk-line:#d6dee6;--tk-text:#23313e;--tk-muted:#526473;--tk-accent:#984516;--tk-cold:#245f9e;--tk-ok:#196f58;--tk-hot:#ac342d;--tk-spectrum:linear-gradient(115deg,#dce5ff,#fffcf7,#fce1cf);--tk-on-accent:#fff;--tk-cell-low:#e8f3ff;--tk-cell-normal:#e8f8f1;--tk-cell-high:#fff0ed;--tk-cell-empty:#eff2f5;--tk-row-pad:12px;--text-muted:var(--tk-muted);--focus:var(--tk-cold);background:var(--tk-bg);color:var(--tk-text);
+}
+html[data-theme="dark"]{
+  --tk-bg:#10161c;--tk-side:#181f27;--tk-panel:#1b242d;--tk-raised:#25313b;--tk-line:#34414d;--tk-text:#f0f4f8;--tk-muted:#a5b1be;--tk-accent:#f2a66d;--tk-cold:#79b7f5;--tk-ok:#57c9ad;--tk-hot:#f17869;--tk-spectrum:linear-gradient(115deg,#242b40,#2c2929,#35292b);--tk-on-accent:#10161c;--tk-cell-low:#24476c;--tk-cell-normal:#294640;--tk-cell-high:#63362d;--tk-cell-empty:#29333d;
+  --dk-bg:var(--tk-bg);--dk-panel:var(--tk-panel);--dk-high:var(--tk-raised);--dk-border:var(--tk-line);--dk-text:var(--tk-text);--dk-muted:var(--tk-muted);--dk-green:var(--tk-ok);--dk-red:var(--tk-hot);--dk-gold:var(--tk-accent);--focus:var(--tk-cold);background:var(--tk-bg);color:var(--tk-text);
+}
+html[data-density="compact"]{--tk-row-pad:7px}
+html[data-density="wide"]{--tk-row-pad:17px}
+:root{font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+html[data-theme] body{background:var(--tk-bg);color:var(--tk-text)}
+html[data-theme] .sidebar{background:var(--tk-side);color:var(--tk-text);border-right:1px solid var(--tk-line)}
+html[data-theme] .brand,html[data-theme] .nav-button,html[data-theme] .logout-btn{color:var(--tk-text)}
+html[data-theme] .brand-accent,html[data-theme] .nav-button.active,html[data-theme] .nav-button.active .nav-icon{color:var(--tk-accent)}
+html[data-theme] .nav-icon{color:var(--tk-muted);display:inline-grid;place-items:center}
+.nav-icon svg{width:20px;height:20px;display:block}
+html[data-theme] .nav-button:hover,html[data-theme] .nav-button.active,html[data-theme] .logout-btn:hover{background:var(--tk-raised)}
+html[data-theme] .nav-button.active{box-shadow:inset 3px 0 var(--tk-accent)}
+html[data-theme] .sidebar-foot,html[data-theme] .topbar{border-color:var(--tk-line)}
+html[data-theme] .panel,html[data-theme] .metric,html[data-theme] .login-card,html[data-theme] .settings-navigation,html[data-theme] .settings-summary-card{background:var(--tk-panel);border-color:var(--tk-line);border-radius:12px;box-shadow:0 3px 12px #0000000b;min-width:0}
+html[data-theme] .metric,html[data-theme] .sensor-card{background:linear-gradient(145deg,var(--tk-raised),var(--tk-panel))}
+html[data-theme] .btn.primary{background:var(--tk-accent);color:var(--tk-on-accent);border-color:var(--tk-accent);box-shadow:none}
+html[data-theme] .btn.primary:hover{background:var(--tk-accent);filter:brightness(.94)}
+html[data-theme] .btn.secondary,html[data-theme] .theme-toggle,html[data-theme] .navigation-toggle{color:var(--tk-text);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] .btn.secondary:hover,html[data-theme] .theme-toggle:hover{color:var(--tk-accent);border-color:var(--tk-accent);background:var(--tk-raised)}
+html[data-theme] .btn{border-radius:8px}
+html[data-theme] .muted,html[data-theme] .hint,html[data-theme] .heading p,html[data-theme] .panel-heading p,html[data-theme] .metric-label,html[data-theme] .table-building{color:var(--tk-muted)}
+html[data-theme] input:not([type="checkbox"]):not([type="radio"]),html[data-theme] select,html[data-theme] textarea{color:var(--tk-text);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] :is(button,input,select,textarea,a,summary):focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+html[data-theme] .metric strong.good,html[data-theme] .daily-total,html[data-theme] .daily-complete,html[data-theme] .temp.normal{color:var(--tk-ok)}
+html[data-theme] .metric strong.bad,html[data-theme] .temp.high{color:var(--tk-hot)}
+html[data-theme] .temp.low{color:var(--tk-cold)}
+html[data-theme] .metric strong.warn{color:var(--tk-accent)}
+html[data-theme] .dashboard-hero{background:var(--tk-spectrum);border:1px solid var(--tk-line);color:var(--tk-text);padding:16px;border-radius:12px}
+html[data-theme] .dashboard-hero-value{color:var(--tk-accent);font-size:clamp(28px,4vw,48px)}
+html[data-theme] .dashboard-eyebrow,html[data-theme] .dashboard-hero-main p,html[data-theme] .dashboard-hero-coverage p{color:var(--tk-muted)}
+html[data-theme] .dashboard-hero-coverage{background:var(--tk-panel);border-color:var(--tk-line);padding:12px}
+html[data-theme] .dashboard-hero-coverage strong{color:var(--tk-ok);font-size:clamp(24px,3vw,38px)}
+html[data-theme] .dashboard-hero-coverage small{color:var(--tk-accent)}
+html[data-theme] .dashboard-change,html[data-theme] .dashboard-change.rise,html[data-theme] .dashboard-change.fall{color:var(--tk-text);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] .dashboard-hero-coverage progress,html[data-theme] .dashboard-hero-coverage progress::-webkit-progress-bar{background:var(--tk-line)}
+html[data-theme] .dashboard-hero-coverage progress::-webkit-progress-value{background:var(--tk-ok)}
+html[data-theme] .dashboard-hero-coverage progress::-moz-progress-bar{background:var(--tk-ok)}
+html[data-theme] .overview-metrics .metric:hover{border-color:var(--tk-accent);background:var(--tk-raised)}
+#history-chart{height:clamp(200px,22vw,260px)}
+html[data-theme] .heatmap-table .heatmap-value.low{background:var(--tk-cell-low);color:var(--tk-cold)}
+html[data-theme] .heatmap-table .heatmap-value.high{background:var(--tk-cell-high);color:var(--tk-hot)}
+html[data-theme] .heatmap-table .heatmap-value.normal{background:var(--tk-cell-normal);color:var(--tk-ok)}
+html[data-theme] .heatmap-table .heatmap-value.no-data{background:var(--tk-cell-empty);color:var(--tk-muted)}
+html[data-theme] .heatmap-table .heatmap-value{border-color:var(--tk-line)}
+html[data-theme] .heatmap-guide-low::before{background:var(--tk-cell-low);border-color:var(--tk-cold)}
+html[data-theme] .heatmap-guide-high::before{background:var(--tk-cell-high);border-color:var(--tk-hot)}
+html[data-theme] .heatmap-guide-normal::before{background:var(--tk-cell-normal);border-color:var(--tk-ok)}
+html[data-theme] .heatmap-guide-empty::before{background:var(--tk-cell-empty);border-color:var(--tk-line)}
+html[data-theme] .serial-log{background:#10161c;color:#f0f4f8;border:1px solid #34414d;border-radius:6px;font-family:"JetBrains Mono",ui-monospace,monospace}
+#sensor-detail,#sensor-detail .chart-container{min-width:0}
+.sensor-card{overflow-wrap:anywhere}
+.sensor-presentation{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.sensor-presentation select{width:auto;max-width:100%}
+.sensor-table-panel{margin-bottom:16px}
+.sensor-table-panel td{overflow-wrap:anywhere}
+.sensor-table-panel th{white-space:nowrap}
+.sensor-table-panel td:first-child{min-width:130px}
+.sensor-table-panel td:last-child{white-space:nowrap}
+html[data-theme] .table-scroll :is(th,td){padding-block:var(--tk-row-pad)}
+html[data-theme] .panel-version{background:var(--tk-raised);border-color:var(--tk-line);color:var(--tk-muted)}
+.tk-density{display:grid;gap:7px;max-width:320px}
+.tk-collapse{display:none}
+@media(min-width:1024px){
+  .tk-collapse{display:inline-flex;margin-top:16px;align-items:center;justify-content:center;min-height:36px}
+  html[data-navigation="compact"] .shell{grid-template-columns:68px minmax(0,1fr)}
+  html[data-navigation="compact"] .sidebar{padding-inline:8px}
+  html[data-navigation="compact"] .sidebar .brand{padding:0;justify-content:center}
+  html[data-navigation="compact"] .sidebar .brand>span,html[data-navigation="compact"] .nav-label,html[data-navigation="compact"] .logout-label{display:none}
+  html[data-navigation="compact"] .nav-button,html[data-navigation="compact"] .logout-btn{justify-content:center;padding-inline:0}
+  html[data-navigation="compact"] .tk-collapse{font-size:0}
+  html[data-navigation="compact"] .tk-collapse::after{content:"»";font-size:22px}
+}
+@media(min-width:701px) and (max-width:1023px){
+  .shell{display:block}
+  .sidebar{z-index:6;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;height:60px;padding:0 14px}
+  .navigation-toggle{display:inline-flex;align-items:center;min-height:40px;padding:7px 12px;border:1px solid var(--tk-line);border-radius:8px}
+  .navigation-toggle[aria-expanded="false"] + .sidebar-menu{display:none}
+  .sidebar-menu{position:absolute;inset:100% 0 auto;display:block;max-height:calc(100dvh - 60px);margin:0;padding:8px 14px 12px;background:inherit;box-shadow:0 12px 20px #0003}
+  .navigation{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:700px){
+  #history-chart{height:214px}
+  .sensor-cards{grid-template-columns:minmax(0,1fr)}
+  .dashboard-hero{gap:8px}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* Live operational dashboard and master/detail, using the existing API data. */
+.tk-overview-operational{display:grid;gap:14px;margin-bottom:18px;align-items:start}
+.tk-overview-operational .daily-panel{margin:0}
+.tk-attention>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;font-weight:700;cursor:pointer}
+.tk-attention>summary::before{content:"+";color:var(--tk-accent)}
+.tk-attention[open]>summary::before{content:"−"}
+.tk-attention>summary span{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--tk-accent)}
+.tk-attention>p{padding:0 18px 16px}
+#tk-attention-items{padding:0;margin:0;list-style:none;max-height:260px;overflow:auto}
+.tk-attention-item{border-top:1px solid var(--tk-line)}
+.tk-attention-link{display:flex;gap:10px;justify-content:space-between;align-items:center;width:100%;text-align:left;padding:9px 16px;background:transparent;color:var(--tk-text);border:0}
+.tk-attention-link:hover{background:var(--tk-raised)}
+.tk-attention-room,.tk-attention-value{display:grid;gap:3px;min-width:0;overflow-wrap:anywhere}
+.tk-attention-room small,.tk-attention-value small{font-size:12px;color:var(--tk-muted)}
+.tk-attention-value{text-align:right;flex:0 1 auto}
+.tk-attention-value.above strong{color:var(--tk-hot)}
+.tk-attention-value.below strong{color:var(--tk-cold)}
+.tk-attention-value.missing strong{color:var(--tk-muted)}
+.tk-attention-more{padding:10px 16px}
+.tk-sensor-workspace,.tk-sensor-list{min-width:0}
+#sensor-detail .panel-heading{align-items:start}
+#sensor-detail .panel-heading>div{min-width:0;overflow-wrap:anywhere}
+#sensor-detail{margin-bottom:16px;scroll-margin-top:14px}
+html[data-theme="dark"] .heatmap-table .heatmap-value.high{color:#ffb0a5}
+html[data-theme="dark"] .heatmap-table .heatmap-value.low{color:#b6d9ff}
+html[data-theme="dark"] .heatmap-table .heatmap-value.normal{color:#a3e1cb}
+@media(min-width:1280px){
+  .tk-overview-operational{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);align-items:start;gap:16px}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-cards{grid-template-columns:minmax(0,1fr)}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-table-panel .table-scroll{max-height:65vh;overflow:auto}
+}
+@media(max-width:1279px){#sensor-detail:not([hidden]){position:relative;scroll-margin-top:76px}}
+
+/* Local typography and restrained duotone telemetry. */
+.dashboard-eyebrow{display:inline-flex;align-items:center;gap:7px}
+.tk-telemetry-icon{display:inline-block;width:21px;height:21px;flex:none}
+.tk-thermometer{color:var(--tk-accent)}
+.tk-coverage{color:var(--tk-ok)}
+.panel-version,.firmware-debug-values dd,#sensor-detail-state{font-family:"JetBrains Mono",ui-monospace,monospace}
+html[data-theme] .dashboard-hero-coverage .dashboard-eyebrow{color:var(--tk-muted)}
+html[data-theme] .theme-preview{background:#eff2f5;border-color:#d6dee6}
+html[data-theme] .theme-preview::before{background:#e3e8ed}
+html[data-theme] .theme-preview::after{background:#e9b18e;box-shadow:0 21px #fff,0 42px #fff}
+html[data-theme] .theme-preview-dark{background:#10161c;border-color:#34414d}
+html[data-theme] .theme-preview-dark::before{background:#181f27}
+html[data-theme] .theme-preview-dark::after{background:#f2a66d;box-shadow:0 21px #25313b,0 42px #25313b}
+html[data-theme] .theme-preview-system{background:linear-gradient(90deg,#eff2f5 50%,#10161c 50%)}
+html[data-theme] .theme-preview-system::before{background:linear-gradient(90deg,#e3e8ed 50%,#181f27 50%)}
+html[data-theme] .theme-preview-system::after{background:linear-gradient(90deg,#e9b18e 50%,#f2a66d 50%);box-shadow:0 21px #8291a0,0 42px #8291a0}
+
+/* Visual review of the 1.5.2 browser artifacts. */
+html[data-theme] th,html[data-theme] .heatmap-table th,html[data-theme] .building-matrix-table th{color:var(--tk-muted);background:var(--tk-raised)}
+html[data-theme] .history-state,html[data-theme] .history-empty{background:var(--tk-raised);border-color:var(--tk-line);color:var(--tk-muted)}
+html[data-theme] .status.below{color:var(--tk-cold);background:var(--tk-cell-low)}
+html[data-theme] .status.above{color:var(--tk-hot);background:var(--tk-cell-high)}
+html[data-theme="dark"] .status.below{color:#b6d9ff}
+html[data-theme="dark"] .status.above{color:#ffb0a5}
+html[data-theme] .settings-nav-button.active,html[data-theme] .settings-nav-button:hover{background:var(--tk-raised);color:var(--tk-accent)}
+html[data-theme] .settings-nav-button.active{box-shadow:inset 3px 0 var(--tk-accent)}
+html[data-theme] .settings-summary-card button{color:var(--tk-accent)}
+html[data-theme] .settings-summary-card{min-height:146px}
+html[data-theme] dialog{border-color:var(--tk-line);border-radius:12px}
+#tk-sensor-search{flex:1 1 220px;width:auto;max-width:360px}
+#tk-sensor-no-match{padding:12px;margin-bottom:12px;border:1px dashed var(--tk-line);border-radius:8px}
+.tk-sensor-telemetry{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);gap:12px;padding:12px 0;margin:8px 0;border-block:1px solid var(--tk-line)}
+.tk-sensor-metric{display:grid;gap:4px;min-width:0}
+.tk-sensor-metric small{color:var(--tk-muted);font-size:12px}
+.tk-sensor-temperature{font-size:clamp(21px,2vw,30px);font-weight:750;color:var(--tk-accent);line-height:1.2}
+.tk-sensor-voltage{font-size:clamp(18px,1.6vw,24px);font-weight:650;line-height:1.4;color:var(--tk-text)}
+#sensor-chart{height:clamp(200px,23vw,265px)}
+@media(max-width:700px){#tk-sensor-search{flex-basis:100%;max-width:none;width:100%}}

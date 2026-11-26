@@ -273,6 +273,33 @@ function renderDaily() {
     details.querySelector(".daily-tags").replaceChildren(...labels);
   }
 }
+function renderAttention(selected){
+  const list=$("tk-attention-items"),empty=$("tk-attention-empty"),count=$("tk-attention-count");
+  if(!list||!empty||!count)return;
+  const priority={above:0,below:1,missing:2};
+  const issues=selected.filter(r=>Object.hasOwn(priority,r.status)).sort((a,b)=>priority[a.status]-priority[b.status]);
+  count.textContent=String(issues.length);
+  empty.hidden=Boolean(issues.length);
+  empty.textContent=selected.length?"Нет помещений, требующих внимания.":"Помещения пока не добавлены.";
+  list.replaceChildren();
+  for(const room of issues.slice(0,8)){
+    const item=el("li","tk-attention-item");
+    const link=el("button","tk-attention-link");link.type="button";
+    const label=room.status==="missing"&&room.last_at?"Устарело":statuses[room.status];
+    const text=el("span","tk-attention-room");text.append(el("strong","",room.name),el("small","",room.building));
+    const detail=el("span","tk-attention-value "+room.status);
+    detail.append(el("strong","",room.status==="missing"?"—":temperature(room.last_temp)),el("small","",label));
+    link.append(text,detail);
+    link.addEventListener("click",()=>{
+      $("overview-status").value=room.status==="missing"?"missing":"alert";
+      $("search-rooms").value=room.name;renderOverview();
+      $("latest-readings-title").focus({preventScroll:true});
+      $("latest-readings").scrollIntoView({block:"start"});
+    });
+    item.append(link);list.append(item);
+  }
+  if(issues.length>8){const item=el("li","tk-attention-more"),button=el("button","btn secondary","Открыть список помещений");button.type="button";button.addEventListener("click",()=>document.querySelector('[data-overview-status=""]').click());item.append(button);list.append(item);}
+}
 function renderOverview() {
   const building=$("building-filter").value;
   const selected=overview.filter(r=>!building||r.building===building);
@@ -282,6 +309,7 @@ function renderOverview() {
   $("count-normal").textContent=counts.normal;
   $("count-alert").textContent=counts.below+counts.above;
   $("count-missing").textContent=counts.missing;
+  renderAttention(selected);
   const search=$("search-rooms").value.trim().toLocaleLowerCase("ru");
   const status=$("overview-status").value;
   const filtered=selected.filter(room=>{
@@ -341,8 +369,8 @@ function renderHeatmap(){
       const datum=room.daily[day];
       const value=datum?.average;
       const status=value==null?"no-data":value<room.min_temp?"low":value>room.max_temp?"high":"normal";
-      const td=cell(tr,value==null?"—":Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1}),"heatmap-value "+status);
-      td.title=room.building+" · "+room.name+" · "+fullDay(day)+": "+temperature(value)+(datum?", измерений: "+datum.count:"");
+      const td=cell(tr,value==null?"—":(status==="low"?"↓ ":status==="high"?"↑ ":"")+Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1}),"heatmap-value "+status);
+      td.title=room.building+" · "+room.name+" · "+fullDay(day)+": "+temperature(value)+" · "+({low:"Ниже нормы",high:"Выше нормы",normal:"В норме","no-data":"Нет данных"})[status]+(datum?", измерений: "+datum.count:"");
     }
     cell(tr,temperature(room.average),"heatmap-summary");
     cell(tr,room.days_reported+" / "+historyData.days);
@@ -383,8 +411,8 @@ function renderHistory(){
   renderHeatmap();
   if(hasReadings)drawHistoryChart();
 }
-const buildingPalette=["#087b65","#356bad","#ad591d","#7951af","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
-const darkBuildingPalette=["#5bdac1","#87b7fc","#f6ae68","#bfa0f6","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
+const buildingPalette=["#984516","#245f9e","#196f58","#72569f","#ac386d","#167c8a","#8b652a","#607526","#ad4545","#526b99"];
+const darkBuildingPalette=["#F2A66D","#79B7F5","#57C9AD","#B6A2E8","#f18ebc","#66cad7","#d4b272","#b6cc6d","#fa9290","#a6b8e8"];
 function buildingColor(index){const palette=document.documentElement.dataset.theme==="dark"?darkBuildingPalette:buildingPalette;return palette[index%palette.length];}
 function renderHistoryLegend(){
   const legend=$("history-legend");legend.replaceChildren();
