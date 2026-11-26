@@ -93,6 +93,15 @@ int main() {
   assert(sensor::retry_delay(86400, 0) == 3600);
   assert(sensor::retry_delay(86400, 100) == 57600);
   assert(sensor::retry_delay(1800, 10) == 1800);
+  for (uint32_t entropy = 0; entropy < 10000; ++entropy) {
+    const auto delay = sensor::retry_with_jitter(3600, 86400, entropy);
+    assert(delay >= 3300 && delay <= 3600);
+    const auto pending = sensor::after_send(planned, true, false, 86400, 86400, 86400, true, entropy);
+    assert(pending.next >= 86670 && pending.next <= 86700);
+    assert(sensor::http_retry_pause_ms(1, entropy) >= 250);
+    assert(sensor::http_retry_pause_ms(1, entropy) <= 450);
+  }
+  assert(sensor::retry_with_jitter(1, 1, UINT32_MAX) == 1);
   assert(sensor::battery_wifi_allowed(3100, 3000, 0));
   assert(!sensor::battery_wifi_allowed(2999, 3000, 0));
   assert(!sensor::battery_wifi_allowed(3300, 3000, 3600));
