@@ -15,6 +15,7 @@
 namespace sensor {
 // One sensor per board. GPIO5 is reserved for DHT / externally powered 1-Wire.
 inline bool supported(const char *s) {
+  if (!s) return false;
   for (auto name : {"sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"})
     if (!strcmp(s, name)) return true;
   return false;
@@ -85,6 +86,7 @@ inline bool recover_i2c(bool pullup = false, const CancelCheck *check = nullptr)
   printf("I2C: idle SDA(GPIO6)=%d SCL(GPIO7)=%d internal_pullup=%d\n",
          gpio_get_level(sda), gpio_get_level(scl), int(pullup));
   if (!high(scl)) return false;
+  if (cancelled(check)) return false;
   if (gpio_get_level(sda)) return true; // An idle bus needs no recovery pulses.
   for (int i = 0; i < 9 && !gpio_get_level(sda); ++i) {
     if (cancelled(check)) return false;
@@ -101,6 +103,7 @@ inline bool recover_i2c(bool pullup = false, const CancelCheck *check = nullptr)
   return gpio_get_level(sda) != 0;
 }
 inline bool is_i2c(const char *type) {
+  if (!type) return false;
   return !strcmp(type,"sht4x") || !strcmp(type,"sht3x") || !strcmp(type,"aht20") ||
          !strcmp(type,"bme280") || !strcmp(type,"bmp280");
 }
@@ -258,7 +261,7 @@ inline bool bmp280(I2C &bus, Record &r) {
     if (!(id & 0x01)) { ready = true; break; } // NVM calibration copied.
     if (!bus.wait(5)) return false;
   }
-  if (!ready || !active()) return false;
+  if (!ready || !bus.active()) return false;
   uint8_t cal[6];
   if (!bus.reg(address, 0x88, cal, sizeof(cal))) return false;
   // Sanity-check calibration: all 0xff/0x00 is characteristic of a bus fault.
@@ -272,7 +275,7 @@ inline bool bmp280(I2C &bus, Record &r) {
     if (!(id & 0x08)) { ready = true; break; }
     if (!bus.wait(5)) return false;
   }
-  if (!ready || !active()) return false;
+  if (!ready || !bus.active()) return false;
   uint8_t raw[3];
   if (!bus.reg(address, 0xfa, raw, sizeof(raw))) return false;
   int adc = (int(raw[0]) << 12) | (int(raw[1]) << 4) | (raw[2] >> 4);
@@ -298,7 +301,7 @@ inline bool bme280(I2C &bus, Record &r) {
     if (!(id & 1)) { ready = true; break; }
     if (!bus.wait(5)) return false;
   }
-  if (!ready || !active()) return false;
+  if (!ready || !bus.active()) return false;
   uint8_t cal[26], hc[7];
   if (!bus.reg(a, 0x88, cal, sizeof cal) || !bus.reg(a, 0xe1, hc, sizeof hc)) return false;
   if (!u16(cal) || u16(cal) == 0xffff || !s16(cal + 2) ||
