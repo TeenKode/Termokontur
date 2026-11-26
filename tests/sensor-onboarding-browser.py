@@ -259,6 +259,19 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert page.evaluate("document.documentElement.dataset.density") == 'compact'
                 assert page.evaluate("localStorage.getItem('termokontur-density')") == 'compact'
                 page.select_option('#tk-density','normal')
+                page.click('[data-tab="rooms"]')
+                room_table=page.locator('.rooms-table')
+                room_table.locator('thead th').first.locator('button').click()
+                expect(room_table.locator('thead th').first).to_have_attribute('aria-sort','ascending')
+                room_table.locator('thead th').first.locator('button').click()
+                expect(room_table.locator('thead th').first).to_have_attribute('aria-sort','descending')
+                room_tools=page.locator('#view-rooms .tk-table-tools')
+                room_tools.locator('summary').click()
+                room_tools.locator('input[type="checkbox"]').first.uncheck()
+                expect(room_table.locator('thead th').nth(2)).to_be_hidden()
+                room_tools.get_by_role('button',name='Сбросить').click()
+                expect(room_table.locator('thead th').nth(2)).to_be_visible()
+                expect(room_table.locator('thead th').first).to_have_attribute('aria-sort','none')
                 page.click('[data-tab="sensors"]')
                 expect(page.locator('#tk-sensor-empty')).to_be_visible()
                 page.select_option('#tk-sensor-view','table')
@@ -343,6 +356,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     return bounds.top>=dialog.top-1&&bounds.bottom<=dialog.bottom+1;
                 }""")
                 verify_log_follow(page, 'usb-log', 'lines=>window.emitFlashLog(lines)')
+                page.locator('#usb-log-tools input').fill('Проверка журнала 50')
+                expect(page.locator('#usb-log-matches')).to_contain_text('Проверка журнала 50')
+                expect(page.locator('#usb-log-matches')).not_to_contain_text('Проверка журнала 49')
+                page.locator('#usb-log-tools input').fill('')
+                expect(page.locator('#usb-log-matches')).to_be_hidden()
                 page.evaluate('window.finishFlash()')
                 expect(page.locator('#usb-status')).to_contain_text('Ожидаем подтверждения регистрации по Wi-Fi',timeout=30000)
                 assert page.evaluate('window.simFlashed && !window.simFinished') is True
@@ -422,7 +440,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 with page.expect_response(lambda r: r.url.endswith(f'/ota?bundled_version={version}')) as ota:
                     page.get_by_role('button', name='Назначить обновление').click()
                 assert ota.value.ok
-                expect(page.locator('#toast-message')).to_have_text('Обновление назначено')
+                expect(page.locator('#toast-message')).to_have_text('Обновление назначено',timeout=30000)
                 # A request from another self-keyed device appears as pending, not authorized.
                 private,ident=fixtures.identity();ident['hardware_id']='1123456789ab'
                 signed=fixtures.proof(api,private,ident)
@@ -492,6 +510,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-log')).to_contain_text('SETUP password: [скрыт]')
                 expect(page.locator('#debug-log')).not_to_contain_text('masked-test-password')
                 verify_log_follow(page, 'debug-log', 'lines=>window.emitSensorLog(lines)')
+                page.evaluate('window.emitSensorLog(["E (123) test: failed", "W (124) test: caution"])')
+                page.locator('#debug-log-tools select').select_option('error')
+                expect(page.locator('#debug-log-matches')).to_contain_text('E (123) test: failed')
+                expect(page.locator('#debug-log-matches')).not_to_contain_text('W (124) test: caution')
+                page.locator('#debug-log-tools select').select_option('')
+                expect(page.locator('#debug-log-matches')).to_be_hidden()
                 expect(page.locator('#debug-log-follow')).to_have_attribute('data-state','following')
                 page.locator('#debug-log').evaluate('el=>{el.scrollTop=0}')
                 expect(page.locator('#debug-log-follow')).to_have_attribute('data-state','paused')

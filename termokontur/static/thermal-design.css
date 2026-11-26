@@ -426,3 +426,14 @@ html[data-theme] .dialog-actions{position:sticky;bottom:0;z-index:2;background:v
 @media(max-width:1023px){
   html[data-navigation="compact"] .nav-group-label,html[data-theme] .nav-group-label{font-size:10px;padding:6px 8px;margin:0;border:0;grid-column:1/-1}
 }
+
+html[data-theme] .settings-form [data-tk-edited]{border-color:var(--tk-accent);box-shadow:0 0 0 1px var(--tk-accent)}
+.tk-log-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
+.tk-log-tools input{flex:1 1 140px;min-width:0;width:auto}
+.tk-log-tools select{flex:0 1 155px;min-width:0;width:auto}
+.tk-log-tools .btn{min-height:38px;padding:7px 10px}
+.tk-log-tools .hint{flex:1 0 100%}
+.tk-log-tools .hint:empty{display:none}
+.tk-log-results{height:clamp(110px,20vh,220px);border-color:var(--tk-accent)}
+.debug-console:fullscreen,#usb-log-panel:fullscreen{padding:18px;overflow:auto}
+.debug-console:fullscreen #debug-log,#usb-log-panel:fullscreen #usb-log{height:55vh}
