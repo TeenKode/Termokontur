@@ -117,6 +117,8 @@
           <button type="button" class="metric" data-overview-status="missing" aria-controls="latest-readings"><span class="metric-label">Нет свежих данных</span><strong id="count-missing" class="warn">—</strong></button>
         </div>
 
+        <div class="tk-overview-operational">
+        <details id="tk-attention" class="panel tk-attention" open><summary>Требуют внимания <span id="tk-attention-count">—</span></summary><p id="tk-attention-empty" class="hint" role="status">Загрузка…</p><ul id="tk-attention-items"></ul></details>
         <div class="panel daily-panel">
           <div class="panel-heading"><div><h2>Сбор по графику</h2><p id="daily-date">Сегодня по времени организации</p></div><strong id="daily-counts" class="daily-total">—</strong></div>
           <div class="daily-missing">
@@ -126,6 +128,7 @@
           </div>
         </div>
 
+        </div>
         <div class="panel dashboard-trend-panel">
           <div class="panel-heading dashboard-trend-heading">
             <div><h2>Среднесуточная температура по зданиям</h2><p>Средняя по каждому зданию и по школе. Каждый кабинет имеет равный вес.</p></div>
@@ -231,13 +234,15 @@
           </details>
         </div>
         <article class="panel sensor-claims-panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
+        <div id="tk-sensor-workspace" class="tk-sensor-workspace"><div class="tk-sensor-list">
         <div class="sensor-presentation"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="tk-sensor-table" class="panel sensor-table-panel" hidden><div class="table-scroll" tabindex="0" role="region" aria-label="Таблица датчиков"><table><thead><tr><th scope="col">Датчик</th><th scope="col">Помещение</th><th scope="col">Состояние</th><th scope="col">Последний замер</th><th scope="col">Напряжение</th><th scope="col">Последняя связь</th><th scope="col">Прошивка</th><th scope="col">Действия</th></tr></thead><tbody id="tk-sensor-rows"></tbody></table></div></div>
         <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
         <details id="sensor-rejected-panel" class="panel sensor-disclosure" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
-        <div id="sensor-detail" class="panel" hidden>
-          <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p><dl id="sensor-sync-times" class="sensor-sync-times"></dl><p id="sensor-sync-notes" hidden></p></div><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button></div>
+        </div>
+        <div id="sensor-detail" class="panel" hidden aria-labelledby="sensor-title">
+          <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p><dl id="sensor-sync-times" class="sensor-sync-times"></dl><p id="sensor-sync-notes" hidden></p></div><div class="heading-actions"><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button><button type="button" id="tk-sensor-close" class="btn secondary">Закрыть карточку</button></div></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
           <div class="chart-container">
             <canvas id="sensor-chart" width="900" height="260" role="img" aria-label="График измерений датчика"></canvas>
@@ -251,6 +256,7 @@
           <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" name="file" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
           <details open><summary>Последние измерения</summary><div class="table-scroll sensor-record-scroll" tabindex="0" role="region" aria-label="Измерения датчика"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div><button type="button" id="sensor-records-more" class="btn secondary" hidden>Показать ещё 100 измерений</button></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
+        </div>
         </div>
         <details class="panel sensor-disclosure"><summary>Home Assistant / MQTT</summary><p>В Home Assistant передаётся последнее измерение. Полная история хранится в Термоконтуре.</p><form id="sensor-mqtt-form" class="sensor-form"><label class="archive-toggle"><input id="sensor-mqtt-enabled" type="checkbox">Включить MQTT</label><label>Сервер<input id="sensor-mqtt-host" maxlength="253"></label><label>Порт<input id="sensor-mqtt-port" type="number" min="1" max="65535" value="8883" required></label><label class="archive-toggle"><input id="sensor-mqtt-tls" type="checkbox" checked>TLS</label><label>Логин<input id="sensor-mqtt-user" autocomplete="off"></label><label>Пароль (пусто — сохранить)<input id="sensor-mqtt-pass" type="password" autocomplete="new-password"></label><label>Префикс Discovery<input id="sensor-mqtt-prefix" value="homeassistant" required></label><button class="btn primary">Сохранить MQTT</button></form><p id="sensor-mqtt-state" role="status"></p></details>
       </section>
