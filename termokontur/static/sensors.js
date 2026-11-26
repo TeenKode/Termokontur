@@ -84,7 +84,13 @@ async function refreshSensors(){
     $("sensor-mqtt-state").textContent=(mqtt.enabled?"MQTT включён":"MQTT выключен")+" · в очереди: "+mqtt.outbox.length+(mqtt.outbox.some(x=>x.error)?" · есть ошибки доставки":"");
   }catch(e){if(request===sensorRefreshId){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}}
 }
+let tkSensorTrigger=null;
+$("tk-sensor-close")?.addEventListener("click",()=>{
+  sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;
+  if(tkSensorTrigger?.isConnected&&!tkSensorTrigger.closest("[hidden]"))tkSensorTrigger.focus();else $("tk-sensor-view")?.focus();
+});
 async function openSensor(id,reveal=false){
+  if(reveal)tkSensorTrigger=document.activeElement;
   const request=++sensorLoadId;
   try{
     const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit="+sensorPageSize),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
@@ -119,7 +125,7 @@ async function openSensor(id,reveal=false){
     drawSensorChart();
     if(reveal){
       $("sensor-title").focus({preventScroll:true});
-      $("sensor-detail").scrollIntoView({block:"start"});
+      $("sensor-detail").scrollIntoView({block:"nearest"});
     }
   }catch(e){toast(e.message,true);}
 }
