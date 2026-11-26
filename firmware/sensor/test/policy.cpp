@@ -27,6 +27,20 @@ static void test_serial_lines() {
 }
 
 int main() {
+  assert(sensor::ota_integer(0, 0, UINT32_MAX));
+  assert(sensor::ota_integer(UINT32_MAX, 0, UINT32_MAX));
+  for (double bad : {-1.0, 1.5, 4294967296.0, INFINITY * 1.0, NAN * 1.0})
+    assert(!sensor::ota_integer(bad, 0, UINT32_MAX));
+  assert(!sensor::ota_integer(0, 1, 100));
+  assert(!sensor::ota_integer(101, 1, 100));
+  assert(sensor::ota_sha256(std::string(64, 'a')));
+  assert(!sensor::ota_sha256(std::string(64, 'g')));
+  assert(!sensor::ota_sha256(std::string(63, 'a')));
+  assert(sensor::ota_upgrade("1.5.17", "1.5.18"));
+  assert(sensor::ota_upgrade("1.9.99", "1.10.0"));
+  for (const char *bad : {"1.5.17", "1.5.16", "1.5", "1.5.18-beta", "1.5.1000", "1..18", "1.5.18.", "1.5.-18"})
+    assert(!sensor::ota_upgrade("1.5.17", bad));
+
   test_serial_lines();
   // A USB disconnect after 5 seconds of a planned 1800-second sleep must
   // start a full cooling interval; repeated early wakes must not skip it.

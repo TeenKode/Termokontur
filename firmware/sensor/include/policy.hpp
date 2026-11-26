@@ -1,6 +1,8 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <string>
 namespace sensor {
 // Wall time is sampled immediately before and after Deep Sleep, before any
 // network clock correction. GPIO can wake the device before its timer expires.
@@ -88,5 +90,35 @@ inline uint32_t next_sleep_s(uint32_t interval, int64_t measurement_remaining,
 inline bool work_allowed(bool usb_connected, uint64_t elapsed,
                          uint64_t cool_until) {
   return !usb_connected && elapsed >= cool_until;
+}
+// Validate JSON doubles before casting to integers.
+inline bool ota_integer(double value, uint32_t minimum, uint32_t maximum) {
+  return std::isfinite(value) && value >= minimum && value <= maximum &&
+         std::floor(value) == value;
+}
+inline bool ota_sha256(const std::string &sha) {
+  return sha.size() == 64 && std::all_of(sha.begin(), sha.end(), [](char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+  });
+}
+inline bool ota_version(const std::string &version, uint32_t &result) {
+  uint32_t value = 0, part = 0, digits = 0, components = 0;
+  for (char c : version) {
+    if (c >= '0' && c <= '9') {
+      if (++digits > 3) return false;
+      part = part * 10 + (c - '0');
+    } else if (c == '.' && digits && components < 2) {
+      value = value * 1000 + part;
+      ++components;
+      digits = part = 0;
+    } else return false;
+  }
+  if (components != 2 || !digits) return false;
+  result = value * 1000 + part;
+  return true;
+}
+inline bool ota_upgrade(const std::string &running, const std::string &candidate) {
+  uint32_t current = 0, target = 0;
+  return ota_version(running, current) && ota_version(candidate, target) && target > current;
 }
 } // namespace sensor
