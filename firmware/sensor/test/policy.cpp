@@ -28,6 +28,24 @@ static void test_serial_lines() {
 }
 
 int main() {
+  {
+    const auto end = sensor::boot_session_end(1000000, 300);
+    assert(end == 301000000);
+    assert(sensor::boot_radio_end(2000000, 120, end) == 122000000);
+    assert(sensor::boot_radio_end(290000000, 120, end) == end);
+    assert(sensor::boot_radio_end(301000000, 120, end) == end);
+    assert(sensor::boot_radio_end(290000000, 120, 0) == 410000000);
+    sensor::BootPress button;
+    assert(!button.update(false, 0));
+    assert(!button.update(false, 30000));
+    for (int64_t start : {100000LL, 300000LL, 500000LL}) {
+      assert(!button.update(true, start));
+      assert(!button.update(false, start + 50000));
+      assert(button.update(false, start + 80000));
+      assert(!button.update(false, start + 90000));
+    }
+  }
+
   for (double duration : {300.0, 900.0, 1800.0, 3600.0})
     assert(sensor::boot_debug_duration(duration));
   for (double duration : {0.0, -1.0, 299.0, 300.5, 3601.0, INFINITY * 1.0, NAN * 1.0})
