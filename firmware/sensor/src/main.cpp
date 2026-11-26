@@ -257,11 +257,15 @@ static void stop_network() {
   esp_deep_sleep_start();
   __builtin_unreachable();
 }
-static void wifi_event(void *, esp_event_base_t base, int32_t id, void *) {
+static void wifi_event(void *, esp_event_base_t base, int32_t id, void *data) {
   if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP)
     xEventGroupSetBits(events, 1);
-  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED)
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    const auto *disconnected = static_cast<const wifi_event_sta_disconnected_t *>(data);
+    if (disconnected) printf("WIFI: disconnected reason=%u\n", (unsigned)disconnected->reason);
     xEventGroupClearBits(events, 1);
+    xEventGroupSetBits(events, 2);
+  }
 }
 static bool start_wifi(bool ap = false) {
   if (charging())
@@ -278,7 +282,7 @@ static bool start_wifi(bool ap = false) {
   auto &netif = ap ? ap_netif : sta_netif;
   if (!netif)
     netif = ap ? esp_netif_create_default_wifi_ap() : esp_netif_create_default_wifi_sta();
-  xEventGroupClearBits(events, 1);
+  xEventGroupClearBits(events, 3);
   wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
   if (esp_wifi_init(&init) != ESP_OK)
     return false;
@@ -336,33 +340,12 @@ static bool prepare_dns() {
   }
   log_dns("active", ESP_NETIF_DNS_MAIN);
   log_dns("active", ESP_NETIF_DNS_BACKUP);
-  auto host = server_hostname();
-  if (host.empty()) { last_error = "invalid_server_hostname"; return false; }
-  // Preserve the original hostname for SNI and certificate validation.
-  for (unsigned i = 0; i < 2 && available(); ++i) {
-    addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
-    addrinfo *answer = nullptr;
-    const int64_t started = esp_timer_get_time();
-    const int error = getaddrinfo(host.c_str(), nullptr, &hints, &answer);
-    const auto elapsed = (long long)((esp_timer_get_time() - started) / 1000);
-    if (error == 0 && answer) {
-      char ip[48]{};
-      if (answer->ai_family == AF_INET)
-        inet_ntop(AF_INET, &reinterpret_cast<sockaddr_in *>(answer->ai_addr)->sin_addr, ip, sizeof ip);
-      else if (answer->ai_family == AF_INET6)
-        inet_ntop(AF_INET6, &reinterpret_cast<sockaddr_in6 *>(answer->ai_addr)->sin6_addr, ip, sizeof ip);
-      printf("DNS: %s -> %s in %lld ms\n", host.c_str(), ip, elapsed);
-      freeaddrinfo(answer);
-      if (available()) return true;
-      break;
-    }
-    if (answer) freeaddrinfo(answer);
-    printf("DNS: lookup %s failed: %d in %lld ms (attempt %u/2)\n", host.c_str(), error, elapsed, i+1);
-    if (deadline - esp_timer_get_time() < 15000000 || charging()) break;
-    vTaskDelay(pdMS_TO_TICKS(250));
+  if (server_hostname().empty()) {
+    last_error = "invalid_server_hostname";
+    return false;
   }
-  last_error = "dns_resolution_failed";
-  return false;
+  // The TLS connection performs DNS resolution; avoid duplicate blocking lookups.
+  return available();
 }
 static void log_wifi_link() {
   esp_netif_ip_info_t info{};
@@ -388,23 +371,33 @@ static bool wifi_up() {
          std::min(password.size(), sizeof w.sta.password));
   w.sta.threshold.authmode =
       password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
-  esp_wifi_set_config(WIFI_IF_STA, &w);
-  if (esp_wifi_start() != ESP_OK) {
+  if (esp_wifi_set_config(WIFI_IF_STA, &w) != ESP_OK ||
+      esp_wifi_start() != ESP_OK) {
     last_error = "wifi_unavailable";
     return false;
   }
-  esp_wifi_set_max_tx_power(cfg.tx_qdbm);
+  if (esp_wifi_set_max_tx_power(cfg.tx_qdbm) != ESP_OK)
+    puts("WIFI: configured transmit power rejected");
   if (debug_radio && esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK)
     puts("WIFI: could not disable modem sleep for USB registration/debug");
   for (int tries = 0; tries < 3 && available(); tries++) {
-    esp_wifi_connect();
-    int64_t attempt = esp_timer_get_time() + 10000000;
-    while (available() && esp_timer_get_time() < attempt) {
-      if (xEventGroupGetBits(events) & 1) {
+    xEventGroupClearBits(events, 2);
+    const auto connected = esp_wifi_connect();
+    if (connected != ESP_OK)
+      printf("WIFI: connect failed: %s\n", esp_err_to_name(connected));
+    const int64_t attempt = std::min<int64_t>(deadline, esp_timer_get_time() + 10000000);
+    while (connected == ESP_OK && available() && esp_timer_get_time() < attempt) {
+      const auto bits = xEventGroupGetBits(events);
+      if (bits & 1) {
         log_wifi_link();
         return prepare_dns();
       }
+      if (bits & 2) break;
       vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (available()) {
+      esp_wifi_disconnect();
+      vTaskDelay(pdMS_TO_TICKS(200));
     }
   }
   last_error = "wifi_unavailable";
@@ -552,7 +545,7 @@ static std::string post(const std::string &path, const std::string &body,
     if (remaining < 2000000 || charging()) break;
     printf("HTTPS: retry %u/3 for %s, remaining=%lld ms\n", attempt+1,
            path.c_str(), (long long)(remaining/1000));
-    vTaskDelay(pdMS_TO_TICKS(attempt * 250));
+    vTaskDelay(pdMS_TO_TICKS(sensor::http_retry_pause_ms(attempt, esp_random())));
     if (!available()) break;
     // Reconnect after losing the IP or after repeated connection failure,
     // without resetting the shared radio deadline or the journal cursor.
@@ -1954,7 +1947,7 @@ extern "C" void app_main() {
     stop_network();
     const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
     const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, scheduled_send, ok,
-        uptime_now(), cfg.send_s, next_interval, last_error == "authorization_pending" || !factory_ticket.empty());
+        uptime_now(), cfg.send_s, next_interval, last_error == "authorization_pending" || !factory_ticket.empty(), esp_random());
     rt.next_send_uptime = updated.next;
     rt.failures = updated.failures;
     printf("TK SYNC result=%s ack_seq=%llu next_seq=%llu next_send=%llu error=%s\n",
