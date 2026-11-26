@@ -18,6 +18,25 @@ struct State {
   int64_t saved_time = 0;
 };
 
+// Compare logical fields, not padding bytes in the legacy native envelope.
+inline bool same_state(const State &a, const State &b) {
+  return a.next == b.next && a.ack == b.ack && a.lost_base == b.lost_base &&
+         a.boots == b.boots && a.ota_failures == b.ota_failures &&
+         a.ota_generation == b.ota_generation && a.saved_time == b.saved_time;
+}
+class StateCheckpoint {
+  State persisted{};
+  bool known = false;
+public:
+  void loaded(const State &value) { persisted = value; known = true; }
+  template<class Write>
+  bool save(const State &value, Write write) {
+    if (known && same_state(persisted, value)) return true;
+    if (!write(value)) return false;
+    loaded(value);
+    return true;
+  }
+};
 inline bool valid_config(const Config &c) {
   return c.version && c.version <= 2147483647 && c.measure_s >= 1 &&
          c.measure_s <= 604800 && c.send_s >= 1 && c.send_s <= 604800 &&

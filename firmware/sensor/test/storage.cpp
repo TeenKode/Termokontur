@@ -73,5 +73,46 @@ int main() {
     if (intent) assert(attempt(3));
     assert(stored_config == 2 && stored_epoch == 2 && !intent);
   }
-  std::cout << "Persistent config, setup transaction recovery and legacy NVS envelope checks passed\n";
+  {
+    // Existing NVS bytes remain authoritative; a normal measurement
+    // coalesces the boot counter and next-sequence update into one write.
+    sensor::StateCheckpoint checkpoint;
+    sensor::State stored{};
+    checkpoint.loaded(stored);
+    unsigned writes = 0;
+    bool fail = false;
+    auto write = [&](const sensor::State &value) {
+      ++writes;
+      if (fail) return false;
+      stored = value;
+      return true;
+    };
+    assert(checkpoint.save(stored, write) && writes == 0);
+    sensor::State candidate = stored;
+    ++candidate.boots;
+    ++candidate.next;
+    assert(checkpoint.save(candidate, write) && writes == 1);
+    assert(stored.boots == 1 && stored.next == 2);
+    assert(checkpoint.save(candidate, write) && writes == 1);
+    ++candidate.ack;
+    fail = true;
+    assert(!checkpoint.save(candidate, write) && writes == 2);
+    assert(stored.ack == 1);
+    fail = false;
+    assert(checkpoint.save(candidate, write) && writes == 3 && stored.ack == 2);
+    candidate.saved_time = 1795520000;
+    assert(checkpoint.save(candidate, write) && writes == 4);
+    candidate.ota_failures = 1;
+    assert(checkpoint.save(candidate, write) && writes == 5);
+    candidate.ota_generation = 1;
+    assert(checkpoint.save(candidate, write) && writes == 6);
+    candidate.lost_base = 1;
+    assert(checkpoint.save(candidate, write) && writes == 7);
+    ++candidate.boots; // wake with no sample: checkpoint on sleep
+    assert(checkpoint.save(candidate, write) && writes == 8);
+    // A genuinely absent NVS state must be written, even when all default.
+    sensor::StateCheckpoint absent;
+    assert(absent.save(sensor::State{}, write) && writes == 9);
+  }
+  std::cout << "Persistent config, setup transaction recovery, state checkpoints and legacy NVS envelope checks passed\n";
 }
