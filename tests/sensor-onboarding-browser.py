@@ -200,6 +200,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                             page.locator(f'[data-tab="{tab}"]').click()
                             expect(page.locator(f'#view-{tab}')).to_be_visible()
                             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), (mode,width,tab)
+                            if width==1920:
+                                caps={'overview':1280,'readings':1000,'rooms':1180,'reports':1180,'staff':900,'sensors':1280,'settings':1180}
+                                assert page.locator(f'#view-{tab}').bounding_box()['width'] <= caps[tab]+1, (mode,tab)
+                                assert page.locator(f'#view-{tab} .table-scroll').evaluate_all(
+                                    'els=>els.filter(el=>el.getClientRects().length).every(el=>el.getBoundingClientRect().right<=innerWidth+1)'), (mode,tab)
+                                page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-width-{mode}-{tab}.png')
                             if width==1366 or width==390:
                                 if tab=="sensors":
                                     expect(page.locator("#sensor-state")).not_to_have_text("Загружаем датчики…")
