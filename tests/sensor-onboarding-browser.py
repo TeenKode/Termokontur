@@ -170,6 +170,12 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     raise AssertionError(f"Login failed: {page.locator('#login-error').inner_text()}; JS errors: {errors}; server: {log.read()[-5000:]}") from exc
                 # Real panel design regression: navigate every existing route and keep
                 # the original USB/API tests below, using the same authenticated session.
+                expect(page.locator("#tk-attention-items")).to_contain_text("Кабинет 101")
+                expect(page.locator("#tk-attention-count")).to_have_text("1")
+                page.locator("#tk-attention-items button").first.click()
+                expect(page.locator("#overview-status")).to_have_value("missing")
+                expect(page.locator("#search-rooms")).to_have_value("Кабинет 101")
+                page.locator('[data-overview-status=""]').click()
                 original_size=page.viewport_size
                 page.set_viewport_size({"width":1440,"height":900})
                 page.evaluate("window.termokonturTheme.setPreference('dark')")
@@ -189,6 +195,8 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                             page.locator(f'[data-tab="{tab}"]').click()
                             expect(page.locator(f'#view-{tab}')).to_be_visible()
                             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), (mode,width,tab)
+                            if width==1366 or width==390:
+                                page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-design-{mode}-{width}-{tab}.png')
                 page.set_viewport_size(original_size)
                 page.evaluate("window.termokonturTheme.setPreference('light')")
                 page.click('[data-tab="settings"]')
@@ -327,6 +335,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     expect(page.locator('#usb-status')).to_contain_text('Смените помещение в карточке датчика')
                     assert page.evaluate('window.savedUSB')==saved
                     page.click('#usb-close')
+                page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
+                expect(page.locator("#sensor-detail")).to_be_visible()
+                page.screenshot(path=SCREENSHOTS/"termokontur-sensors-master-detail.png")
+                page.click("#tk-sensor-close")
+                expect(page.locator("#sensor-detail")).to_be_hidden()
                 page.locator('.sensor-card').get_by_role('button', name='Открыть').click()
                 page.locator('#sensor-detail summary').filter(has_text='Обновление прошивки').click()
                 page.select_option('#sensor-firmware', f'bundled:{version}')
