@@ -31,6 +31,12 @@ int main() {
   {
     const auto end = sensor::boot_session_end(1000000, 300);
     assert(end == 301000000);
+    assert(sensor::boot_work_allowed(end - 1, end, false));
+    assert(!sensor::boot_work_allowed(end, end, false));
+    assert(!sensor::boot_work_allowed(end + 1, end, false));
+    assert(!sensor::boot_work_allowed(end - 1, end, true));
+    assert(sensor::boot_work_allowed(end, 0, false));
+    assert(!sensor::boot_work_allowed(end, 0, true));
     assert(sensor::boot_radio_end(2000000, 120, end) == 122000000);
     assert(sensor::boot_radio_end(290000000, 120, end) == end);
     assert(sensor::boot_radio_end(301000000, 120, end) == end);
