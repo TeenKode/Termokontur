@@ -25,9 +25,10 @@ test("system mode switches automatically and repaints chart",()=>{
   const h=setup();
   assert.equal(h.document.documentElement.dataset.theme,"dark");
   assert.equal(h.choices[0].checked,true);
-  assert.equal(h.meta.content,"#0c1726");
+  assert.equal(h.meta.content,"#10161c");
   h.media.matches=false;h.media.change();
   assert.equal(h.document.documentElement.dataset.theme,"light");
+  assert.equal(h.meta.content,"#eff2f5");
   assert.equal(h.buttons[0].attrs["aria-label"],"Включить тёмную тему");
   assert.ok(h.redraws>0);
 });
