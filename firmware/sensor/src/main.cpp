@@ -146,6 +146,13 @@ static int load_blob(const char *key, void *p, size_t n) {
   return sensor::load_blob(nv, key, p, n);
 }
 static bool save_state() { return save_blob("state", &state, sizeof state); }
+static bool save_next_sequence(uint64_t next) {
+  State candidate = state;
+  candidate.next = next;
+  if (!save_blob("state", &candidate, sizeof candidate)) return false;
+  state = candidate;
+  return true;
+}
 static std::string provision_json() {
   cJSON *j = cJSON_CreateObject();
   add(j, "ssid", ssid);
@@ -1902,9 +1909,11 @@ extern "C" void app_main() {
   state.boots++;
   if (!save_state())
     sleep_for(3600);
-  // A failed append retains the original sequence/payload across Deep Sleep.
+  // Retry the exact RTC payload, including legacy pre-reserved IDs.
+  // A new-format retry may have committed Flash but not the NVS cursor.
   if (rt.pending) {
-    if (!journal.append(rt.record)) {
+    if (!sensor::commit_measurement(journal, rt.record, state.ack, state.next,
+                                    save_next_sequence)) {
       last_error = "journal_retry_failed";
       sleep_for(cfg.measure_s);
     }
@@ -2008,13 +2017,14 @@ extern "C" void app_main() {
       sleep_for(3600);
     }
     measurement.seq = state.next;
-    state.next++;
-    if (!save_state())
-      sleep_for(cfg.measure_s);
     rt.record = measurement;
     rt.pending = true;
-    if (!journal.append(measurement)) {
-      last_error = "journal_write_failed";
+    // A complete power cut before the slot commits loses at most this
+    // uncommitted sample, not a sequence number. A cut after commit is
+    // recovered from Flash before any upload or new measurement.
+    if (!sensor::commit_measurement(journal, measurement, state.ack, state.next,
+                                    save_next_sequence)) {
+      last_error = "journal_commit_failed";
       sleep_for(cfg.measure_s);
     }
     rt.pending = false;
