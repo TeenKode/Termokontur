@@ -148,6 +148,7 @@ async function loadReport(){
   if(!start||!end){clearReport("Укажите обе даты отчёта.");return;}
   const query=new URLSearchParams({start,end,building:$("report-building").value});
   clearReport("Формируем отчёт…");
+  $("report-status").dataset.loading="true";
   try{
     const result=await api("/api/reports?"+query);
     if(request!==reportRequestId)return;
@@ -155,7 +156,7 @@ async function loadReport(){
     renderReport();
   }catch(error){
     if(request===reportRequestId)clearReport("Не удалось сформировать отчёт. "+error.message);
-  }
+  }finally{if(request===reportRequestId)delete $("report-status").dataset.loading;}
 }
 function reportExport(type){
   if(!reportsData){toast("Сначала сформируйте отчёт",true);return;}

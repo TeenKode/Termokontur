@@ -63,6 +63,7 @@ $("tk-empty-code")?.addEventListener("click",()=>$("sensor-add").click());
 async function refreshSensors(){
   const request=++sensorRefreshId;
   $("sensor-state").textContent="Загружаем датчики…";
+  $("sensor-state").dataset.loading="true";
   try{
     const [devices,active,mqtt,claims]=await Promise.all([api("/api/sensors/devices"),api("/api/rooms"),api("/api/sensors/mqtt"),api("/api/sensors/claims")]);
     if(request!==sensorRefreshId)return;
@@ -105,6 +106,7 @@ async function refreshSensors(){
     }
     $("sensor-mqtt-state").textContent=(mqtt.enabled?"MQTT включён":"MQTT выключен")+" · в очереди: "+mqtt.outbox.length+(mqtt.outbox.some(x=>x.error)?" · есть ошибки доставки":"");
   }catch(e){if(request===sensorRefreshId){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}}
+  finally{if(request===sensorRefreshId)delete $("sensor-state").dataset.loading;}
 }
 let tkSensorTrigger=null;
 $("tk-sensor-close")?.addEventListener("click",()=>{

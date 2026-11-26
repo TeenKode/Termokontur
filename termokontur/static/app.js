@@ -521,6 +521,7 @@ async function refreshHistory({background=false}={}){
   if(!keep){
     $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
     $("history-content").hidden=true;
+    $("history-state").dataset.loading="true";
   }
   $("history-content").setAttribute("aria-busy","true");
   try{
@@ -539,7 +540,7 @@ async function refreshHistory({background=false}={}){
     resetHistorySummary();
     $("history-state").textContent="Не удалось загрузить историю: "+error.message;
   }finally{
-    if(sequence===historyRequestId)$("history-content").removeAttribute("aria-busy");
+    if(sequence===historyRequestId){$("history-content").removeAttribute("aria-busy");delete $("history-state").dataset.loading;}
   }
 }
 function exportHistory(){

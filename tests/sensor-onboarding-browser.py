@@ -250,6 +250,16 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                         if width<1024:
                             page.click('#navigation-toggle')
                         page.click('[data-tab="settings"]')
+                # Effective 200% desktop zoom: reflow at half the 1440px CSS viewport.
+                page.set_viewport_size({'width':720,'height':550})
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    for tab in ('overview','readings','rooms','reports','staff','sensors','settings'):
+                        page.click('#navigation-toggle')
+                        page.locator(f'[data-tab="{tab}"]').focus()
+                        page.keyboard.press('Enter')
+                        expect(page.locator(f'#view-{tab}')).to_be_visible()
+                        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), (mode,tab)
                 page.set_viewport_size(original_size)
                 page.evaluate("window.termokonturTheme.setPreference('light')")
                 page.click('[data-tab="settings"]')
@@ -272,6 +282,29 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 room_tools.get_by_role('button',name='Сбросить').click()
                 expect(room_table.locator('thead th').nth(2)).to_be_visible()
                 expect(room_table.locator('thead th').first).to_have_attribute('aria-sort','none')
+                # Stress the actual table controller with 500 DOM rows, not real school records.
+                page.evaluate("""() => {
+                    const body=document.querySelector('#rooms-table');
+                    const rows=[];
+                    for(let n=500;n>=1;n--){
+                        const row=document.createElement('tr');row.dataset.tkStress='1';
+                        for(const value of ['Тест '+n,'Тестовый корпус',String(n%5),'Класс','20–24','—','—']){
+                            const cell=document.createElement('td');cell.textContent=value;row.append(cell);
+                        }
+                        rows.push(row);
+                    }
+                    body.append(...rows);
+                }""")
+                expect(room_tools.locator('.tk-row-count')).to_have_text('501')
+                room_table.locator('thead th').first.locator('button').click()
+                expect(room_table.locator('tbody tr[data-tk-stress]').first).to_contain_text('Тест 1')
+                room_table.locator('thead th').first.locator('button').click()
+                expect(room_table.locator('tbody tr[data-tk-stress]').first).to_contain_text('Тест 500')
+                assert page.evaluate("document.documentElement.scrollWidth<=innerWidth+1")
+                page.screenshot(path=SCREENSHOTS/'termokontur-sensors-stress-500-rooms.png')
+                page.evaluate("document.querySelectorAll('[data-tk-stress]').forEach(row=>row.remove())")
+                room_tools.get_by_role('button',name='Сбросить').click()
+                expect(room_tools.locator('.tk-row-count')).to_have_text('1')
                 page.click('[data-tab="sensors"]')
                 expect(page.locator('#tk-sensor-empty')).to_be_visible()
                 page.select_option('#tk-sensor-view','table')

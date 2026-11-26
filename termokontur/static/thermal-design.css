@@ -437,3 +437,20 @@ html[data-theme] .settings-form [data-tk-edited]{border-color:var(--tk-accent);b
 .tk-log-results{height:clamp(110px,20vh,220px);border-color:var(--tk-accent)}
 .debug-console:fullscreen,#usb-log-panel:fullscreen{padding:18px;overflow:auto}
 .debug-console:fullscreen #debug-log,#usb-log-panel:fullscreen #usb-log{height:55vh}
+
+/* Accessible loading, chart range and consistent control glyphs. */
+.tk-action-icon,.theme-toggle svg{width:17px;height:17px;flex:none;vertical-align:middle}
+.theme-toggle svg{width:20px;height:20px}
+.refresh-symbol{display:inline-flex;align-items:center}
+.tk-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
+.tk-chart-range{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:5px 0 8px}
+.tk-chart-range label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tk-muted)}
+.tk-chart-range select{width:auto;max-width:100%;font-size:12px;padding:7px 10px}
+[data-loading="true"]{position:relative}
+#history-state[data-loading="true"]{min-height:230px;padding:18px;display:block;text-align:left}
+#sensor-state[data-loading="true"],#report-status[data-loading="true"]{min-height:52px}
+#history-state[data-loading="true"]::after,#sensor-state[data-loading="true"]::after,#report-status[data-loading="true"]::after{content:"";display:block;border-radius:6px;margin-top:10px;background:linear-gradient(100deg,var(--tk-line) 25%,var(--tk-raised) 50%,var(--tk-line) 75%);background-size:200% 100%;height:10px;max-width:100%;animation:tk-skeleton 1.5s ease-in-out infinite}
+#history-state[data-loading="true"]::after{height:160px;background:repeating-linear-gradient(0deg,var(--tk-line) 0 1px,transparent 1px 39px),linear-gradient(100deg,var(--tk-raised) 25%,var(--tk-line) 50%,var(--tk-raised) 75%);background-size:100% 100%,200% 100%}
+@keyframes tk-skeleton{0%{background-position:100% 0}100%{background-position:-100% 0}}
+@media(prefers-reduced-motion:reduce){[data-loading="true"]::after{animation:none!important}}
+@media(max-width:700px){.tk-chart-range label{max-width:100%;flex-wrap:wrap}.tk-chart-range select{min-width:0}}

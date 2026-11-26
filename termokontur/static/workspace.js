@@ -45,12 +45,14 @@
       observer.disconnect();
       const rows=[...body.rows].filter(row=>row.cells.length===heads.length);
       for(const row of rows)if(!order.has(row))order.set(row,seq++);
+      const values=col===null?null:new Map(rows.map(row=>[row,keyOf(row,col)]));
       const sorted=[...rows].sort((x,y)=>{
         if(col===null)return order.get(x)-order.get(y);
-        const av=keyOf(x,col),bv=keyOf(y,col);
+        const av=values.get(x),bv=values.get(y);
         const missing=v=>v===""||v==="—";
         if(missing(av)!==missing(bv))return missing(av)?1:-1;
-        const an=Number(av.replace(",", ".")),bn=Number(bv.replace(",", "."));
+        const numeric=v=>Number(v.replace(/\s*(?:%|°C|В)$/,"").replace(",", "."));
+        const an=numeric(av),bn=numeric(bv);
         const cmp=Number.isFinite(an)&&Number.isFinite(bn)?an-bn:collator.compare(av,bv);
         return dir*cmp||order.get(x)-order.get(y);
       });
@@ -60,8 +62,9 @@
         scroll.scrollTop=top;scroll.scrollLeft=left;
       }
       for(let i=0;i<heads.length;i++){
-        heads[i].hidden=hidden.has(i);
-        for(const row of rows)row.cells[i].hidden=hidden.has(i);
+        const hide=hidden.has(i);
+        if(heads[i].hidden!==hide)heads[i].hidden=hide;
+        for(const row of rows)if(row.cells[i].hidden!==hide)row.cells[i].hidden=hide;
         if(sortButtons.has(i)){
           heads[i].setAttribute("aria-sort",col===i?(dir===1?"ascending":"descending"):"none");
           sortButtons.get(i).dataset.direction=col===i?(dir===1?"asc":"desc"):"";
@@ -74,7 +77,7 @@
     const observer=new MutationObserver(apply);apply();
   }
   function expandCharts(){
-    for(const id of ["history-chart","reading-chart","sensor-chart","report-temperature-chart"]){
+    for(const id of ["history-chart","reading-chart","sensor-chart","report-temperature-chart","report-humidity-chart"]){
       const canvas=document.getElementById(id),frame=canvas?.parentElement;
       if(!frame||typeof frame.requestFullscreen!=="function")continue;
       const b=button("Развернуть график",async()=>{try{if(document.fullscreenElement===frame)await document.exitFullscreen();else await frame.requestFullscreen();}catch{b.textContent="Полноэкранный режим недоступен";}});
@@ -87,6 +90,7 @@
     enhanceTable(document.querySelector(".readings-table"),"readings",[0,1,2,3,4],[3,4]);
     enhanceTable(document.querySelector(".rooms-table"),"rooms",[0,1,2,3],[2,3,4]);
     enhanceTable(document.querySelector("#tk-sensor-table table"),"sensors",[0,1,2,3,4,5,6],[3,4,5,6]);
+    for(const [id,sort,optional] of [["report-coverage-body",[0,1,2,3,4,5,6],[4,6]],["report-buildings-body",[0,1,2,3,4,5],[4,5]],["report-staff-body",[0,1,2,3,4,5],[4,5]]])enhanceTable(document.getElementById(id)?.closest("table"),id,sort,optional);
     expandCharts();
     // Remember non-sensitive choices only. Search text, room IDs and credentials
     // deliberately stay in memory, not in persistent browser storage.

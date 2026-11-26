@@ -30,7 +30,7 @@
     const choices=document.querySelectorAll('input[name="theme-preference"]');
     function sync(){
       const dark=isDark(), label=dark?"Включить светлую тему":"Включить тёмную тему";
-      for(const btn of buttons){btn.textContent=dark?"☀":"☾";btn.setAttribute("aria-label",label);btn.title=label;}
+      for(const btn of buttons){btn.innerHTML=dark?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 14.4A9 9 0 0 1 9.6 3.2a9 9 0 1 0 11.2 11.2Z"/></svg>';btn.setAttribute("aria-label",label);btn.title=label;}
       for(const choice of choices)choice.checked=choice.value===preference;
       const summary=document.getElementById("settings-summary-theme");
       if(summary)summary.textContent=({system:"Как на устройстве",light:"Светлая",dark:"Тёмная"})[preference];
