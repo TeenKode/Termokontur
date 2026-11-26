@@ -27,6 +27,13 @@ static void test_serial_lines() {
 }
 
 int main() {
+  assert(sensor::battery_settle_remaining_ms(-1) == 500);
+  assert(sensor::battery_settle_remaining_ms(0) == 500);
+  assert(sensor::battery_settle_remaining_ms(1) == 500);
+  assert(sensor::battery_settle_remaining_ms(250000) == 250);
+  assert(sensor::battery_settle_remaining_ms(499999) == 1);
+  assert(sensor::battery_settle_remaining_ms(500000) == 0);
+  assert(sensor::battery_settle_remaining_ms(INT64_MAX) == 0);
   assert(sensor::ota_integer(0, 0, UINT32_MAX));
   assert(sensor::ota_integer(UINT32_MAX, 0, UINT32_MAX));
   for (double bad : {-1.0, 1.5, 4294967296.0, INFINITY * 1.0, NAN * 1.0})
