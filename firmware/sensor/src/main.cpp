@@ -392,7 +392,8 @@ static void log_wifi_link() {
     printf("WIFI: RSSI=%d dBm channel=%u\n", (int)ap.rssi, (unsigned)ap.primary);
 }
 static bool wifi_up() {
-  if (!start_wifi()) {
+  if (!available()) return false;
+  if (!start_wifi() || !available()) {
     last_error = "wifi_unavailable";
     return false;
   }
@@ -403,7 +404,7 @@ static bool wifi_up() {
   w.sta.threshold.authmode =
       password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
   if (esp_wifi_set_config(WIFI_IF_STA, &w) != ESP_OK ||
-      esp_wifi_start() != ESP_OK) {
+      !available() || esp_wifi_start() != ESP_OK) {
     last_error = "wifi_unavailable";
     return false;
   }
@@ -2077,8 +2078,8 @@ extern "C" void app_main() {
   // The normal path and legacy one-shot BOOT run this loop exactly once.
   for (;;) {
   if (charging()) sleep_for(cfg.measure_s);
-  if (boot_debug && boot_debug_continuous && esp_timer_get_time() >= boot_debug_end_us) break;
   const int64_t session_end = boot_debug && boot_debug_continuous ? boot_debug_end_us : 0;
+  if (!sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging())) break;
 
   // The image has passed local storage self-test. External sensor faults
   // are measurement errors, not firmware rollback triggers.
@@ -2098,7 +2099,7 @@ extern "C" void app_main() {
   }
   bool measured = measurement_due && sensor::read_sensor_retry(
       sensor_type.c_str(), measurement, [session_end] {
-        return charging() || (session_end > 0 && esp_timer_get_time() >= session_end);
+        return !sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging());
       });
   const int64_t sampled_us = esp_timer_get_time();
   measurement.uptime = rt.uptime + sampled_us / 1000000;
@@ -2112,7 +2113,7 @@ extern "C" void app_main() {
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
   const bool scheduled_send = sensor::radio_due(uptime_now(), rt.next_send_uptime);
-  const bool send_due = (session_end == 0 || esp_timer_get_time() < session_end) &&
+  const bool send_due = sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging()) &&
                         (scheduled_send || boot_debug || requested_sync);
   printf("TK PLAN measure_due=%d send_due=%d wifi_allowed=%d config_version=%u measure_s=%u send_s=%u\n",
          measurement_due, send_due, wifi_allowed, (unsigned)cfg.version,
@@ -2138,6 +2139,10 @@ extern "C" void app_main() {
   // An unsupported USB sample would prevent an older panel from accepting
   // subsequent battery-powered readings in the same journal.
   if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
+    if (session_end > 0 && esp_timer_get_time() >= session_end) {
+      boot_debug_result("Время отладки истекло, USB-замер не сохранён.");
+      break;
+    }
     if (charging()) boot_debug_result("Отладка прервана зарядкой.");
     else if (!time_prepared) boot_debug_result("USB-замер пропущен. Проверьте связь с сервером.");
     else boot_debug_result("Обновите панель для отправки замера по USB без аккумулятора.");
@@ -2165,7 +2170,8 @@ extern "C" void app_main() {
     printf("TK MEASURE %s\n", stringify(record).c_str());
     cJSON_Delete(record);
   }
-  if (send_due && wifi_allowed && !charging()) {
+  if (send_due && wifi_allowed &&
+      sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging())) {
     if (!bootstrap_after_sample)
       deadline = sensor::boot_radio_end(esp_timer_get_time(), radio_budget, session_end);
     // Reuse the time connection; if it failed, retry at the next wake.
@@ -2205,6 +2211,7 @@ extern "C" void app_main() {
   if (!boot_debug || !boot_debug_continuous || charging() ||
       esp_timer_get_time() >= boot_debug_end_us) break;
   stop_network();
+  const auto radio_off_us = esp_timer_get_time();
   const auto wait = wait_for_boot_debug(boot_debug_end_us);
   if (wait != BootWait::pressed) {
     if (wait == BootWait::charging) {
@@ -2224,6 +2231,12 @@ extern "C" void app_main() {
   }
   if (charging()) sleep_for(cfg.measure_s);
   // Recheck power on every new press, including USB disconnection.
+  // Fast presses can arrive before the ADC settles after radio shutdown.
+  const auto repeat_settle_ms = sensor::battery_settle_remaining_ms(
+      esp_timer_get_time() - radio_off_us);
+  if (repeat_settle_ms) vTaskDelay(pdMS_TO_TICKS(repeat_settle_ms) + 1);
+  if (charging()) sleep_for(cfg.measure_s);
+  if (esp_timer_get_time() >= boot_debug_end_us) break;
   mv = battery_mv();
   usb_without_battery = usb_serial_jtag_is_connected();
   if (usb_without_battery) mv = 0;
