@@ -54,6 +54,9 @@ jobs:
           /tmp/setup-password-test
       - name: Sensor protocol and conversion vectors
         run: |
+          for header in sensor_common sensor_i2c sensor_sht sensor_aht20 sensor_bosch sensor_wire sensor_dht sensor_ds18b20 sensor_drivers; do
+            printf '#include "%s.hpp"\n' "$header" | g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/test/hal -I firmware/sensor/include -x c++ -fsyntax-only -
+          done
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/test/hal -I firmware/sensor/include firmware/sensor/test/drivers.cpp -o /tmp/sensor-drivers-test
           /tmp/sensor-drivers-test
       - uses: actions/cache@v4
