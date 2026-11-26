@@ -390,3 +390,39 @@ html[data-theme] .table-scroll table:not(.heatmap-table):not(.building-matrix-ta
   /* The mobile rooms table is a stacked card list; keep its own cell padding. */
   html[data-theme] .table-scroll .rooms-table :is(th,td){padding:0}
 }
+
+/* Shared, density-aware workspace controls. */
+:root{--tk-card-pad:16px;--tk-section-gap:16px;--tk-form-gap:14px}
+html[data-density="compact"]{--tk-card-pad:12px;--tk-section-gap:10px;--tk-form-gap:9px}
+html[data-density="wide"]{--tk-card-pad:22px;--tk-section-gap:22px;--tk-form-gap:19px}
+html[data-theme] .nav-group-label{padding:9px 10px 3px;color:var(--tk-muted);font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700}
+html[data-navigation="compact"] .nav-group-label{font-size:0;border-top:1px solid var(--tk-line);padding:4px 0 0;margin:6px 4px 0}
+html[data-theme] .sensor-card,html[data-theme] .max-staff-entry,html[data-theme] .report-kpi,html[data-theme] .settings-summary-card{padding:var(--tk-card-pad)}
+html[data-theme] .sensor-cards,html[data-theme] .settings-summary-grid,html[data-theme] .max-staff-list{gap:var(--tk-section-gap)}
+html[data-theme] .settings-pane .settings-form,html[data-theme] .dialog-form{gap:var(--tk-form-gap)}
+html[data-theme] .settings-pane{gap:var(--tk-section-gap)}
+html[data-theme] .settings-pane form[data-dirty="true"]{border-left:3px solid var(--tk-accent)}
+html[data-theme] .dialog-actions{position:sticky;bottom:0;z-index:2;background:var(--tk-panel);padding:12px 0 4px}
+.tk-table-tools{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:8px 14px;border-block:1px solid var(--tk-line);background:var(--tk-panel)}
+.tk-table-tools .muted{margin-right:auto}
+.tk-table-tools .btn{min-height:32px;padding:5px 10px}
+.tk-column-picker{position:relative}
+.tk-column-picker>summary{cursor:pointer;color:var(--tk-text);font-size:13px;font-weight:650;padding:5px 8px}
+.tk-column-choices{display:grid;gap:8px;padding:10px;background:var(--tk-raised);border:1px solid var(--tk-line);border-radius:8px}
+.tk-column-choices label{display:flex;align-items:center;gap:8px;font-size:12px}
+.tk-column-choices input{width:auto}
+.tk-sort{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;text-align:left;padding:0;white-space:normal}
+.tk-sort::after{content:"↕";color:var(--tk-muted)}
+.tk-sort[data-direction="asc"]::after{content:"↑";color:var(--tk-accent)}
+.tk-sort[data-direction="desc"]::after{content:"↓";color:var(--tk-accent)}
+.tk-chart-expand{margin:5px 0;font-size:12px}
+:fullscreen{background:var(--tk-panel);color:var(--tk-text)}
+:fullscreen canvas{height:calc(100vh - 90px)!important;max-height:none!important}
+#history-content[data-stale="true"]::before{content:"Не удалось обновить. Показаны последние полученные данные.";display:block;color:var(--tk-accent);padding:8px;font-size:12px}
+@media(min-width:701px){
+  .table-scroll:has(.tk-sort){max-height:65vh;overflow:auto}
+  .table-scroll:has(.tk-sort) th{position:sticky;top:0;z-index:1}
+}
+@media(max-width:1023px){
+  html[data-navigation="compact"] .nav-group-label,html[data-theme] .nav-group-label{font-size:10px;padding:6px 8px;margin:0;border:0;grid-column:1/-1}
+}
