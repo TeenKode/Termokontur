@@ -192,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(collapse).to_have_attribute('aria-pressed','false')
                 for mode in ('light','dark'):
                     page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
-                    for width in (390,768,1024,1366,1920):
+                    for width in (320,390,768,1024,1366,1920):
                         page.set_viewport_size({"width":width,"height":900})
                         for tab in ('overview','readings','rooms','reports','staff','sensors','settings'):
                             if width<1024:
@@ -207,6 +207,43 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                                     expect(page.locator("#history-content")).to_be_visible()
                                 page.evaluate("window.scrollTo(0,0)")
                                 page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-design-{mode}-{width}-{tab}.png')
+                # Audit all settings subpages and representative dialogs, without submitting forms.
+                categories=('summary','general','calendar','notifications','appearance','max','sensors','backups','security','access','tls','updates')
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    for width in (390,1366):
+                        page.set_viewport_size({'width':width,'height':900})
+                        for category in categories:
+                            if width<=900:
+                                page.select_option('#settings-category',category)
+                            else:
+                                page.locator(f'.settings-navigation [data-settings-target="{category}"]').click()
+                            expect(page.locator(f'[data-settings-view="{category}"]')).to_be_visible()
+                            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), (mode,width,category)
+                            page.evaluate("window.scrollTo(0,0)")
+                            page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-settings-{mode}-{width}-{category}.png')
+                        for tab,opener,dialog,closer in (
+                            ('rooms','#add-room','#room-dialog','#room-dialog button[value="cancel"]'),
+                            ('rooms','#bulk-rooms','#bulk-dialog','#cancel-bulk'),
+                            ('rooms','#bulk-max-codes','#max-codes-dialog','#cancel-max-codes'),
+                            ('readings','#add-reading','#reading-dialog','#reading-dialog button[value="cancel"]'),
+                            ('sensors','#sensor-add','#sensor-add-dialog','#sensor-add-close'),
+                            ('sensors','#sensor-defaults-open','#sensor-defaults-dialog','#sensor-defaults-close'),
+                            ('sensors','#sensor-usb-open','#sensor-usb-dialog','#usb-close'),
+                        ):
+                            if width<1024:
+                                page.click('#navigation-toggle')
+                            page.click(f'[data-tab="{tab}"]')
+                            page.click(opener)
+                            modal=page.locator(dialog)
+                            expect(modal).to_be_visible()
+                            assert modal.evaluate('el=>el.scrollWidth<=el.clientWidth+1'), (mode,width,dialog)
+                            page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-dialog-{mode}-{width}-{dialog[1:]}.png')
+                            page.locator(closer).first.click()
+                            expect(modal).to_be_hidden()
+                        if width<1024:
+                            page.click('#navigation-toggle')
+                        page.click('[data-tab="settings"]')
                 page.set_viewport_size(original_size)
                 page.evaluate("window.termokonturTheme.setPreference('light')")
                 page.click('[data-tab="settings"]')
@@ -217,6 +254,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert page.evaluate("localStorage.getItem('termokontur-density')") == 'compact'
                 page.select_option('#tk-density','normal')
                 page.click('[data-tab="sensors"]')
+                expect(page.locator('#tk-sensor-empty')).to_be_visible()
                 page.select_option('#tk-sensor-view','table')
                 expect(page.locator('#tk-sensor-table')).to_be_visible()
                 expect(page.locator('#sensor-cards')).to_be_hidden()
@@ -328,6 +366,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 other_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Кабинет 102'}).json()
                 page.click('#sensor-refresh')
                 expect(page.locator('.sensor-card strong')).to_contain_text('Данные получены')
+                expect(page.locator('#tk-sensor-empty')).to_be_hidden()
                 page.select_option('#tk-sensor-view','table')
                 expect(page.locator('#tk-sensor-rows tr')).to_contain_text('Данные получены')
                 page.select_option('#tk-sensor-view','cards')

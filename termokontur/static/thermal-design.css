@@ -224,3 +224,105 @@ html[data-theme] dialog{border-color:var(--tk-line);border-radius:12px}
   .firmware-debug-page .heading-actions .btn{flex:1 1 120px}
   .firmware-debug-page .firmware-debug-values dd{overflow-wrap:anywhere}
 }
+
+/* Cross-page visual audit: keep feature states distinct while sharing the same surface tokens. */
+html[data-theme="dark"]{color-scheme:dark}
+html[data-theme] body{font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif}
+html[data-theme] :is(input[type=checkbox],input[type=radio],progress){accent-color:var(--tk-accent)}
+html[data-theme] .btn:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;filter:none}
+html[data-theme] .btn.primary:disabled:hover{background:var(--tk-accent)}
+html[data-theme] .btn.secondary:disabled:hover{background:var(--tk-panel);border-color:var(--tk-line);color:var(--tk-text)}
+html[data-theme] .heading>div:first-child{min-width:0;overflow-wrap:anywhere}
+html[data-theme] .heading-actions .btn,html[data-theme] .dialog-actions .btn{min-height:40px;max-width:100%;white-space:normal;text-align:center}
+html[data-theme] .archive-toggle{color:var(--tk-muted)}
+html[data-theme] .archive-toggle input{accent-color:var(--tk-accent)}
+html[data-theme] .table-scroll{overscroll-behavior-x:contain}
+html[data-theme] td{color:var(--tk-muted);border-color:var(--tk-line)}
+html[data-theme] td:first-child{color:var(--tk-text)}
+html[data-theme] tbody tr:hover{background:var(--tk-raised)}
+html[data-theme] td button{color:var(--tk-text);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] td button:hover:not(:disabled){color:var(--tk-accent);border-color:var(--tk-accent)}
+html[data-theme] .temp{color:var(--tk-text)}
+html[data-theme] .temp.low{color:var(--tk-cold)}
+html[data-theme] .temp.high{color:var(--tk-hot)}
+html[data-theme] .status.normal{color:var(--tk-ok);background:var(--tk-cell-normal)}
+html[data-theme="dark"] .status.normal{color:#a3e1cb}
+html[data-theme] .status.missing{color:var(--tk-muted);background:var(--tk-cell-empty)}
+html[data-theme] .info-strip,html[data-theme] .settings-guidance{color:var(--tk-muted);background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .info-strip strong,html[data-theme] .settings-guidance h3{color:var(--tk-text)}
+html[data-theme] .settings-guidance p{color:var(--tk-muted)}
+html[data-theme] .text-button{color:var(--tk-accent)}
+html[data-theme] .room-drilldown>summary{color:var(--tk-accent);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] .room-drilldown>summary:hover{background:var(--tk-raised)}
+html[data-theme] .building-summary-card{background:var(--tk-raised);border-color:var(--tk-line);border-top-color:var(--building-accent,var(--tk-accent))}
+html[data-theme] .building-card-top,html[data-theme] .building-card-value{color:var(--tk-text)}
+html[data-theme] .building-card-meta,html[data-theme] .building-card-change{color:var(--tk-muted);border-color:var(--tk-line)}
+html[data-theme] .heatmap-table td:first-child,html[data-theme] .building-matrix-table td:first-child{background:var(--tk-panel);color:var(--tk-text)}
+html[data-theme] .heatmap-table tr:hover td:first-child,html[data-theme] .building-matrix-table tr:hover td:first-child{background:var(--tk-raised)}
+html[data-theme] .report-kpi,html[data-theme] .report-schedule-entry,html[data-theme] .report-missing{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .report-kpi strong{color:var(--tk-accent)}
+html[data-theme] .report-switches .btn[aria-pressed="true"],html[data-theme] .report-switches .btn[aria-pressed="true"]:hover{background:var(--tk-accent);border-color:var(--tk-accent);color:var(--tk-on-accent)}
+html[data-theme] .report-bar-track{background:var(--tk-line)}
+html[data-theme] .report-bar-fill{background:var(--tk-ok)}
+html[data-theme] .max-staff-entry,html[data-theme] .max-assignment-notify{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .max-staff-info strong{color:var(--tk-text)}
+html[data-theme] .max-staff-room{background:var(--tk-cell-normal);color:var(--tk-ok);border-color:var(--tk-line)}
+html[data-theme="dark"] .max-staff-room{color:#a3e1cb}
+html[data-theme] .settings-section-heading h2,html[data-theme] .settings-pane .settings-panel h3{color:var(--tk-text)}
+html[data-theme] .settings-picker label,html[data-theme] .settings-pane .settings-form label{color:var(--tk-muted)}
+html[data-theme] .settings-save,html[data-theme] .settings-pane .weekdays{border-color:var(--tk-line)}
+html[data-theme] .settings-pane :is(.settings-toggle,.weekdays) input{accent-color:var(--tk-accent)}
+html[data-theme] .theme-choice{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .theme-choice:hover{border-color:var(--tk-accent)}
+html[data-theme] .theme-choice input:checked+.theme-preview{outline-color:var(--tk-accent)}
+html[data-theme] .theme-choice input:checked~.theme-choice-title{color:var(--tk-accent)}
+html[data-theme] .theme-choice input:focus-visible+.theme-preview{outline:3px solid var(--focus);outline-offset:3px}
+html[data-theme] .notification-user,html[data-theme] .notification-history-item,html[data-theme] .tls-details,html[data-theme] .update-version-item,html[data-theme] .update-history,html[data-theme] .backup-entry{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .update-version-item>strong,html[data-theme] .backup-entry-info strong,html[data-theme] .tls-details p,html[data-theme] .update-history summary{color:var(--tk-text)}
+html[data-theme] .update-state:not([data-state="success"]):not([data-state="failed"]):not([data-state="queued"]):not([data-state="installing"]){background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .update-progress-fill{background:var(--tk-ok)}
+html[data-theme] .update-track{background:var(--tk-line)}
+html[data-theme] .settings-save-feedback[data-state="saved"]{color:var(--tk-ok)}
+html[data-theme] .settings-save-feedback[data-state="error"]{color:var(--tk-hot)}
+html[data-theme] .settings-save-feedback[data-state="warning"],html[data-theme] .settings-save-feedback[data-state="unsaved"]{color:var(--tk-accent)}
+html[data-theme] .login-screen{background:var(--tk-spectrum)}
+html[data-theme] dialog{max-width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;background:var(--tk-panel);color:var(--tk-text)}
+html[data-theme] .dialog-form{min-width:0;padding:clamp(16px,3vw,28px)}
+html[data-theme] .dialog-actions{border-color:var(--tk-line)}
+html[data-theme] .dialog-form label{min-width:0;color:var(--tk-muted)}
+html[data-theme] .dialog-form input,html[data-theme] .dialog-form select,html[data-theme] .dialog-form textarea{max-width:100%;min-width:0}
+html[data-theme] .dialog-form .field-grid{min-width:0}
+html[data-theme] .dialog-form .field-grid>p{grid-column:1/-1}
+html[data-theme] .sensor-usb-dialog details{padding:12px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised)}
+html[data-theme] .sensor-usb-dialog details summary{cursor:pointer;font-weight:700;color:var(--tk-text)}
+html[data-theme] .sensor-usb-dialog details[open] summary{margin-bottom:10px}
+html[data-theme] .sensor-usb-dialog details>label{margin-block:10px}
+html[data-theme] #usb-status:not(:empty){padding:10px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised);overflow-wrap:anywhere}
+.tk-empty-state{margin:0 0 14px;padding:24px;display:grid;justify-items:start;gap:10px}
+.tk-empty-state h3{margin:0;font-size:16px;color:var(--tk-text)}
+.tk-empty-state p{color:var(--tk-muted);font-size:13px}
+#readings-empty{margin:0;border-top:1px solid var(--tk-line)}
+#tk-sensor-empty{border-style:dashed}
+html[data-theme] .sensor-presentation{padding:10px 12px;border:1px solid var(--tk-line);border-radius:9px;background:var(--tk-panel)}
+html[data-theme] .sensor-presentation label{font-size:13px;color:var(--tk-muted)}
+html[data-theme] #sensor-detail>details{border-color:var(--tk-line)}
+html[data-theme] .sensor-sync-times dd{overflow-wrap:anywhere}
+html[data-theme] .sensor-sync-times{grid-template-columns:minmax(0,1fr) minmax(0,auto)}
+html[data-theme] .sensor-firmware-panel #sensor-bundled-status{color:var(--tk-muted)}
+html[data-theme] .sensor-firmware-panel #sensor-firmware-downloads a{border:1px solid var(--tk-line)}
+@media(max-width:900px){
+  html[data-theme] .settings-picker{padding:12px;background:var(--tk-panel);border:1px solid var(--tk-line);border-radius:9px}
+}
+@media(max-width:700px){
+  html[data-theme] .heading>.heading-actions{width:100%}
+  html[data-theme] .heading>.heading-actions .btn{flex:1 1 120px}
+  html[data-theme] .dialog-form .field-grid{grid-template-columns:minmax(0,1fr)}
+  html[data-theme] .dialog-actions .btn{flex:1 1 100px}
+  html[data-theme] .max-staff-toolbar input[type=search]{min-width:0}
+  html[data-theme] .settings-pane .settings-panel{padding:16px}
+  .tk-empty-state{padding:18px}
+}
+@media(max-width:360px){
+  html[data-theme] .report-kpis{grid-template-columns:minmax(0,1fr)}
+  html[data-theme] .sensor-presentation select{width:100%}
+}

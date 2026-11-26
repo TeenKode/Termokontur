@@ -207,12 +207,12 @@
           <div class="panel-heading"><div><h2>Последние измерения</h2><p id="reading-chart-hint">Выберите помещение, чтобы увидеть его график.</p></div><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
           <div class="chart-container" id="reading-chart-panel" hidden><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График температуры выбранного помещения"></canvas></div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Журнал измерений"><table class="readings-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Дата и время</th><th scope="col">Источник</th><th scope="col">Автор</th><th scope="col">История</th></tr></thead><tbody id="readings-table"></tbody></table></div>
-          <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
+          <div id="readings-empty" class="tk-empty-state" hidden><h3>Показаний пока нет</h3><p>Они появятся после ручного ввода, сообщения в MAX или передачи с датчика.</p><button type="button" id="tk-empty-reading" class="btn secondary">Добавить измерение</button></div>
         </div>
       </section>
 
       <section id="view-sensors" class="view" hidden>
-        <div class="heading"><h1>Автономные датчики</h1><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-defaults-open" class="btn secondary" type="button">Настройки по умолчанию</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
+        <div class="heading"><div><h1>Автономные датчики</h1><p>Измерения, связь, питание и обновления ESP32-C3.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-defaults-open" class="btn secondary" type="button">Настройки по умолчанию</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
         <p id="sensor-state" role="status" aria-live="polite"></p>
         <div class="panel sensor-firmware-panel">
           <div class="sensor-firmware-heading">
@@ -237,6 +237,7 @@
         <div id="tk-sensor-workspace" class="tk-sensor-workspace"><div class="tk-sensor-list">
         <div class="sensor-presentation"><input id="tk-sensor-search" type="search" placeholder="Название, помещение, ID" aria-label="Поиск активных датчиков"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
         <p id="tk-sensor-no-match" class="hint" role="status" hidden>Активные датчики по запросу не найдены.</p>
+        <div id="tk-sensor-empty" class="panel tk-empty-state" hidden><h2>Нет активных датчиков</h2><p id="tk-sensor-empty-description">Подключите первый датчик, чтобы видеть измерения и состояние связи.</p><div class="heading-actions"><button type="button" class="btn primary" id="tk-empty-usb">Подключить по USB</button><button type="button" class="btn secondary" id="tk-empty-code">Подключить по коду</button></div></div>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="tk-sensor-table" class="panel sensor-table-panel" hidden><div class="table-scroll" tabindex="0" role="region" aria-label="Таблица датчиков"><table><thead><tr><th scope="col">Датчик</th><th scope="col">Помещение</th><th scope="col">Состояние</th><th scope="col">Последний замер</th><th scope="col">Напряжение</th><th scope="col">Последняя связь</th><th scope="col">Прошивка</th><th scope="col">Действия</th></tr></thead><tbody id="tk-sensor-rows"></tbody></table></div></div>
         <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>

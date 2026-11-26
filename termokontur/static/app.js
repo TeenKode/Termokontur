@@ -775,6 +775,7 @@ $("reading-filter").addEventListener("change",()=>{
 });
 $("quick-reading").addEventListener("click",()=>openReading({building:$("building-filter").value}));
 $("add-reading").addEventListener("click",()=>openReading({room:$("reading-filter").value}));
+$("tk-empty-reading")?.addEventListener("click",()=>$("add-reading").click());
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
 onOperation($("report-filter-form"),"Формируем отчёт…",loadReport);
