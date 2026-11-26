@@ -24,27 +24,32 @@ inline std::map<int,std::vector<uint8_t>> samples;
 inline std::map<std::pair<int,int>,std::vector<uint8_t>> registers;
 inline std::vector<std::vector<uint8_t>> writes;
 inline int fail_reads = 0;
+inline bool fail_bus_init = false, fail_device_add = false;
+inline int timeout_address = -1;
 inline unsigned delay_ticks = 0;
 inline unsigned transactions = 0;
 inline std::vector<uint32_t> speeds;
 inline std::vector<bool> pullups;
 inline int stuck_pin = -1;
 inline int live_bus = 0, live_dev = 0;
-inline void clear() { samples.clear(); registers.clear(); writes.clear(); speeds.clear(); pullups.clear(); fail_reads = 0; stuck_pin = -1; delay_ticks = 0; transactions = 0; }
+inline void clear() { samples.clear(); registers.clear(); writes.clear(); speeds.clear(); pullups.clear(); fail_reads = 0; fail_bus_init = false; fail_device_add = false; timeout_address = -1; stuck_pin = -1; delay_ticks = 0; transactions = 0; }
 inline int copy(const std::vector<uint8_t> &data,uint8_t *out,size_t n) {
   if (data.size()<n) return -1;
   memcpy(out,data.data(),n); return ESP_OK;
 }
 }
 inline int i2c_new_master_bus(const i2c_master_bus_config_t *c,i2c_master_bus_handle_t *h) {
+  if (mock::fail_bus_init) return ESP_ERR_TIMEOUT;
   *h=new i2c_master_bus_config_t(*c); ++mock::live_bus; mock::pullups.push_back(c->flags.enable_internal_pullup); return ESP_OK;
 }
 inline int i2c_del_master_bus(i2c_master_bus_handle_t h) { delete h; --mock::live_bus; return ESP_OK; }
 inline int i2c_master_bus_add_device(i2c_master_bus_handle_t,const i2c_device_config_t *c,i2c_master_dev_handle_t *h) {
+  if (mock::fail_device_add) return ESP_ERR_TIMEOUT;
   *h=new i2c_device_config_t(*c); ++mock::live_dev; mock::speeds.push_back(c->scl_speed_hz); return ESP_OK;
 }
 inline int i2c_master_bus_rm_device(i2c_master_dev_handle_t h) { delete h; --mock::live_dev; return ESP_OK; }
 inline int i2c_master_probe(i2c_master_bus_handle_t,uint16_t a,int) {
+  if (a == mock::timeout_address) return ESP_ERR_TIMEOUT;
   return mock::samples.count(a) || mock::registers.count({a,0xd0}) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 inline int i2c_master_transmit(i2c_master_dev_handle_t h,const uint8_t *b,size_t n,int) {
