@@ -166,7 +166,7 @@ def test_update_endpoint_is_protected_and_unsupported(admin):
 
 
 def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_path):
-    from termokontur import updates, db
+    from termokontur import __version__, updates, db
     systemd_path = tmp_path / "termokontur-update.path"
     systemd_path.write_text("[Path]\nPathExists=/var/lib/termokontur/update-request\n")
     monkeypatch.setattr(updates, "SYSTEMD_PATH", systemd_path)
@@ -176,6 +176,8 @@ def test_native_update_request_without_root_commands(admin, monkeypatch, tmp_pat
     assert current["installed_revision"] == "a"*40
 
     class FakeGitHubResponse:
+        text = f"__version__ = {__version__!r}"
+
         def raise_for_status(self):
             pass
         def json(self):
@@ -238,11 +240,12 @@ def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path
     monkeypatch.setattr(updates, "SYSTEMD_PATH", unit)
     (db.db_path().parent / "installed-revision").write_text("a" * 40 + "\n")
     requested_urls = []
+    remote_version = f"{int(__version__.split('.')[0]) + 1}.2.0"
 
     class Response:
         def __init__(self, url):
             self.url = url
-            self.text = '__version__ = "0.2.0"\n'
+            self.text = f'__version__ = "{remote_version}"\n'
         def raise_for_status(self):
             pass
         def json(self):
@@ -256,7 +259,7 @@ def test_remote_version_is_pinned_to_checked_commit(admin, monkeypatch, tmp_path
     result = admin.get("/api/update/check").json()
     assert result["version"] == __version__
     assert result["available"] is True
-    assert result["latest_version"] == "0.2.0"
+    assert result["latest_version"] == remote_version
     assert result["latest_revision"] == "b" * 40
     assert requested_urls == [
         updates.GITHUB_HEAD, updates.GITHUB_VERSION.format(sha="b" * 40)

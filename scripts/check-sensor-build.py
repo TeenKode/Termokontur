@@ -9,6 +9,9 @@ config=(folder/'sdkconfig.esp32-c3-supermini').read_text()
 assert 'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' in config
 assert 'CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT=y' in config
 assert 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y' in config
+assert 'CONFIG_ESP_CONSOLE_UART_DEFAULT=y' in config
+assert 'CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200' in config
+assert 'CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y' in config
 assert '# CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS is not set' in config
 image=(folder/'.pio/build/esp32-c3-supermini/firmware.bin').read_bytes()
 assert 256<=len(image)<=0x1c0000

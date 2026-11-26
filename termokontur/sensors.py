@@ -226,6 +226,7 @@ def public_device(d):
     for key in ("token_hash", "enrollment_hash", "restore_pending"):
         d.pop(key, None)
     d["config"] = json.loads(d["config"])
+    d["sync_incomplete"] = bool(d["sync_incomplete"])
     if d["model"] != MODEL:
         return {**d, "enabled": 0, "next_sync_at": None, "status": "retired"}
     if d.get("identity_state") in ("pending", "rejected"):
@@ -235,7 +236,8 @@ def public_device(d):
     d["status"] = ("disabled" if not d["enabled"] or not d["config"]["enabled"]
                    else "not_enrolled" if not d["hardware_id"]
                    else "stale" if time.time() > deadline else "waiting" if not d["last_seen"]
-                   else "low_battery" if sensor_monitor.battery_warning(d) else "recent")
+                   else "low_battery" if sensor_monitor.battery_warning(d)
+                   else "sync_incomplete" if d["sync_incomplete"] else "recent")
     return d
 
 
@@ -419,13 +421,15 @@ def router(require_admin):
                 lost_confirmed += gap
                 ack = payload.next_seq
             restore_pending = int(bool(d["restore_pending"] and ack == initial_ack))
+            complete = ack == payload.next_seq
             conn.execute("""UPDATE sensor_devices SET last_seen=?,firmware=?,battery_mv=?,rssi=?,boots=?,lost=?,
                          ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,
-                         restore_pending=?,last_complete_sync=CASE WHEN ? THEN ? ELSE last_complete_sync END,
+                         restore_pending=?,sync_incomplete=?,
+                         last_complete_sync=CASE WHEN ? THEN ? ELSE last_complete_sync END,
                          enrollment_hash=NULL WHERE id=?""",
                          (now, payload.firmware, payload.battery_mv, payload.rssi, payload.boots, payload.lost,
                           ack, payload.config_version, lost_confirmed, payload.ota_failures, payload.error,
-                          restore_pending, ack == payload.next_seq, now, device))
+                          restore_pending, not complete, complete, now, device))
             if payload.error:
                 event(conn, device, "device_error", payload.error)
             conn.execute("""INSERT INTO sensor_mqtt_outbox(device_id) VALUES(?) ON CONFLICT(device_id)

@@ -1,7 +1,33 @@
 #include "policy.hpp"
+#include "serial_console.hpp"
 #include <cassert>
 #include <iostream>
+#include <utility>
+#include <vector>
+
+static void test_serial_lines() {
+  sensor::serial::LineBuffer lines;
+  std::vector<std::pair<std::string, bool>> received;
+  const auto collect = [&](const std::string &line, bool overflow) {
+    received.emplace_back(line, overflow);
+  };
+  const std::string first = "\nhelp\r\nsta";
+  lines.feed(first.data(), first.size(), collect);
+  const std::string second = "tuz\bs\n";
+  lines.feed(second.data(), second.size(), collect);
+  const std::string too_long(sensor::serial::max_frame_size + 1, 'x');
+  lines.feed(too_long.data(), too_long.size(), collect);
+  const char reset[] = "\rclock\n";
+  lines.feed(reset, sizeof reset - 1, collect);
+  assert(received.size() == 4);
+  assert(received[0].first == "help" && !received[0].second);
+  assert(received[1].first == "status" && !received[1].second);
+  assert(received[2].second);
+  assert(received[3].first == "clock" && !received[3].second);
+}
+
 int main() {
+  test_serial_lines();
   // A USB disconnect after 5 seconds of a planned 1800-second sleep must
   // start a full cooling interval; repeated early wakes must not skip it.
   uint64_t elapsed = 100;

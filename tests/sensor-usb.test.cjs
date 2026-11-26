@@ -17,6 +17,21 @@ test('USB errors and timeout do not report successful configuration',async()=>{
  const {SensorSerial}=await module_();let p=port((req,send)=>send({id:req.id,error:'write failed'}));let s=new SensorSerial(p,20);await s.open();await assert.rejects(s.request('configure'),/write failed/);await s.close();
  p=port(()=>{});s=new SensorSerial(p,20);await s.open();await assert.rejects(s.request('hello'),/Нет ответа платы/);await s.close();
 });
+test('COM console preserves command arguments and rejects malformed frames', async()=>{
+ const {parseSerialCommand,SensorSerial}=await module_();
+ assert.deepEqual(parseSerialCommand('  help '),{name:'help',args:{}});
+ const request=parseSerialCommand('journal {"from_seq":31,"limit":8}');
+ const serial=new SensorSerial(port((req,send)=>{
+   assert.equal(req.cmd,'journal');assert.equal(req.from_seq,31);assert.equal(req.limit,8);
+   send({id:req.id,records:[]});
+ }),100);
+ await serial.open();
+ try {assert.deepEqual((await serial.request(request.name,request.args)).records,[]);}
+ finally {await serial.close();}
+ assert.throws(()=>parseSerialCommand('journal []'),/JSON-объект/);
+ assert.throws(()=>parseSerialCommand('journal {'),/JSON-объект/);
+ assert.throws(()=>parseSerialCommand(''),/Введите команду/);
+});
 test('USB identity rejects fingerprint substitution and a different physical board',async()=>{
  const {verifyIdentity}=await module_();const key=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);const bytes=new Uint8Array(await crypto.subtle.exportKey('raw',key.publicKey));
  const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)));

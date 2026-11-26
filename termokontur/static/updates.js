@@ -37,9 +37,10 @@ function renderUpdateStatus(r){
   $("settings-summary-build").textContent=r.installed_revision?"Сборка "+r.installed_revision.slice(0,12):"Сборка неизвестна";
   $("update-current-build").textContent=r.installed_revision?"Сборка "+r.installed_revision.slice(0,12):"Номер сборки неизвестен";
   if(updateLatestRevision){
-    $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Сборка GitHub";
-    $("update-latest-build").textContent=updateLatestRevision.slice(0,12)+
-      (updateAvailable?" · доступна новая сборка":" · установлена");
+    const note=updateLatestRevision===r.installed_revision?"установлена":
+      updateAvailable?"доступна новая сборка":updateLatestVersion?"более ранняя версия":"";
+    $("update-latest-version").textContent=updateLatestVersion?"v"+updateLatestVersion:"Версия не определена";
+    $("update-latest-build").textContent=updateLatestRevision.slice(0,12)+(note?" · "+note:"");
   }else{
     $("update-latest-version").textContent="Не проверено";
     $("update-latest-build").textContent="Проверьте наличие обновлений";

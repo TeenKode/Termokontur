@@ -2,7 +2,7 @@
 let sensorDevices=[],sensorSelected=null,sensorRecords=[],sensorConfig=null,sensorLoadId=0,sensorRefreshId=0;
 const sensorPageSize=100;
 const sensorFirmwareBase="/api/sensors/firmware/bundled";
-const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив",rejected:"Доступ отклонён",authorization_pending:"Требуется разрешение"};
+const sensorStatus={not_enrolled:"Ожидает настройки",waiting:"Ожидает первых данных",recent:"Данные получены",sync_incomplete:"Выгрузка не завершена",stale:"Давно нет связи",low_battery:"Низкое напряжение аккумулятора",disabled:"Подключение отключено",retired:"Архив",rejected:"Доступ отклонён",authorization_pending:"Требуется разрешение"};
 const sensorTime={unknown:"Дата неизвестна",sntp:"Сервер времени",server:"Сервер",rtc:"Часы устройства"};
 const sensorConfigFields=[
   ["measure_s","Интервал измерений, с",1,604800],["send_s","Интервал передачи, с",1,604800],
@@ -27,6 +27,16 @@ function readSensorConfig(form,base,enabled){
   return config;
 }
 function sensorWhen(epoch){return epoch?when(new Date(epoch*1000).toISOString()):"—";}
+function sensorStatusText(device){
+  const status=sensorStatus[device.status]||device.status;
+  return device.sync_incomplete&&["stale","low_battery"].includes(device.status)
+    ?status+" · "+sensorStatus.sync_incomplete:status;
+}
+function renderSensorSyncTimes(target,device){
+  target.replaceChildren(
+    el("dt","","Последняя связь"),el("dd","",sensorWhen(device.last_seen)),
+    el("dt","","Полная выгрузка"),el("dd","",sensorWhen(device.last_complete_sync)));
+}
 function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";onOperation(b,"Загружаем карточку датчика…",action);return b;}
 function sensorRoomOptions(select,chosen){select.replaceChildren();for(const r of rooms)option(select,String(r.id),r.building+" · "+r.name);select.value=String(chosen||rooms[0]?.id||"");}
 async function refreshSensors(){
@@ -46,12 +56,13 @@ async function refreshSensors(){
     $("sensor-archive-title").textContent="Архив и отключённые ("+archivedDevices.length+")";
     for(const d of devices){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
-      card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatus[d.status]||d.status),
-        el("p","",(d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно")+" · "+sensorWhen(d.last_seen)),
+      const times=el("dl","sensor-sync-times");renderSensorSyncTimes(times,d);
+      card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatusText(d)),
+        times,el("p","",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно"),
         sensorButton("Открыть",()=>openSensor(d.id,true)));(archived(d)?archive:cards).append(card);
       if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
     }
-    $("sensor-state").textContent=activeDevices.length?"Датчиков: "+activeDevices.length+". Указано состояние последнего подключения.":archivedDevices.length?"Нет активных датчиков. История доступна в архиве.":"Подключите первый датчик по USB или по коду.";
+    $("sensor-state").textContent=activeDevices.length?"Датчиков: "+activeDevices.length:archivedDevices.length?"Нет активных датчиков. История доступна в архиве.":"Подключите первый датчик по USB или по коду.";
     // Do not overwrite a partially edited MQTT form during refresh.
     if($("sensor-mqtt-form").dataset.dirty!=="true"){
       $("sensor-mqtt-enabled").checked=mqtt.enabled;$("sensor-mqtt-host").value=mqtt.host;$("sensor-mqtt-port").value=mqtt.port;
@@ -69,7 +80,8 @@ async function openSensor(id,reveal=false){
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
     $("sensor-detail").hidden=false;$("sensor-title").textContent=d.name;
     const retired=d.status==="retired";
-    $("sensor-detail-state").textContent=sensorStatus[d.status]+" · "+d.id+" · "+(retired?"Поддержка модели завершена":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    $("sensor-detail-state").textContent=sensorStatusText(d)+" · "+d.id+" · "+(retired?"Поддержка модели завершена":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
+    renderSensorSyncTimes($("sensor-sync-times"),d);
     for(const id of ["sensor-device-form","sensor-config-details","sensor-ota-details"])$(id).hidden=retired;
     $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);

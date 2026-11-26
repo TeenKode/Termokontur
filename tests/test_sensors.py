@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from io import BytesIO
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
@@ -76,6 +77,33 @@ def test_usb_diagnostic_sync_accepts_missing_voltage(admin):
     with db.connect() as conn:
         rows = conn.execute("SELECT temperature,battery_mv FROM sensor_records").fetchall()
         assert [tuple(row) for row in rows] == [(21.5, 0)]
+
+
+def test_reports_partial_upload_even_in_same_second_as_complete(admin, monkeypatch):
+    device, _, headers, _ = setup_sensor(admin)
+    stamp = int(time.time())
+    monkeypatch.setattr(sensors, "time", SimpleNamespace(time=lambda: stamp))
+
+    def send(seq, next_seq):
+        reply = sync(admin, device, headers, batch([record(seq)], next_seq=next_seq))
+        assert reply.status_code == 200
+        assert reply.json()["ack_seq"] == seq + 1
+        return admin.get("/api/sensors/devices").json()[0]
+
+    first = send(1, 3)
+    assert first["status"] == "sync_incomplete"
+    assert first["last_seen"] == stamp and first["last_complete_sync"] is None
+
+    complete = send(2, 3)
+    assert complete["status"] == "recent" and complete["sync_incomplete"] is False
+    assert complete["last_complete_sync"] == stamp
+
+    partial = send(3, 5)
+    assert partial["last_seen"] == partial["last_complete_sync"] == stamp
+    assert partial["status"] == "sync_incomplete" and partial["sync_incomplete"] is True
+
+    resumed = send(4, 5)
+    assert resumed["status"] == "recent" and resumed["sync_incomplete"] is False
 
 
 def test_idempotent_history_and_conflicting_replay(admin):

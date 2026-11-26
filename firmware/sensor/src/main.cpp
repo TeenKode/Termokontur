@@ -1,9 +1,6 @@
 #include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
-#include "driver/usb_serial_jtag_vfs.h"
-#include <fcntl.h>
-#include <unistd.h>
 #include <mutex>
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
@@ -38,6 +35,7 @@
 #include "nvs_flash.h"
 #include "policy.hpp"
 #include "sensor_drivers.hpp"
+#include "serial_console.hpp"
 #include "setup_password.hpp"
 #include <algorithm>
 #include <atomic>
@@ -45,6 +43,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 #include <string>
 #include <sys/time.h>
 #include <vector>
@@ -84,6 +83,15 @@ struct Runtime {
 };
 RTC_DATA_ATTR static Runtime rt;
 static constexpr uint32_t RTC_MAGIC = 0x544b5235;
+static const char *rtc_state = "uninitialized";
+static const char *wake_source(esp_sleep_wakeup_cause_t cause) {
+  switch (cause) {
+  case ESP_SLEEP_WAKEUP_UNDEFINED: return "reset";
+  case ESP_SLEEP_WAKEUP_TIMER: return "timer";
+  case ESP_SLEEP_WAKEUP_GPIO: return "gpio";
+  default: return "other";
+  }
+}
 static int64_t wall_time_us() {
   timeval tv{};
   gettimeofday(&tv, nullptr);
@@ -241,6 +249,11 @@ static void stop_network() {
   esp_deep_sleep_enable_gpio_wakeup(1ULL << CHARGE_PIN,
                                     charger_present ? ESP_GPIO_WAKEUP_GPIO_HIGH
                                                     : ESP_GPIO_WAKEUP_GPIO_LOW);
+  printf("TK SLEEP seconds=%u uptime_s=%llu next_measure=%llu next_send=%llu charging=%d\n",
+         (unsigned)seconds, (unsigned long long)rt.uptime,
+         (unsigned long long)rt.next_measure, (unsigned long long)rt.next_send_uptime,
+         charger_present);
+  sensor::serial::flush_uart();
   esp_deep_sleep_start();
   __builtin_unreachable();
 }
@@ -329,20 +342,22 @@ static bool prepare_dns() {
   for (unsigned i = 0; i < 2 && available(); ++i) {
     addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
     addrinfo *answer = nullptr;
+    const int64_t started = esp_timer_get_time();
     const int error = getaddrinfo(host.c_str(), nullptr, &hints, &answer);
+    const auto elapsed = (long long)((esp_timer_get_time() - started) / 1000);
     if (error == 0 && answer) {
       char ip[48]{};
       if (answer->ai_family == AF_INET)
         inet_ntop(AF_INET, &reinterpret_cast<sockaddr_in *>(answer->ai_addr)->sin_addr, ip, sizeof ip);
       else if (answer->ai_family == AF_INET6)
         inet_ntop(AF_INET6, &reinterpret_cast<sockaddr_in6 *>(answer->ai_addr)->sin6_addr, ip, sizeof ip);
-      printf("DNS: %s -> %s\n", host.c_str(), ip);
+      printf("DNS: %s -> %s in %lld ms\n", host.c_str(), ip, elapsed);
       freeaddrinfo(answer);
       if (available()) return true;
       break;
     }
     if (answer) freeaddrinfo(answer);
-    printf("DNS: lookup %s failed: %d (attempt %u/2)\n", host.c_str(), error, i+1);
+    printf("DNS: lookup %s failed: %d in %lld ms (attempt %u/2)\n", host.c_str(), error, elapsed, i+1);
     if (deadline - esp_timer_get_time() < 15000000 || charging()) break;
     vTaskDelay(pdMS_TO_TICKS(250));
   }
@@ -363,8 +378,10 @@ static void log_wifi_link() {
     printf("WIFI: RSSI=%d dBm channel=%u\n", (int)ap.rssi, (unsigned)ap.primary);
 }
 static bool wifi_up() {
-  if (!start_wifi())
+  if (!start_wifi()) {
+    last_error = "wifi_unavailable";
     return false;
+  }
   wifi_config_t w{};
   memcpy(w.sta.ssid, ssid.data(), std::min(ssid.size(), sizeof w.sta.ssid));
   memcpy(w.sta.password, password.data(),
@@ -372,8 +389,10 @@ static bool wifi_up() {
   w.sta.threshold.authmode =
       password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
   esp_wifi_set_config(WIFI_IF_STA, &w);
-  if (esp_wifi_start() != ESP_OK)
+  if (esp_wifi_start() != ESP_OK) {
+    last_error = "wifi_unavailable";
     return false;
+  }
   esp_wifi_set_max_tx_power(cfg.tx_qdbm);
   if (debug_radio && esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK)
     puts("WIFI: could not disable modem sleep for USB registration/debug");
@@ -433,13 +452,13 @@ static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *di
   return esp_http_client_init(&h);
 }
 static std::string post_once(const std::string &path, const std::string &body,
-                             bool auth, bool &retryable, bool replay_safe) {
+                             bool auth, bool replay_safe, bool &retryable, std::string &failure) {
   retryable = false;
   HttpDiagnostic diagnostic;
   if (!available())
     return "";
   auto h = http(path, &diagnostic);
-  if (!h) { last_error = "https_client_init_failed"; return ""; }
+  if (!h) { failure = "https_client_init_failed"; return ""; }
   esp_http_client_set_method(h, HTTP_METHOD_POST);
   esp_http_client_set_header(h, "Content-Type", "application/json");
   std::string bearer = "Bearer " + token;
@@ -454,7 +473,9 @@ static std::string post_once(const std::string &path, const std::string &body,
   esp_err_t err = esp_http_client_open(h, body.size());
   printf("HTTPS: open %s: %s in %lld ms\n", path.c_str(), esp_err_to_name(err),
          (long long)((esp_timer_get_time() - started_us) / 1000));
+  const char *stage = "open";
   if (err == ESP_OK) {
+    stage = "request_body";
     size_t sent = 0;
     while (sent < body.size() && available()) {
       esp_http_client_set_timeout_ms(h, timeout_ms());
@@ -464,10 +485,14 @@ static std::string post_once(const std::string &path, const std::string &body,
         break;
       sent += n;
     }
-    if (sent == body.size() && available() &&
-        (esp_http_client_set_timeout_ms(h, timeout_ms()),
-         esp_http_client_fetch_headers(h)) >= 0 &&
-        esp_http_client_get_status_code(h) == 200) {
+    int64_t headers = -1;
+    if (sent == body.size() && available()) {
+      stage = "response_headers";
+      esp_http_client_set_timeout_ms(h, timeout_ms());
+      headers = esp_http_client_fetch_headers(h);
+    }
+    if (headers >= 0 && esp_http_client_get_status_code(h) == 200) {
+      stage = "response_body";
       char b[1024];
       while (available()) {
         esp_http_client_set_timeout_ms(h, timeout_ms());
@@ -498,13 +523,14 @@ static std::string post_once(const std::string &path, const std::string &body,
   if (result.empty()) {
     retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, diagnostic.verify_flags != 0);
     if (diagnostic.verify_flags) {
-      last_error = "tls_certificate_failed";
-    } else if (status > 0) {
+      failure = "tls_certificate_failed";
+    } else if (status > 0 && status != 200) {
       printf("HTTPS: %s HTTP %d\n", path.c_str(), status);
-      last_error = "http_" + std::to_string(status);
+      failure = "http_" + std::to_string(status);
     } else {
-      printf("HTTPS: %s connection/read failed: %s\n", path.c_str(), esp_err_to_name(err));
-      last_error = "https_sync_failed";
+      printf("HTTPS: %s failed at %s (open=%s, HTTP %d)\n", path.c_str(), stage,
+             esp_err_to_name(err), status);
+      failure = err == ESP_OK ? "https_response_failed" : "https_sync_failed";
     }
   }
   return result;
@@ -516,10 +542,12 @@ static std::string post(const std::string &path, const std::string &body,
   const bool replay_safe = path == "/api/sensors/bootstrap" ||
       (path.rfind("/api/sensors/devices/", 0) == 0 &&
        path.size() >= 5 && path.compare(path.size()-5, 5, "/sync") == 0);
+  std::string failure;
   for (unsigned attempt = 1; attempt <= 3 && available(); ++attempt) {
     bool retryable = false;
-    auto response = post_once(path, body, auth, retryable, replay_safe);
-    if (!response.empty() || !retryable || attempt == 3) return response;
+    auto response = post_once(path, body, auth, replay_safe, retryable, failure);
+    if (!response.empty()) return response;
+    if (!retryable || attempt == 3) break;
     const int64_t remaining = deadline - esp_timer_get_time();
     if (remaining < 2000000 || charging()) break;
     printf("HTTPS: retry %u/3 for %s, remaining=%lld ms\n", attempt+1,
@@ -531,9 +559,12 @@ static std::string post(const std::string &path, const std::string &body,
     if (!(xEventGroupGetBits(events) & 1) ||
         (attempt == 2 && deadline - esp_timer_get_time() >= 10000000)) {
       stop_network();
-      if (!wifi_up()) break;
+      if (!wifi_up()) return "";
     }
   }
+  // A transient HTTP failure belongs in the serial log, not in the status
+  // sent to the panel after a successful retry. Keep unrelated device errors.
+  if (!failure.empty()) last_error = failure;
   return "";
 }
 static uint8_t time_quality = 0;
@@ -795,6 +826,26 @@ static void ota(cJSON *meta, uint16_t mv) {
   }
   last_error = "ota_failed";
 }
+static const char *clock_quality(uint8_t quality) {
+  static const char *qualities[] = {"unknown", "sntp", "server", "rtc"};
+  return qualities[std::min((int)quality, 3)];
+}
+
+static cJSON *measurement_json(const Record &r) {
+  auto *json = cJSON_CreateObject();
+  num(json, "seq", r.seq);
+  add(json, "boot_id", hex64(r.boot));
+  num(json, "uptime_s", r.uptime);
+  if (r.quality) num(json, "measured_at", r.timestamp);
+  else cJSON_AddNullToObject(json, "measured_at");
+  add(json, "time_quality", clock_quality(r.quality));
+  add_measurement(json, r);
+  num(json, "battery_mv", r.battery);
+  num(json, "interval_s", r.interval);
+  add(json, "error", sensor_error_name(r.error));
+  return json;
+}
+
 static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
                  bool allow_ota) {
   // Reuse the trusted server time and Wi-Fi connection if already obtained.
@@ -851,21 +902,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
           last_error = "usb_sync_unsupported";
           return false;
         }
-        cJSON *x = cJSON_CreateObject();
-        num(x, "seq", r.seq);
-        add(x, "boot_id", hex64(r.boot));
-        num(x, "uptime_s", r.uptime);
-        if (r.quality)
-          num(x, "measured_at", r.timestamp);
-        else
-          cJSON_AddNullToObject(x, "measured_at");
-        static const char *qualities[] = {"unknown", "sntp", "server", "rtc"};
-        add(x, "time_quality", qualities[std::min((int)r.quality, 3)]);
-        add_measurement(x, r);
-        num(x, "battery_mv", r.battery);
-        num(x, "interval_s", r.interval);
-        add(x, "error", sensor_error_name(r.error));
-        cJSON_AddItemToArray(array, x);
+        cJSON_AddItemToArray(array, measurement_json(r));
         count++;
         max_sent = r.seq + 1;
       }
@@ -934,7 +971,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
 }
 
 static std::string setup_nonce;
-enum class SetupState { waiting, saved, boot_debug, closed };
+enum class SetupState { waiting, saved, boot_debug, restart, closed };
 static std::atomic<SetupState> setup_state{SetupState::waiting};
 static bool setup_provisioned = false;
 static esp_err_t setup_page(httpd_req_t *req) {
@@ -970,10 +1007,10 @@ static void usb_setup_wifi(cJSON *out) {
   add(out, "password", std::string(pass, strnlen(pass, sizeof wifi.ap.password)));
 }
 
-static void usb_test_measurement(cJSON *out) {
+static void serial_test_measurement(cJSON *out, bool setup_mode) {
   std::lock_guard<std::mutex> lock(provision_mutex);
-  if (setup_state != SetupState::waiting || charging()) {
-    add(out, "error", "Для пробного замера откройте режим настройки и отключите USB зарядки.");
+  if ((setup_mode && setup_state != SetupState::waiting) || charging()) {
+    add(out, "error", "Пробный замер доступен при выключенной зарядке.");
     return;
   }
   Record sample{};
@@ -1091,95 +1128,390 @@ static esp_err_t setup_save(httpd_req_t *req) {
   if (!error.empty()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, error.c_str());
   return httpd_resp_sendstr(req, "Saved");
 }
-static void usb_setup_task(void *) {
-  usb_serial_jtag_driver_config_t usb_cfg{};
-  // A configure RPC can contain an 8000-byte TLS chain. Buffer a whole frame.
-  usb_cfg.rx_buffer_size = 16384;
-  usb_cfg.tx_buffer_size = 2048;
-  const bool buffered = usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK;
-  if (buffered) usb_serial_jtag_vfs_use_driver();
-  setvbuf(stdin, nullptr, _IONBF, 0);
-  fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
-  std::string line; bool overflow = false;
-  while (setup_state == SetupState::waiting) {
-    char bytes[256];
-    int size = buffered ? usb_serial_jtag_read_bytes(bytes, sizeof bytes, pdMS_TO_TICKS(20))
-                        : read(STDIN_FILENO, bytes, sizeof bytes);
-    for (int i=0; i<size; ++i) {
-      if (bytes[i] == '\r') continue;
-      if (bytes[i] != '\n') {
-        if (line.size() < 12288 && !overflow) line += bytes[i];
-        else overflow = true;
-        continue;
-      }
-      if (!overflow && line.rfind("TKRPC ",0) == 0) {
-        auto j = cJSON_Parse(line.c_str()+6);
-        if (j) {
-          auto out = cJSON_CreateObject();
-          add(out,"id",text(j,"id"));
-          auto cmd=text(j,"cmd");
-          if (cmd == "hello") {
-            num(out,"protocol",1); add(out,"public_key",sensor::identity::public_key());
-            add(out,"fingerprint",sensor::identity::fingerprint()); add(out,"hardware_id",sensor::identity::hardware_id());
-            add(out,"firmware",firmware_version()); add(out,"sensor_type",sensor_type);
-            cJSON_AddBoolToObject(out,"pending_records",state.next != state.ack);
-            cJSON_AddBoolToObject(out,"verified_setup",true);
-            cJSON_AddBoolToObject(out,"provisioned",setup_provisioned);
-          } else if (cmd == "setup_wifi") {
-            usb_setup_wifi(out);
-          } else if (cmd == "arm_boot_debug") {
-            usb_arm_boot_debug(out);
-          } else if (cmd == "test_measurement") {
-            usb_test_measurement(out);
-          } else if (cmd == "sign") {
-            auto signature=sensor::identity::sign(text(j,"message"));
-            if (signature.empty()) add(out,"error","Не удалось подтвердить плату. Повторите подключение.");
-            else add(out,"signature",signature);
-          } else if (cmd == "configure") {
-            auto error=provision_apply(j,false);
-            if (error.empty()) {
-              cJSON_AddBoolToObject(out,"saved",true);
-              cJSON_AddBoolToObject(out,"verified",deferred_configuration);
-            } else add(out,"error",error);
-          } else if (cmd == "verify_configuration") {
-            std::lock_guard<std::mutex> lock(provision_mutex);
-            if (!deferred_configuration || charging() || !verify_saved_configuration())
-              add(out,"error","Настройки не подтверждены чтением NVS.");
-            else {
-              cJSON_AddBoolToObject(out,"verified",true);
-              add(out,"device",device); add(out,"sensor_type",sensor_type);
-              auto *c = cJSON_AddObjectToObject(out,"config");
-#define REPORT(field) num(c,#field,cfg.field)
-              REPORT(version); REPORT(measure_s); REPORT(send_s); REPORT(cool_s);
-              REPORT(wifi_budget_s); REPORT(wifi_min_mv); REPORT(cutoff_mv);
-              REPORT(ota_min_mv); REPORT(tx_qdbm); REPORT(adc_scale_ppm);
+enum class Command {
+  help, hello, status, config, power, clock, journal, network, ota_status,
+  test_measurement, hold, resume, sample_now, sync_now, sleep, reboot,
+  setup_wifi, arm_boot_debug, sign, configure, verify_configuration, finish_setup,
+};
+enum class CommandMode { either, setup, wake };
+struct CommandSpec {
+  const char *name;
+  Command command;
+  CommandMode mode = CommandMode::either;
+};
+static constexpr CommandSpec commands[] = {
+    {"help", Command::help}, {"hello", Command::hello}, {"status", Command::status},
+    {"config", Command::config}, {"power", Command::power}, {"clock", Command::clock},
+    {"journal", Command::journal}, {"network", Command::network},
+    {"ota_status", Command::ota_status}, {"test_measurement", Command::test_measurement},
+    {"hold", Command::hold, CommandMode::wake}, {"resume", Command::resume, CommandMode::wake},
+    {"sample_now", Command::sample_now, CommandMode::wake},
+    {"sync_now", Command::sync_now, CommandMode::wake},
+    {"sleep", Command::sleep, CommandMode::wake}, {"reboot", Command::reboot},
+    {"setup_wifi", Command::setup_wifi, CommandMode::setup},
+    {"arm_boot_debug", Command::arm_boot_debug, CommandMode::setup},
+    {"sign", Command::sign, CommandMode::setup},
+    {"configure", Command::configure, CommandMode::setup},
+    {"verify_configuration", Command::verify_configuration, CommandMode::setup},
+    {"finish_setup", Command::finish_setup, CommandMode::setup},
+};
+enum class ConsoleAction { none, resume, sample, sync, sleep, reboot };
+struct ConsoleSession {
+  bool setup = false;
+  sensor::Journal *journal = nullptr;
+  uint16_t battery = 0;
+  bool wifi_allowed = false;
+  int64_t until_us = 0;
+  ConsoleAction action = ConsoleAction::none;
+  uint32_t sleep_seconds = 0;
+  bool sync_after_sample = false;
+  bool held = false;
+};
+
+static void report_config(cJSON *config) {
+#define REPORT(field) num(config, #field, cfg.field)
+  REPORT(version); REPORT(measure_s); REPORT(send_s); REPORT(cool_s);
+  REPORT(wifi_budget_s); REPORT(wifi_min_mv); REPORT(cutoff_mv);
+  REPORT(ota_min_mv); REPORT(tx_qdbm); REPORT(adc_scale_ppm);
 #undef REPORT
-              cJSON_AddBoolToObject(c,"enabled",cfg.enabled);
-            }
-          } else if (cmd == "finish_setup") {
-            std::lock_guard<std::mutex> lock(provision_mutex);
-            if (!deferred_configuration || charging() || device.empty() || !verify_saved_configuration())
-              add(out,"error","Нельзя завершить настройку без проверенных параметров и ID датчика.");
-            else {
-              cJSON_AddBoolToObject(out,"finished",true);
-              setup_state = SetupState::saved;
-            }
-          } else add(out,"error","Команда не поддерживается. Проверьте версию прошивки.");
-          auto response=stringify(out); cJSON_Delete(out); cJSON_Delete(j);
-          const std::string frame = "\nTKRPC " + response + "\n";
-          if (buffered) {
-            usb_serial_jtag_write_bytes(frame.data(), frame.size(), pdMS_TO_TICKS(500));
-          }
-          else {
-            printf("%s", frame.c_str()); fflush(stdout);
-          }
-        }
-      }
-      line.clear(); overflow=false;
+  cJSON_AddBoolToObject(config, "enabled", cfg.enabled);
+}
+
+static bool command_available(const CommandSpec &spec, const ConsoleSession &session) {
+  return spec.mode == CommandMode::either ||
+         (session.setup ? spec.mode == CommandMode::setup : spec.mode == CommandMode::wake);
+}
+
+static bool integer_option(cJSON *request, const char *key, uint64_t min, uint64_t max,
+                           uint64_t fallback, uint64_t &result) {
+  const auto *item = cJSON_GetObjectItemCaseSensitive(request, key);
+  if (!item) { result = fallback; return true; }
+  if (!cJSON_IsNumber(item)) return false;
+  const double n = item->valuedouble;
+  if (!std::isfinite(n) || n < min || n > max || std::floor(n) != n) return false;
+  result = static_cast<uint64_t>(n);
+  return true;
+}
+
+static void report_records(cJSON *out, sensor::Journal &journal, uint64_t from, size_t limit) {
+  const auto &entries = journal.entries();
+  auto it = from ? std::lower_bound(entries.begin(), entries.end(), from,
+                    [](const auto &entry, uint64_t seq) { return entry.seq < seq; })
+                 : entries.end() - std::min(limit, entries.size());
+  auto *records = cJSON_AddArrayToObject(out, "records");
+  for (size_t n = 0; it != entries.end() && n < limit; ++it, ++n) {
+    Record record;
+    if (!journal.read(*it, record)) { add(out, "error", "journal_read_failed"); return; }
+    cJSON_AddItemToArray(records, measurement_json(record));
+  }
+  num(out, "stored_records", entries.size());
+  num(out, "next_seq", state.next);
+  num(out, "ack_seq", state.ack);
+  num(out, "lost", state.lost_base + journal.missing(state.ack, state.next));
+  if (it != entries.end()) num(out, "next_from_seq", it->seq);
+  else cJSON_AddNullToObject(out, "next_from_seq");
+}
+
+static void report_journal(cJSON *out, cJSON *request, sensor::Journal *journal) {
+  uint64_t from, limit;
+  if (!integer_option(request, "from_seq", 1, 9007199254740000ULL, 0, from) ||
+      !integer_option(request, "limit", 1, 16, 8, limit)) {
+    add(out, "error", "journal: from_seq >= 1, limit = 1..16");
+  } else if (charging()) {
+    add(out, "error", "charging");
+  } else if (journal) {
+    report_records(out, *journal, from, limit);
+  } else {
+    const auto *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, static_cast<esp_partition_subtype_t>(0x40), "datalog");
+    if (!part) { add(out, "error", "journal_unavailable"); return; }
+    PartitionFlash flash(part);
+    sensor::Journal snapshot(flash);
+    if (!snapshot.scan()) { add(out, "error", "journal_read_failed"); return; }
+    report_records(out, snapshot, from, limit);
+  }
+}
+
+static void report_status(cJSON *out, const ConsoleSession &session) {
+  add(out, "firmware", firmware_version());
+  add(out, "sensor_type", sensor_type);
+  add(out, "mode", session.setup ? "setup" : "wake");
+  add(out, "boot_id", hex64(rt.boot));
+  const auto cause = esp_sleep_get_wakeup_cause();
+  add(out, "wake_source", wake_source(cause));
+  num(out, "wake_cause", cause);
+  num(out, "reset_reason", esp_reset_reason());
+  add(out, "rtc_state", rtc_state);
+  num(out, "uptime_s", uptime_now());
+  num(out, "next_measure_uptime", rt.next_measure);
+  num(out, "next_send_uptime", rt.next_send_uptime);
+  num(out, "cool_until_uptime", rt.cool_until);
+  num(out, "send_failures", rt.failures);
+  num(out, "config_version", cfg.version);
+  num(out, "boots", state.boots);
+  num(out, "next_seq", state.next);
+  num(out, "ack_seq", state.ack);
+  add(out, "last_error", last_error);
+}
+
+static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
+                           ConsoleSession &session) {
+  switch (spec.command) {
+  case Command::help: {
+    auto *available = cJSON_AddArrayToObject(out, "commands");
+    auto *setup = cJSON_AddArrayToObject(out, "setup_only");
+    auto *wake = cJSON_AddArrayToObject(out, "wake_only");
+    for (const auto &item : commands) {
+      if (command_available(item, session)) cJSON_AddItemToArray(available, cJSON_CreateString(item.name));
+      if (item.mode == CommandMode::setup) cJSON_AddItemToArray(setup, cJSON_CreateString(item.name));
+      if (item.mode == CommandMode::wake) cJSON_AddItemToArray(wake, cJSON_CreateString(item.name));
     }
-    if (size <= 0) vTaskDelay(pdMS_TO_TICKS(10));
+    add(out, "syntax", "command, command {\"key\":value}, or TKRPC {\"id\":\"...\",\"cmd\":\"...\"}");
+    add(out, "mode", session.setup ? "setup" : "wake");
+    break;
+  }
+  case Command::hello: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    num(out, "protocol", 1);
+    add(out, "public_key", sensor::identity::public_key());
+    add(out, "fingerprint", sensor::identity::fingerprint());
+    add(out, "hardware_id", sensor::identity::hardware_id());
+    add(out, "firmware", firmware_version());
+    add(out, "sensor_type", sensor_type);
+    cJSON_AddBoolToObject(out, "pending_records", state.next != state.ack);
+    cJSON_AddBoolToObject(out, "verified_setup", session.setup);
+    cJSON_AddBoolToObject(out, "provisioned", session.setup ? setup_provisioned : !ssid.empty());
+    break;
+  }
+  case Command::status: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    report_status(out, session);
+    break;
+  }
+  case Command::config: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    report_config(cJSON_AddObjectToObject(out, "config"));
+    break;
+  }
+  case Command::power: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    const auto mv = session.setup ? battery_mv() : session.battery;
+    num(out, "battery_mv", mv);
+    cJSON_AddBoolToObject(out, "charging", charging());
+    cJSON_AddBoolToObject(out, "usb_connected", usb_serial_jtag_is_connected());
+    cJSON_AddBoolToObject(out, "battery_wifi_allowed", sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv));
+    num(out, "cutoff_mv", cfg.cutoff_mv);
+    num(out, "wifi_min_mv", cfg.wifi_min_mv);
+    num(out, "ota_min_mv", cfg.ota_min_mv);
+    break;
+  }
+  case Command::clock: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    add(out, "time_quality", clock_quality(time_quality));
+    if (time_quality) num(out, "epoch", time(nullptr));
+    else cJSON_AddNullToObject(out, "epoch");
+    num(out, "uptime_s", uptime_now());
+    break;
+  }
+  case Command::journal: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    report_journal(out, request, session.journal);
+    break;
+  }
+  case Command::network: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    cJSON_AddBoolToObject(out, "wifi_configured", !ssid.empty());
+    cJSON_AddBoolToObject(out, "server_configured", !server.empty());
+    cJSON_AddBoolToObject(out, "dns_override", !dns_primary.empty() || !dns_secondary.empty());
+    cJSON_AddBoolToObject(out, "radio_on", net_started);
+    wifi_ap_record_t ap{};
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) num(out, "rssi", ap.rssi);
+    add(out, "last_error", last_error);
+    break;
+  }
+  case Command::ota_status: {
+    const auto *running = esp_ota_get_running_partition();
+    const auto *selected = esp_ota_get_boot_partition();
+    esp_ota_img_states_t image{};
+    if (running) add(out, "running_partition", running->label);
+    if (selected) add(out, "boot_partition", selected->label);
+    if (running && esp_ota_get_state_partition(running, &image) == ESP_OK)
+      num(out, "image_state", image);
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    num(out, "ota_failures", state.ota_failures);
+    num(out, "ota_generation", state.ota_generation);
+    break;
+  }
+  case Command::test_measurement:
+    serial_test_measurement(out, session.setup);
+    break;
+  case Command::hold: {
+    uint64_t seconds;
+    if (!integer_option(request, "seconds", 1, 300, 60, seconds)) {
+      add(out, "error", "hold: seconds = 1..300");
+      break;
+    }
+    session.until_us = esp_timer_get_time() + static_cast<int64_t>(seconds) * 1000000;
+    session.held = true;
+    num(out, "awake_seconds", seconds);
+    break;
+  }
+  case Command::resume:
+    session.action = ConsoleAction::resume;
+    break;
+  case Command::sample_now: {
+    const auto *send = cJSON_GetObjectItemCaseSensitive(request, "sync");
+    if (send && !cJSON_IsBool(send)) add(out, "error", "sample_now: sync must be true or false");
+    else if (!cfg.enabled) add(out, "error", "measurements_disabled");
+    else if (cJSON_IsTrue(send) && !session.wifi_allowed) add(out, "error", "wifi_below_battery_threshold");
+    else {
+      session.sync_after_sample = cJSON_IsTrue(send);
+      session.action = ConsoleAction::sample;
+    }
+    break;
+  }
+  case Command::sync_now:
+    if (session.wifi_allowed) session.action = ConsoleAction::sync;
+    else add(out, "error", "wifi_below_battery_threshold");
+    break;
+  case Command::sleep: {
+    uint64_t seconds;
+    if (!integer_option(request, "seconds", 1, 604800, cfg.measure_s, seconds)) {
+      add(out, "error", "sleep: seconds = 1..604800");
+      break;
+    }
+    session.sleep_seconds = static_cast<uint32_t>(seconds);
+    session.action = ConsoleAction::sleep;
+    num(out, "sleep_seconds", seconds);
+    break;
+  }
+  case Command::reboot:
+    session.action = ConsoleAction::reboot;
+    break;
+  case Command::setup_wifi:
+    usb_setup_wifi(out);
+    break;
+  case Command::arm_boot_debug:
+    usb_arm_boot_debug(out);
+    break;
+  case Command::sign: {
+    const auto signature = sensor::identity::sign(text(request, "message"));
+    if (signature.empty()) add(out, "error", "Не удалось подтвердить плату. Повторите подключение.");
+    else add(out, "signature", signature);
+    break;
+  }
+  case Command::configure: {
+    const auto error = provision_apply(request, false);
+    if (error.empty()) {
+      cJSON_AddBoolToObject(out, "saved", true);
+      cJSON_AddBoolToObject(out, "verified", deferred_configuration);
+    } else add(out, "error", error);
+    break;
+  }
+  case Command::verify_configuration: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    if (!deferred_configuration || charging() || !verify_saved_configuration())
+      add(out, "error", "Настройки не подтверждены чтением NVS.");
+    else {
+      cJSON_AddBoolToObject(out, "verified", true);
+      add(out, "device", device);
+      add(out, "sensor_type", sensor_type);
+      report_config(cJSON_AddObjectToObject(out, "config"));
+    }
+    break;
+  }
+  case Command::finish_setup: {
+    std::lock_guard<std::mutex> lock(provision_mutex);
+    if (!deferred_configuration || charging() || device.empty() || !verify_saved_configuration())
+      add(out, "error", "Нельзя завершить настройку без проверенных параметров и ID датчика.");
+    else {
+      cJSON_AddBoolToObject(out, "finished", true);
+      setup_state = SetupState::saved;
+    }
+    break;
+  }
+  }
+}
+
+static void serial_request(sensor::serial::Port port, const std::string &line,
+                           bool overflow, void *context) {
+  auto &session = *static_cast<ConsoleSession *>(context);
+  auto *out = cJSON_CreateObject();
+  if (!out) return;
+  cJSON *request = nullptr;
+  if (overflow) {
+    add(out, "error", "serial_frame_too_large_or_invalid");
+  } else {
+    const auto start = line.find_first_not_of(" \t");
+    if (start == std::string::npos) { cJSON_Delete(out); return; }
+    std::string name;
+    if (line.compare(start, 6, "TKRPC ") == 0) {
+      request = cJSON_ParseWithOpts(line.c_str() + start + 6, nullptr, true);
+      name = text(request, "cmd");
+    } else {
+      const auto end = line.find_first_of(" \t", start);
+      name = line.substr(start, end == std::string::npos ? end : end - start);
+      const auto args = end == std::string::npos ? end : line.find_first_not_of(" \t", end);
+      request = args == std::string::npos ? cJSON_CreateObject()
+                                        : cJSON_ParseWithOpts(line.c_str() + args, nullptr, true);
+    }
+    add(out, "id", text(request, "id"));
+    const auto spec = std::find_if(std::begin(commands), std::end(commands),
+                                  [&](const auto &item) { return name == item.name; });
+    if (!cJSON_IsObject(request) || name.empty()) add(out, "error", "invalid_serial_command");
+    else if (spec == std::end(commands)) add(out, "error", "Команда не поддерживается. Используйте help.");
+    else if (!command_available(*spec, session)) add(out, "error", "Команда недоступна в текущем режиме. Используйте help.");
+    else if (session.action != ConsoleAction::none ||
+             (session.setup && setup_state != SetupState::waiting)) add(out, "error", "console_closing");
+    else if (charging()) add(out, "error", "charging");
+    else serial_command(*spec, request, out, session);
+  }
+  cJSON_AddBoolToObject(out, "ok", !cJSON_HasObjectItem(out, "error"));
+  const std::string frame = "\nTKRPC " + stringify(out) + "\n";
+  cJSON_Delete(out);
+  cJSON_Delete(request);
+  sensor::serial::reply(port, frame);
+}
+
+static void setup_serial_task(void *) {
+  using sensor::serial::Port;
+  sensor::serial::init_uart();
+  sensor::serial::init_usb();
+  ConsoleSession session{true};
+  while (setup_state == SetupState::waiting) {
+    const int usb = sensor::serial::poll(Port::usb, 10, serial_request, &session);
+    const int uart = sensor::serial::poll(Port::uart, 0, serial_request, &session);
+    if (session.action == ConsoleAction::reboot) {
+      sensor::serial::flush_uart();
+      vTaskDelay(pdMS_TO_TICKS(100));
+      std::lock_guard<std::mutex> lock(provision_mutex);
+      if (setup_state == SetupState::waiting) setup_state = SetupState::restart;
+      break;
+    }
+    if (uart <= 0 && usb <= 0) vTaskDelay(pdMS_TO_TICKS(10));
   }
   vTaskDelete(nullptr);
+}
+
+static ConsoleSession wake_serial_window(sensor::Journal &journal, uint16_t mv, bool wifi_allowed) {
+  using sensor::serial::Port;
+  const bool uart = sensor::serial::init_uart();
+  const bool usb = usb_serial_jtag_is_connected();
+  ConsoleSession session{false, &journal, mv, wifi_allowed};
+  if (!uart && !usb) { puts("TK COM UART0 unavailable"); return session; }
+  if (usb) sensor::serial::init_usb();
+  constexpr uint32_t window_ms = 350;
+  printf("TK READY uart0=%d usb=%d window_ms=%u\n", uart, usb, (unsigned)window_ms);
+  sensor::serial::flush_uart();
+  session.until_us = esp_timer_get_time() + window_ms * 1000;
+  while (session.action == ConsoleAction::none && !charging() &&
+         esp_timer_get_time() < session.until_us) {
+    if (uart) sensor::serial::poll(Port::uart, 10, serial_request, &session);
+    if (usb && session.action == ConsoleAction::none)
+      sensor::serial::poll(Port::usb, uart ? 0 : 10, serial_request, &session);
+    if (!uart) vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  return session;
 }
 static bool setup_ap(bool provisioned) {
   if (!start_wifi(true)) {
@@ -1224,7 +1556,7 @@ static bool setup_ap(bool provisioned) {
   save.handler = setup_save;
   httpd_register_uri_handler(h, &save);
   setup_provisioned = provisioned;
-  xTaskCreate(usb_setup_task, "usb_setup", 16384, nullptr, 4, nullptr);
+  xTaskCreate(setup_serial_task, "setup_serial", 16384, nullptr, 4, nullptr);
   int64_t end = esp_timer_get_time() + 600000000;
   while (setup_state == SetupState::waiting && esp_timer_get_time() < end) {
     if (charging()) {
@@ -1244,6 +1576,7 @@ static bool setup_ap(bool provisioned) {
     vTaskDelay(pdMS_TO_TICKS(500));
   httpd_stop(h);
   stop_network();
+  if (outcome == SetupState::restart) esp_restart();
   if (outcome == SetupState::saved) {
     if (usb_serial_jtag_is_connected()) sleep_for(cfg.measure_s);
     esp_restart();
@@ -1289,6 +1622,19 @@ static void boot_debug_result(const std::string &message) {
   if (usb_serial_jtag_is_connected()) vTaskDelay(pdMS_TO_TICKS(300));
 }
 
+static void check_battery_for_operation(uint16_t mv, bool boot_debug) {
+  if (mv < 2000 || mv > 5000) {
+    if (boot_debug) boot_debug_result("Напряжение аккумулятора недоступно. Подключите USB к компьютеру для пробы.");
+    else puts("ADC/divider check required");
+    sleep_for(3600);
+  }
+  if (mv < cfg.cutoff_mv) {
+    printf("BATTERY: %u mV below cutoff %u mV\n", (unsigned)mv, (unsigned)cfg.cutoff_mv);
+    if (boot_debug) boot_debug_result("Напряжение аккумулятора ниже порога работы.");
+    sleep_for(21600);
+  }
+}
+
 extern "C" void app_main() {
   gpio_config_t g{};
   g.pin_bit_mask = 1ULL << CHARGE_PIN;
@@ -1299,18 +1645,31 @@ extern "C" void app_main() {
   gpio_config(&g);
   gpio_set_direction(GPIO_NUM_8, GPIO_MODE_OUTPUT);
   gpio_set_level(GPIO_NUM_8, 1);
-  const bool after_reset = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;
-  if (rt.magic != RTC_MAGIC ||
-      rt.crc != sensor::crc32(&rt, offsetof(Runtime, crc)) ||
-      after_reset) {
+  const auto wake = esp_sleep_get_wakeup_cause();
+  const bool after_reset = wake == ESP_SLEEP_WAKEUP_UNDEFINED;
+  const bool magic_valid = rt.magic == RTC_MAGIC;
+  const bool crc_valid = magic_valid && rt.crc == sensor::crc32(&rt, offsetof(Runtime, crc));
+  uint64_t sleep_elapsed = 0;
+  if (after_reset) rtc_state = "reset";
+  else if (!magic_valid) rtc_state = "bad_magic";
+  else if (!crc_valid) rtc_state = "bad_crc";
+  else rtc_state = "retained";
+  if (after_reset || !crc_valid) {
     rt = {};
     rt.magic = RTC_MAGIC;
     rt.boot = ((uint64_t)esp_random() << 32) | esp_random();
   } else {
     // The RTC wall clock survives Deep Sleep even before SNTP synchronization.
     // Account for actual sleep before setup or sync can change that clock.
-    rt.uptime += sensor::sleep_elapsed_s(rt.sleep_started_us, wall_time_us());
+    sleep_elapsed = sensor::sleep_elapsed_s(rt.sleep_started_us, wall_time_us());
+    rt.uptime += sleep_elapsed;
   }
+  printf("TK WAKE firmware=%s reset_reason=%d wake_source=%s wake_cause=%d rtc_state=%s "
+         "boot_id=%s sleep_elapsed_s=%llu uptime_s=%llu next_measure=%llu next_send=%llu\n",
+         firmware_version(), (int)esp_reset_reason(), wake_source(wake), (int)wake, rtc_state,
+         hex64(rt.boot).c_str(), (unsigned long long)sleep_elapsed,
+         (unsigned long long)rt.uptime, (unsigned long long)rt.next_measure,
+         (unsigned long long)rt.next_send_uptime);
   // Charging takes priority over provisioning, measurements, diagnostics and
   // OTA.
   if (charging()) {
@@ -1406,6 +1765,9 @@ extern "C" void app_main() {
   }
   vTaskDelay(pdMS_TO_TICKS(500));
   uint16_t mv = battery_mv();
+  printf("TK POWER battery_mv=%u cutoff_mv=%u wifi_min_mv=%u ota_min_mv=%u charging=%d usb=%d\n",
+         (unsigned)mv, (unsigned)cfg.cutoff_mv, (unsigned)cfg.wifi_min_mv,
+         (unsigned)cfg.ota_min_mv, charging(), usb_serial_jtag_is_connected());
   // An explicitly armed BOOT test on a connected USB host is externally
   // powered; ADC readings may be floating or misleading without a battery.
   // Do not report a fabricated battery voltage or attempt OTA in this mode.
@@ -1414,16 +1776,7 @@ extern "C" void app_main() {
     printf("BOOT: USB-powered test, ADC=%u mV (ignored)\n", (unsigned)mv);
     mv = 0;
   } else {
-    if (mv < 2000 || mv > 5000) {
-      if (boot_debug) boot_debug_result("Напряжение аккумулятора недоступно. Подключите USB к компьютеру для пробы.");
-      else puts("ADC/divider check required");
-      sleep_for(3600);
-    }
-    if (mv < cfg.cutoff_mv) {
-      printf("BATTERY: %u mV below cutoff %u mV\n", (unsigned)mv, (unsigned)cfg.cutoff_mv);
-      if (boot_debug) boot_debug_result("Напряжение аккумулятора ниже порога работы.");
-      sleep_for(21600);
-    }
+    check_battery_for_operation(mv, boot_debug);
   }
   if (charging()) {
     if (boot_debug) boot_debug_result("Отладка прервана зарядкой.");
@@ -1462,10 +1815,29 @@ extern "C" void app_main() {
   bool pending = esp_ota_get_state_partition(esp_ota_get_running_partition(),
                                              &ota_state) == ESP_OK &&
                  ota_state == ESP_OTA_IMG_PENDING_VERIFY;
+  bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
+  // The first boot of a new OTA image has to complete self-test immediately.
+  const auto console = pending ? ConsoleSession{} : wake_serial_window(journal, mv, wifi_allowed);
+  if (charging()) sleep_for(cfg.measure_s);
+  if (console.action == ConsoleAction::reboot) {
+    stop_network();
+    sensor::serial::flush_uart();
+    if (usb_serial_jtag_is_connected()) vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+  }
+  if (console.action == ConsoleAction::sleep) sleep_for(console.sleep_seconds);
+  if (console.held && !usb_without_battery) {
+    mv = battery_mv();
+    check_battery_for_operation(mv, boot_debug);
+    wifi_allowed = sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
+    printf("TK POWER after_hold battery_mv=%u wifi_allowed=%d\n", (unsigned)mv, wifi_allowed);
+  }
+  const bool requested_sample = console.action == ConsoleAction::sample;
+  const bool requested_sync = console.action == ConsoleAction::sync || console.sync_after_sample;
+
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
   const bool measurement_due =
-      boot_debug || (cfg.enabled && (pending || uptime_now() >= rt.next_measure));
-  const bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
+      boot_debug || (cfg.enabled && (requested_sample || pending || uptime_now() >= rt.next_measure));
   const uint32_t radio_budget = sensor::radio_budget_s(cfg.wifi_budget_s, boot_debug);
   // Measure before any station connection, even after a cold boot. The
   // setup AP is already stopped by setup_ap() before the BOOT test.
@@ -1498,7 +1870,11 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool send_due = sensor::radio_due(boot_debug, uptime_now(), rt.next_send_uptime);
+  const bool scheduled_send = sensor::radio_due(boot_debug, uptime_now(), rt.next_send_uptime);
+  const bool send_due = scheduled_send || requested_sync;
+  printf("TK PLAN measure_due=%d send_due=%d wifi_allowed=%d config_version=%u measure_s=%u send_s=%u\n",
+         measurement_due, send_due, wifi_allowed, (unsigned)cfg.version,
+         (unsigned)cfg.measure_s, (unsigned)cfg.send_s);
   const bool bootstrap_after_sample = send_due && sensor::needs_bootstrap_after_sample(
       measurement.quality != 0, measured, wifi_allowed, usb_without_battery);
   bool time_prepared = false;
@@ -1538,13 +1914,18 @@ extern "C" void app_main() {
       sleep_for(cfg.measure_s);
     }
     rt.pending = false;
+    auto *record = measurement_json(measurement);
+    printf("TK MEASURE %s\n", stringify(record).c_str());
+    cJSON_Delete(record);
   }
   if (send_due && wifi_allowed && !charging()) {
     if (!bootstrap_after_sample)
       deadline = esp_timer_get_time() + (int64_t)radio_budget * 1000000;
     // Reuse the time connection; if it failed, retry at the next wake.
+    printf("TK SYNC start ack_seq=%llu next_seq=%llu\n",
+           (unsigned long long)state.ack, (unsigned long long)state.next);
     bool ok = (!bootstrap_after_sample || time_prepared) &&
-              sync(journal, mv, time_prepared, !boot_debug);
+              sync(journal, mv, time_prepared, scheduled_send && !boot_debug);
     stop_network();
     if (ok) {
       rt.failures = 0;
@@ -1555,8 +1936,13 @@ extern "C" void app_main() {
       if (rt.failures < 4) rt.failures++;
       rt.next_send_uptime = sensor::radio_next_send(uptime_now(), backoff);
     }
+    printf("TK SYNC result=%s ack_seq=%llu next_seq=%llu next_send=%llu error=%s\n",
+           ok ? "ok" : "failed", (unsigned long long)state.ack, (unsigned long long)state.next,
+           (unsigned long long)rt.next_send_uptime, last_error.empty() ? "-" : last_error.c_str());
   } else if (bootstrap_after_sample) {
     stop_network();
+  } else if (requested_sync && !wifi_allowed) {
+    puts("TK SYNC result=skipped error=wifi_below_battery_threshold");
   }
   if (boot_debug) {
     if (measured && state.ack > measurement.seq) {

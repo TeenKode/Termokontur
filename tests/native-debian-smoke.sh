@@ -74,6 +74,9 @@ if [[ "${1:-}" == "clone" ]]; then
     fi
   done
   cp -r /src/. "$destination/"
+  if [[ "${TEST_DOWNGRADE:-0}" == "1" ]]; then
+    printf '__version__ = "0.0.1"\n' > "$destination/termokontur/__init__.py"
+  fi
   if [[ "${TEST_BREAK_UPGRADE:-0}" == "1" ]]; then
     printf '\nraise RuntimeError("intentional CI upgrade failure")\n' >> "$destination/termokontur/app.py"
     printf '\n# Changed requirements for the rollback test\n' >> "$destination/requirements.txt"
@@ -147,17 +150,20 @@ if [[ -f /legacy/scripts/install-debian.sh ]]; then
   curl --silent --show-error --fail -b /tmp/termokontur-ci-cookies http://127.0.0.1:8092/api/rooms | grep -q 'CI Test'
 fi
 
-# The new updater must fail closed while the binary is unavailable or points
-# to another source revision, without replacing the live installation.
-for broken in TEST_NO_BUNDLE TEST_WRONG_BUNDLE; do
+# The updater must keep the live installation when the candidate is older
+# or the firmware is missing or points to another source revision.
+for broken in TEST_NO_BUNDLE TEST_WRONG_BUNDLE TEST_DOWNGRADE; do
   runuser -u termokontur -- sh -c 'umask 077; printf "%040d\n" 0 > /var/lib/termokontur/installed-revision'
   runuser -u termokontur -- touch /var/lib/termokontur/update-request
   before_pid="$(cat /run/termokontur-test.pid)"
   if env "$broken=1" PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update; then
-    echo "Unpublished or mismatched binary accepted: $broken" >&2
+    echo "Invalid update accepted: $broken" >&2
     exit 1
   fi
   grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
+  if [[ "$broken" == "TEST_DOWNGRADE" ]]; then
+    grep -q 'Понижение версии заблокировано' /var/lib/termokontur/update-status.json
+  fi
   test "$(cat /run/termokontur-test.pid)" = "$before_pid"
   test "$(cat /var/lib/termokontur/installed-revision)" = "$(printf '%040d' 0)"
   curl --silent --show-error --fail http://127.0.0.1:8092/health >/dev/null

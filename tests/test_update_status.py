@@ -4,6 +4,9 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+import httpx
+import pytest
+
 from termokontur import db, updates
 
 
@@ -75,3 +78,27 @@ def test_untrusted_history_is_filtered(admin, monkeypatch, tmp_path):
     result = admin.get("/api/update/status").json()
     assert result["history"] == [{"phase": "failed", "message": "Test", "at": "now"}]
     assert result["target_revision"] is None
+
+
+@pytest.mark.parametrize(("stable_version", "available"), [
+    ("1.3.22", False), ("1.4.1-rc.10", False), ("1.4.10", True), (None, None),
+])
+def test_availability_requires_a_version_at_least_as_new_as_installed(
+    admin, monkeypatch, tmp_path, stable_version, available,
+):
+    enable_updater(monkeypatch, tmp_path)
+    monkeypatch.setattr(updates, "__version__", "1.4.1")
+
+    def get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        if url == updates.GITHUB_HEAD:
+            return httpx.Response(200, request=request, json={"sha": "b" * 40})
+        text = f'__version__ = "{stable_version}"\n' if stable_version else "Unknown version"
+        return httpx.Response(200, request=request, text=text)
+
+    monkeypatch.setattr(updates.httpx, "get", get)
+    result = admin.get("/api/update/check").json()
+    assert result["available"] is available
+    assert result["latest_version"] == stable_version
+    if available is False:
+        assert "новее стабильной" in result["message"]

@@ -14,16 +14,20 @@ import httpx
 from playwright.sync_api import expect, sync_playwright
 
 ROOT=Path(__file__).resolve().parents[1]
+SCREENSHOTS=Path(tempfile.gettempdir())
 sys.path.insert(0,str(ROOT))
 SIMULATED_USB=r'''(() => {
  const key=crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
  const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
  const der=raw=>{const data=new Uint8Array(raw);const integer=part=>{let a=Array.from(part);while(a.length>1&&a[0]===0)a.shift();if(a[0]&128)a.unshift(0);return [2,a.length,...a];};const r=integer(data.slice(0,32)),s=integer(data.slice(32));return new Uint8Array([48,r.length+s.length,...r,...s]);};
  let port;
- Object.defineProperty(navigator,'serial',{value:{requestPort:async()=>{
+ Object.defineProperty(navigator,'serial',{value:{requestPort:async options=>{
   if(window.simCancel)throw new DOMException('Dismissed','NotFoundError');
+  window.simSerialOptions=options;
+  window.simSerialCommands=[];
   port={async open(){const self=this;this.readable=new ReadableStream({start(c){self.rx=c;}});this.writable=new WritableStream({async write(value){
    const req=JSON.parse(new TextDecoder().decode(value).trim().slice(6));let response={id:req.id};const pair=await key;
+   window.simSerialCommands.push(req.cmd);
    const publicBytes=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',publicBytes)));
    if(req.cmd==='hello'){
     Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
@@ -36,6 +40,7 @@ SIMULATED_USB=r'''(() => {
    else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
    else if(req.cmd==='setup_wifi')Object.assign(response,{ssid:'Termokontur-1234',password:' Wi-Fi <demo> & pass  '});
    else if(req.cmd==='arm_boot_debug'){response.duration_s=300;window.simBootArmed=true;}
+   else if(req.cmd==='status')Object.assign(response,{wake_source:'timer',rtc_state:'retained'});
    const bytes=new TextEncoder().encode('startup log\nSETUP password: masked-test-password\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
@@ -118,7 +123,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 # The ROM transfer is simulated; the controller still downloads the real API image.
                 real=(ROOT/'termokontur/static/sensor-usb.mjs').read_text()
                 page.route('**/static/test-real-sensor-usb.mjs',lambda route:route.fulfill(content_type='text/javascript',body=real))
-                wrapper='''export {SensorSerial,verifyIdentity,connectSensor} from './test-real-sensor-usb.mjs';
+                wrapper='''export * from './test-real-sensor-usb.mjs';
                 export async function flashFactory(port,image,metadata,callbacks){
                   if(image.byteLength!==metadata.size)throw Error('size mismatch');
                   await callbacks.checkBoard('0123456789ab');
@@ -195,7 +200,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#usb-flash')).to_be_enabled()
                 expect(page.locator('#usb-close')).to_be_enabled()
                 page.evaluate('navigator.serial.requestPort = window.originalRequestPort')
-                page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path='/tmp/termokontur-usb-setup-desktop.png')
+                page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0');page.screenshot(path=SCREENSHOTS/'termokontur-usb-setup-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/10-usb-setup.jpg'),type='jpeg',quality=85)
                 page.evaluate('window.simSaveFailure=true')
@@ -233,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 assert api.get('/api/sensors/claims').json()==[]
                 assert api.get('/api/sensors/devices').json()==[]
                 page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollTop=0')
-                page.screenshot(path='/tmp/termokontur-usb-ready-desktop.png')
+                page.screenshot(path=SCREENSHOTS/'termokontur-usb-ready-desktop.png')
                 if '--screenshots' in sys.argv:
                     page.screenshot(path=str(ROOT/'docs/sensors/images/11-usb-authorized.jpg'),type='jpeg',quality=85)
                 result=page.evaluate('window.radioConnect()');assert result['ack_seq']==2
@@ -262,13 +267,22 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 with page.expect_response(lambda r: r.url.endswith(f'/ota?bundled_version={version}')) as ota:
                     page.get_by_role('button', name='Назначить обновление').click()
                 assert ota.value.ok
+                expect(page.locator('#toast-message')).to_have_text('Обновление назначено')
                 # A request from another self-keyed device appears as pending, not authorized.
                 private,ident=fixtures.identity();ident['hardware_id']='1123456789ab'
                 signed=fixtures.proof(api,private,ident)
-                assert api.post('/api/sensors/auth/prove',json=signed).json()['status']=='pending'
-                page.click('#sensor-refresh');expect(page.locator('#sensor-claims-panel')).to_be_visible()
-                page.locator('#sensor-claims input').fill('Демо: заявка по сети');page.locator('#sensor-claims button').first.click()
-                expect(page.locator('#sensor-claims-panel')).to_be_hidden()
+                pending = api.post('/api/sensors/auth/prove', json=signed).json()
+                assert pending['status'] == 'pending'
+                refresh = page.locator('#sensor-refresh')
+                refresh.click()
+                expect(refresh).to_be_enabled()
+                claims = page.locator('#sensor-claims-panel')
+                expect(claims).to_be_visible()
+                claims.get_by_role('textbox', name='Название датчика').fill('Демо: заявка по сети')
+                with page.expect_response(lambda r: r.url.endswith(f"/claims/{pending['fingerprint']}/approve")) as approval:
+                    claims.get_by_role('button', name='Разрешить').click()
+                assert approval.value.ok
+                expect(claims).to_be_hidden()
                 for width,height in [(1440,1100),(390,844)]:
                     page.set_viewport_size({'width':width,'height':height})
                     page.click('#sensor-defaults-open')
@@ -281,7 +295,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                     expect(page.locator('#sensor-usb-dialog')).to_be_visible();assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                     assert page.locator('#sensor-usb-dialog').evaluate('el=>el.scrollWidth<=el.clientWidth+1')
                     expect(page.locator('#usb-log-panel')).to_be_hidden()
-                    page.screenshot(path=f'/tmp/termokontur-usb-{width}.png');page.click('#usb-close')
+                    page.screenshot(path=SCREENSHOTS/f'termokontur-usb-{width}.png');page.click('#usb-close')
                 page.set_viewport_size({'width':1440,'height':1100})
                 page.get_by_role('link', name='Отладка прошивки').click()
                 expect(page.get_by_role('heading', name='Отладка прошивки')).to_be_visible()
@@ -329,6 +343,29 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-connect')).to_be_enabled()
                 expect(page.locator('#debug-wifi-details')).to_be_hidden()
                 expect(page.locator('#debug-wifi-password')).to_be_empty()
+                page.click('#debug-connect-uart')
+                expect(page.locator('#debug-connection')).to_contain_text('UART0 подключён')
+                expect(page.locator('#debug-command-on-wake')).to_be_checked()
+                assert page.evaluate('window.simSerialOptions') == {}
+                assert page.evaluate('window.simSerialCommands') == []
+                page.fill('#debug-command', 'status')
+                page.click('#debug-command-send')
+                expect(page.locator('#debug-command-state')).to_contain_text('ожидает пробуждения')
+                page.evaluate('window.emitSensorLog(["TK WAKE wake_source=timer rtc_state=retained"])')
+                expect(page.locator('#debug-log')).to_contain_text('TK WAKE wake_source=timer')
+                assert page.evaluate('window.simSerialCommands') == []
+                page.evaluate('window.emitSensorLog(["TK READY uart0=1 usb=0 window_ms=350", "TK READY uart0=1 usb=0 window_ms=350"])')
+                expect(page.locator('#debug-command-state')).to_have_text('Ответ получен.')
+                expect(page.locator('#debug-log')).to_contain_text('status → {"wake_source":"timer","rtc_state":"retained"}')
+                assert page.evaluate('window.simSerialCommands') == ['status']
+                page.fill('#debug-command', 'reboot')
+                page.click('#debug-command-send')
+                page.click('#debug-command-cancel')
+                expect(page.locator('#debug-command-state')).to_have_text('Ожидание отменено.')
+                page.evaluate('window.emitSensorLog(["TK READY uart0=1 usb=0 window_ms=350", "TK SLEEP seconds=1800"])')
+                expect(page.locator('#debug-log')).to_contain_text('TK SLEEP seconds=1800')
+                assert page.evaluate('window.simSerialCommands') == ['status']
+                page.click('#debug-disconnect')
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                 assert not errors,errors
                 browser.close()

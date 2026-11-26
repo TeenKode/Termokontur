@@ -14,12 +14,12 @@ from pathlib import Path
 import httpx
 
 from . import __version__, db
+from .release_version import read_source_version, version_order
 
 SYSTEMD_PATH = Path("/etc/systemd/system/termokontur-update.path")
 GITHUB_HEAD = "https://api.github.com/repos/TeenKode/Termokontur/commits/stable"
 GITHUB_VERSION = "https://raw.githubusercontent.com/TeenKode/Termokontur/{sha}/termokontur/__init__.py"
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
-VERSION_RE = re.compile(r'^__version__\s*=\s*["\x27](\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)["\x27]$', re.M)
 STALLED_SECONDS = 2100
 QUEUED_STALLED_SECONDS = 180
 
@@ -169,26 +169,28 @@ def check() -> dict:
             result["message"] = "Не удалось проверить GitHub. Проверьте интернет-соединение сервера."
         return result
 
-    result["available"] = sha != result["installed_revision"]
     result["latest_revision"] = sha
-    result["latest_version"] = None
-    # Fetch version from the *same* pinned commit, not a moving branch reference.
-    try:
-        version_response = httpx.get(GITHUB_VERSION.format(sha=sha), timeout=6.0, headers={
-            "User-Agent": "Termokontur-update-checker",
-        })
-        version_response.raise_for_status()
-        match = VERSION_RE.search(getattr(version_response, "text", "")[:300])
-        if match:
-            result["latest_version"] = match.group(1)
-    except (httpx.HTTPError, ValueError):
-        pass
-
+    if sha == result["installed_revision"]:
+        result.update(available=False, latest_version=__version__)
+        message = "Установлена последняя сборка."
+    else:
+        # Compare the version from the same pinned commit before offering it.
+        result.update(available=None, latest_version=None)
+        try:
+            version_response = httpx.get(GITHUB_VERSION.format(sha=sha), timeout=6.0, headers={
+                "User-Agent": "Termokontur-update-checker",
+            })
+            version_response.raise_for_status()
+            version = read_source_version(version_response.text[:300])
+            older = version_order(version) < version_order(__version__)
+        except (httpx.HTTPError, ValueError):
+            message = "Не удалось определить версию в стабильном канале. Повторите проверку."
+        else:
+            result.update(available=not older, latest_version=version)
+            message = (f"Установленная версия {__version__} новее стабильной {version}."
+                       if older else "Доступно обновление.")
     if result["state"] not in ("queued", "installing"):
-        result["message"] = (
-            "Доступно обновление."
-            if result["available"] else "Установлена последняя сборка."
-        )
+        result["message"] = message
     return result
 
 
