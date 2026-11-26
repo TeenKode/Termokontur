@@ -15,6 +15,14 @@ inline bool valid_ack(double value, uint64_t first, uint64_t sent_end) {
 inline uint32_t retry_delay(uint32_t send_s, uint32_t failures) {
   return std::min<uint32_t>(send_s, 3600u << std::min<uint32_t>(failures, 4));
 }
+// Bounded jitter reduces synchronized retries across a classroom fleet.
+inline uint32_t retry_with_jitter(uint32_t delay, uint32_t ceiling, uint32_t entropy) {
+  const uint32_t bound = std::min<uint32_t>(delay / 10, 300);
+  return std::min<uint32_t>(ceiling, delay - entropy % (bound + 1));
+}
+inline uint32_t http_retry_pause_ms(unsigned attempt, uint32_t entropy) {
+  return std::min<unsigned>(attempt, 3) * 250 + entropy % 201;
+}
 // USB enrollment and BOOT diagnostics have an extended, bounded radio
 // budget. Normal battery operation keeps the configured limit.
 inline uint32_t radio_budget_s(uint32_t configured, bool diagnostic) {
@@ -56,10 +64,11 @@ struct SendSchedule {
 };
 inline SendSchedule after_send(SendSchedule previous, bool scheduled, bool ok,
                                uint64_t uptime, uint32_t send_s, uint32_t next_interval,
-                               bool waiting_for_authorization) {
+                               bool waiting_for_authorization, uint32_t entropy = 0) {
   if (!scheduled) return previous;
   if (ok) return {radio_next_send(uptime, next_interval), 0};
-  const uint32_t delay = waiting_for_authorization ? 300 : retry_delay(send_s, previous.failures);
+  const uint32_t nominal = waiting_for_authorization ? 300 : retry_delay(send_s, previous.failures);
+  const uint32_t delay = retry_with_jitter(nominal, waiting_for_authorization ? 300 : send_s, entropy);
   return {radio_next_send(uptime, delay), std::min<uint32_t>(previous.failures + 1, 4)};
 }
 // The optional Wi-Fi threshold can be disabled (0), but never bypass the
