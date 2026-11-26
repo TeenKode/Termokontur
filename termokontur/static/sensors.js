@@ -58,9 +58,12 @@ function filterSensorPresentation(){
   empty.hidden=!query||!cards.length||cards.some(card=>!card.hidden);
 }
 $("tk-sensor-search")?.addEventListener("input",filterSensorPresentation);
+$("tk-empty-usb")?.addEventListener("click",()=>$("sensor-usb-open").click());
+$("tk-empty-code")?.addEventListener("click",()=>$("sensor-add").click());
 async function refreshSensors(){
   const request=++sensorRefreshId;
   $("sensor-state").textContent="Загружаем датчики…";
+  $("sensor-state").dataset.loading="true";
   try{
     const [devices,active,mqtt,claims]=await Promise.all([api("/api/sensors/devices"),api("/api/rooms"),api("/api/sensors/mqtt"),api("/api/sensors/claims")]);
     if(request!==sensorRefreshId)return;
@@ -71,8 +74,12 @@ async function refreshSensors(){
     const archived=d=>!d.enabled||["retired","rejected","authorization_pending"].includes(d.status);
     const activeDevices=devices.filter(d=>!archived(d));
     const rows=$("tk-sensor-rows");
-    if(rows){rows.replaceChildren();for(const d of activeDevices){const tr=el("tr");tr.dataset.tkSearch=tkSensorSearchKey(d);for(const v of [d.name,d.building+" · "+d.room_name,sensorStatusText(d),d.last_valid_at?temperature(d.last_valid_temperature):"—",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"—",sensorWhen(d.last_seen),d.firmware||"—"])tr.append(el("td","",v));const action=el("td");action.append(sensorButton("Открыть",()=>openSensor(d.id,true)));tr.append(action);rows.append(tr);}if(!activeDevices.length){const tr=el("tr"),td=el("td","muted","Нет активных датчиков");td.colSpan=8;tr.append(td);rows.append(tr);}}
+    if(rows){rows.replaceChildren();for(const d of activeDevices){const tr=el("tr");tr.dataset.tkSearch=tkSensorSearchKey(d);for(const v of [d.name,d.building+" · "+d.room_name,sensorStatusText(d),d.last_valid_at?temperature(d.last_valid_temperature):"—",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"—",sensorWhen(d.last_seen),d.firmware||"—"])tr.append(el("td","",v));tr.cells[3].dataset.sortValue=d.last_valid_at?d.last_valid_temperature??"":"";tr.cells[4].dataset.sortValue=d.battery_mv??"";tr.cells[5].dataset.sortValue=d.last_seen||"";const action=el("td");action.append(sensorButton("Открыть",()=>openSensor(d.id,true)));tr.append(action);rows.append(tr);}if(!activeDevices.length){const tr=el("tr"),td=el("td","muted","Нет активных датчиков");td.colSpan=8;tr.append(td);rows.append(tr);}}
     const archivedDevices=devices.filter(archived);
+    if($("tk-sensor-empty")){
+      $("tk-sensor-empty").hidden=Boolean(activeDevices.length);
+      $("tk-sensor-empty-description").textContent=archivedDevices.length?"Отключённые устройства доступны в архиве. Можно восстановить их или подключить новый датчик.":"Подключите первый датчик, чтобы видеть измерения и состояние связи.";
+    }
     $("sensor-archive").hidden=!archivedDevices.length;
     $("sensor-archive-title").textContent="Архив и отключённые ("+archivedDevices.length+")";
     for(const d of devices){
@@ -99,6 +106,7 @@ async function refreshSensors(){
     }
     $("sensor-mqtt-state").textContent=(mqtt.enabled?"MQTT включён":"MQTT выключен")+" · в очереди: "+mqtt.outbox.length+(mqtt.outbox.some(x=>x.error)?" · есть ошибки доставки":"");
   }catch(e){if(request===sensorRefreshId){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}}
+  finally{if(request===sensorRefreshId)delete $("sensor-state").dataset.loading;}
 }
 let tkSensorTrigger=null;
 $("tk-sensor-close")?.addEventListener("click",()=>{

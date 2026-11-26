@@ -23,6 +23,7 @@ function updateDirtyNavigation(){
 }
 function markSettingsSaved(form,message){
   form.dataset.dirty="false";
+  for(const field of form.querySelectorAll("[data-tk-edited]"))field.removeAttribute("data-tk-edited");
   const feedback=form.querySelector(".settings-save-feedback");
   if(feedback){feedback.textContent=message;feedback.dataset.state="saved";}
   updateDirtyNavigation();
@@ -215,7 +216,7 @@ function initSettings(){
   settingsCategory.addEventListener("change",()=>setSettingsCategory(settingsCategory.value));
   for(const formIds of Object.values(settingsGroups))for(const id of formIds){
     const form=$(id);
-    for(const type of ["input","change"])form.addEventListener(type,()=>markSettingsDirty(form));
+    for(const type of ["input","change"])form.addEventListener(type,event=>{if(event.target.matches("input,select,textarea"))event.target.dataset.tkEdited="true";markSettingsDirty(form);});
   }
   for(const button of document.querySelectorAll("[data-settings-target]")){
     button.addEventListener("click",()=>setSettingsCategory(button.dataset.settingsTarget));

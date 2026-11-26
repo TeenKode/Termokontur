@@ -27,15 +27,37 @@ function trendTicks(positions,width,labelWidth){
   if((positions[last]-positions[chosen.at(-1)])*width>=labelWidth)chosen.push(last);
   return chosen;
 }
+const trendWindows=new WeakMap();
 function renderTrend(canvas,options){
+  const raw=options;const count=raw.points.length;
+  let state=trendWindows.get(canvas);
+  if(!state){state={size:0};trendWindows.set(canvas,state);}
+  if(count<15)state.size=0;
+  const size=state.size&&Math.min(state.size,count),offset=size?Math.max(0,count-size):0;
+  if(offset)options={...raw,points:raw.points.slice(offset),series:raw.series.map(s=>({...s,values:s.values.slice(offset)})),contiguous:raw.contiguous?i=>raw.contiguous(i+offset):undefined};
   const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
   if(!width||!height)return;
   const ctx=canvas.getContext("2d");if(!ctx)return;
   canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
   const dark=document.documentElement.dataset.theme==="dark";
-  const ink=dark?"#b9c9dc":"#465d73",grid=dark?"#35465b":"#e0e8ef",surface=dark?"#18283b":"#fff";
+  const ink=dark?"#c6d0da":"#42576a",grid=dark?"#34414d":"#d6dee6",surface=dark?"#1b242d":"#fff";
   const frame=canvas.parentElement;
+  let controls=frame.querySelector(".tk-chart-range");
+  if(!controls){
+    controls=el("div","tk-chart-range");
+    const label=el("label","","Масштаб");
+    const range=el("select");range.setAttribute("aria-label","Масштаб графика");
+    for(const [value,name] of [[0,"Весь период"],[14,"Последние 14 точек"],[7,"Последние 7 точек"]]){
+      const option=el("option","",name);option.value=String(value);range.append(option);
+    }
+    label.append(range);controls.append(label);canvas.before(controls);
+  }
+  const range=controls.querySelector("select");
+  range.value=String(state.size);range.onchange=()=>{state.size=Number(range.value);renderTrend(canvas,raw);};
+  controls.hidden=count<15;
+  let live=frame.querySelector(".tk-chart-live");
+  if(!live){live=el("span","tk-visually-hidden tk-chart-live");live.setAttribute("role","status");frame.append(live);}
   let tooltip=frame.querySelector(".trend-tooltip")||frame.querySelector("#history-tooltip");
   if(!tooltip){tooltip=el("div","trend-tooltip");frame.append(tooltip);}
   tooltip.classList.add("trend-tooltip");tooltip.hidden=true;
@@ -56,7 +78,7 @@ function renderTrend(canvas,options){
   function draw(active=-1){
     ctx.clearRect(0,0,width,height);
     ctx.font="12px system-ui";ctx.fillStyle=ink;ctx.textBaseline="middle";
-    if(!series.length||plotWidth<=0||plotHeight<=0){
+    if(!data.length||!series.length||plotWidth<=0||plotHeight<=0){
       ctx.textAlign="center";ctx.fillText(options.empty||"Нет данных за выбранный период",width/2,height/2,Math.max(1,width-24));return;
     }
     ctx.font="600 11px system-ui";ctx.textAlign="left";ctx.fillStyle=primary.length&&dual?primary[0].color:ink;
@@ -103,7 +125,8 @@ function renderTrend(canvas,options){
   draw();
   if(!series.length||plotWidth<=0||plotHeight<=0){canvas.removeAttribute("tabindex");return;}
   let active=-1;
-  function select(i){
+  function select(i,announce=false){
+    if(!data[i])return;
     active=i;draw(i);tooltip.replaceChildren();
     tooltip.append(el("strong","trend-tooltip-date",data[i].title||data[i].label));
     for(const s of series){
@@ -113,6 +136,7 @@ function renderTrend(canvas,options){
       tooltip.append(row);
     }
     tooltip.hidden=false;
+    if(announce)live.textContent=[data[i].title||data[i].label,...series.map(s=>s.name+": "+(Number.isFinite(s.values[i])?format(s.values[i])+" "+s.unit:"нет данных"))].join("; ");
     const rect=canvas.getBoundingClientRect(),parent=frame.getBoundingClientRect();
     const offset=rect.left-parent.left,half=tooltip.offsetWidth/2;
     tooltip.style.left=Math.max(half+6,Math.min(frame.clientWidth-half-6,offset+x(i)))+"px";
@@ -133,6 +157,6 @@ function renderTrend(canvas,options){
     if(event.key==="Escape"){clear();return;}
     if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
     event.preventDefault();
-    select(event.key==="Home"?0:event.key==="End"?data.length-1:Math.max(0,Math.min(data.length-1,active<0?0:active+(event.key==="ArrowRight"?1:-1))));
+    select(event.key==="Home"?0:event.key==="End"?data.length-1:Math.max(0,Math.min(data.length-1,active<0?0:active+(event.key==="ArrowRight"?1:-1))),true);
   };
 }

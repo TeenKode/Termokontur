@@ -167,3 +167,290 @@ html[data-theme] dialog{border-color:var(--tk-line);border-radius:12px}
 .tk-sensor-voltage{font-size:clamp(18px,1.6vw,24px);font-weight:650;line-height:1.4;color:var(--tk-text)}
 #sensor-chart{height:clamp(200px,23vw,265px)}
 @media(max-width:700px){#tk-sensor-search{flex-basis:100%;max-width:none;width:100%}}
+
+/* Firmware debug is a workbench, not a long settings page. */
+.firmware-debug-page{width:min(1600px,calc(100% - 48px));margin:24px auto 48px}
+.firmware-debug-page .debug-page-heading{align-items:center;margin-bottom:18px}
+.debug-back{display:inline-flex;align-items:center;min-height:32px;color:var(--tk-accent);font-size:13px;font-weight:700;text-decoration:none}
+.debug-back:hover{text-decoration:underline}
+.firmware-debug-page .firmware-debug-panel{min-width:0;padding:18px;margin:0;overflow:visible}
+.firmware-debug-page .debug-connection-panel{margin-bottom:16px}
+.debug-workspace{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"diagnostics" "console" "acceptance";gap:16px;align-items:start}
+.debug-diagnostics{grid-area:diagnostics}
+.debug-console{grid-area:console}
+.debug-acceptance{grid-area:acceptance}
+.firmware-debug-page .heading-actions{align-items:center;gap:8px;margin-top:10px}
+.firmware-debug-page .heading-actions .btn{white-space:normal;max-width:100%;text-align:center;min-height:40px;overflow-wrap:anywhere}
+.firmware-debug-page .btn:disabled{opacity:.48;cursor:not-allowed;filter:none}
+.firmware-debug-page .firmware-debug-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}
+.firmware-debug-page .firmware-debug-values>div{min-width:0;padding:10px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised)}
+.firmware-debug-page .firmware-debug-values dt{font-size:12px;color:var(--tk-muted);line-height:1.45}
+.firmware-debug-page .firmware-debug-values dd{font-size:13px;color:var(--tk-text);line-height:1.45}
+.firmware-debug-page .debug-telemetry{grid-template-columns:repeat(3,minmax(0,1fr))}
+.firmware-debug-page .debug-telemetry dd{font-size:clamp(18px,1.65vw,27px);font-weight:700;color:var(--tk-accent)}
+.firmware-debug-page #debug-humidity{color:var(--tk-cold)}
+.firmware-debug-page #debug-battery{color:var(--tk-text)}
+.debug-status,.debug-message:not(:empty){padding:9px 11px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised);overflow-wrap:anywhere}
+.debug-status{font-size:13px;color:var(--tk-muted)}
+.debug-status[data-state="usb"],.debug-status[data-state="uart"]{color:var(--tk-ok);border-left:3px solid var(--tk-ok)}
+.debug-status[data-state="busy"]{color:var(--tk-accent);border-left:3px solid var(--tk-accent)}
+.debug-status[data-state="error"],.debug-status[data-state="unsupported"]{color:var(--tk-hot);border-left:3px solid var(--tk-hot)}
+.debug-message:empty{display:none}
+.debug-interval{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--tk-muted)}
+.debug-interval select{width:auto;min-height:40px}
+.debug-log-meta{display:flex;align-items:center;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;color:var(--tk-muted);font-size:11px;margin-top:14px}
+#debug-log-follow[data-state="following"]{color:var(--tk-ok)}
+#debug-log-follow[data-state="paused"]{color:var(--tk-accent)}
+.firmware-debug-page #debug-log{height:clamp(230px,43vh,480px);margin-top:7px;font-size:12px;line-height:1.6}
+.firmware-debug-command input:not([type="checkbox"]){font-family:"JetBrains Mono",ui-monospace,monospace;min-width:0}
+.debug-delivery,.debug-manual-details{margin-top:16px;padding-top:14px;border-top:1px solid var(--tk-line)}
+.debug-delivery h3{font-size:15px;margin:0}
+.debug-manual-details summary{cursor:pointer;font-weight:700;font-size:14px}
+.firmware-debug-page .firmware-test-result{margin:0;padding:8px 0;border-bottom:1px solid var(--tk-line);font-size:13px}
+.firmware-test-result[data-status="pass"] strong{color:var(--tk-ok)}
+.firmware-test-result[data-status="fail"] strong{color:var(--tk-hot)}
+.firmware-test-result[data-status="warn"] strong{color:var(--tk-accent)}
+.firmware-test-result[data-status="skipped"] strong{color:var(--tk-muted)}
+#debug-delivery-results{padding-left:22px;overflow-wrap:anywhere;font-size:13px}
+#debug-delivery-results li{padding:7px 0;border-bottom:1px solid var(--tk-line)}
+@media(min-width:1100px){
+  .debug-workspace{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);grid-template-areas:"diagnostics console" "acceptance console";grid-template-rows:auto 1fr}
+}
+@media(max-width:700px){
+  .firmware-debug-page{width:calc(100% - 24px);margin:12px auto 36px}
+  .firmware-debug-page .firmware-debug-panel{padding:14px}
+  .firmware-debug-page .debug-telemetry{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .firmware-debug-page .debug-telemetry>div:last-child{grid-column:1/-1}
+  .firmware-debug-page .heading-actions .btn{flex:1 1 120px}
+  .firmware-debug-page .firmware-debug-values dd{overflow-wrap:anywhere}
+}
+
+/* Cross-page visual audit: keep feature states distinct while sharing the same surface tokens. */
+html[data-theme="dark"]{color-scheme:dark}
+html[data-theme] body{font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif}
+html[data-theme] :is(input[type=checkbox],input[type=radio],progress){accent-color:var(--tk-accent)}
+html[data-theme] .btn:disabled{opacity:.55;cursor:not-allowed;box-shadow:none;filter:none}
+html[data-theme] .btn.primary:disabled:hover{background:var(--tk-accent)}
+html[data-theme] .btn.secondary:disabled:hover{background:var(--tk-panel);border-color:var(--tk-line);color:var(--tk-text)}
+html[data-theme] .heading>div:first-child{min-width:0;overflow-wrap:anywhere}
+html[data-theme] .heading-actions .btn,html[data-theme] .dialog-actions .btn{min-height:40px;max-width:100%;white-space:normal;text-align:center}
+html[data-theme] .archive-toggle{color:var(--tk-muted)}
+html[data-theme] .archive-toggle input{accent-color:var(--tk-accent)}
+html[data-theme] .table-scroll{overscroll-behavior-x:contain}
+html[data-theme] td{color:var(--tk-muted);border-color:var(--tk-line)}
+html[data-theme] td:first-child{color:var(--tk-text)}
+html[data-theme] tbody tr:hover{background:var(--tk-raised)}
+html[data-theme] td button{color:var(--tk-text);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] td button:hover:not(:disabled){color:var(--tk-accent);border-color:var(--tk-accent)}
+html[data-theme] .temp{color:var(--tk-text)}
+html[data-theme] .temp.low{color:var(--tk-cold)}
+html[data-theme] .temp.high{color:var(--tk-hot)}
+html[data-theme] .status.normal{color:var(--tk-ok);background:var(--tk-cell-normal)}
+html[data-theme="dark"] .status.normal{color:#a3e1cb}
+html[data-theme] .status.missing{color:var(--tk-muted);background:var(--tk-cell-empty)}
+html[data-theme] .info-strip,html[data-theme] .settings-guidance{color:var(--tk-muted);background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .info-strip strong,html[data-theme] .settings-guidance h3{color:var(--tk-text)}
+html[data-theme] .settings-guidance p{color:var(--tk-muted)}
+html[data-theme] .text-button{color:var(--tk-accent)}
+html[data-theme] .room-drilldown>summary{color:var(--tk-accent);background:var(--tk-panel);border-color:var(--tk-line)}
+html[data-theme] .room-drilldown>summary:hover{background:var(--tk-raised)}
+html[data-theme] .building-summary-card{background:var(--tk-raised);border-color:var(--tk-line);border-top-color:var(--building-accent,var(--tk-accent))}
+html[data-theme] .building-card-top,html[data-theme] .building-card-value{color:var(--tk-text)}
+html[data-theme] .building-card-meta,html[data-theme] .building-card-change{color:var(--tk-muted);border-color:var(--tk-line)}
+html[data-theme] .heatmap-table td:first-child,html[data-theme] .building-matrix-table td:first-child{background:var(--tk-panel);color:var(--tk-text)}
+html[data-theme] .heatmap-table tr:hover td:first-child,html[data-theme] .building-matrix-table tr:hover td:first-child{background:var(--tk-raised)}
+html[data-theme] .report-kpi,html[data-theme] .report-schedule-entry,html[data-theme] .report-missing{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .report-kpi strong{color:var(--tk-accent)}
+html[data-theme] .report-switches .btn[aria-pressed="true"],html[data-theme] .report-switches .btn[aria-pressed="true"]:hover{background:var(--tk-accent);border-color:var(--tk-accent);color:var(--tk-on-accent)}
+html[data-theme] .report-bar-track{background:var(--tk-line)}
+html[data-theme] .report-bar-fill{background:var(--tk-ok)}
+html[data-theme] .max-staff-entry,html[data-theme] .max-assignment-notify{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .max-staff-info strong{color:var(--tk-text)}
+html[data-theme] .max-staff-room{background:var(--tk-cell-normal);color:var(--tk-ok);border-color:var(--tk-line)}
+html[data-theme="dark"] .max-staff-room{color:#a3e1cb}
+html[data-theme] .settings-section-heading h2,html[data-theme] .settings-pane .settings-panel h3{color:var(--tk-text)}
+html[data-theme] .settings-picker label,html[data-theme] .settings-pane .settings-form label{color:var(--tk-muted)}
+html[data-theme] .settings-save,html[data-theme] .settings-pane .weekdays{border-color:var(--tk-line)}
+html[data-theme] .settings-pane :is(.settings-toggle,.weekdays) input{accent-color:var(--tk-accent)}
+html[data-theme] .theme-choice{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .theme-choice:hover{border-color:var(--tk-accent)}
+html[data-theme] .theme-choice input:checked+.theme-preview{outline-color:var(--tk-accent)}
+html[data-theme] .theme-choice input:checked~.theme-choice-title{color:var(--tk-accent)}
+html[data-theme] .theme-choice input:focus-visible+.theme-preview{outline:3px solid var(--focus);outline-offset:3px}
+html[data-theme] .notification-user,html[data-theme] .notification-history-item,html[data-theme] .tls-details,html[data-theme] .update-version-item,html[data-theme] .update-history,html[data-theme] .backup-entry{background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .update-version-item>strong,html[data-theme] .backup-entry-info strong,html[data-theme] .tls-details p,html[data-theme] .update-history summary{color:var(--tk-text)}
+html[data-theme] .update-state:not([data-state="success"]):not([data-state="failed"]):not([data-state="queued"]):not([data-state="installing"]){background:var(--tk-raised);border-color:var(--tk-line)}
+html[data-theme] .update-progress-fill{background:var(--tk-ok)}
+html[data-theme] .update-track{background:var(--tk-line)}
+html[data-theme] .settings-save-feedback[data-state="saved"]{color:var(--tk-ok)}
+html[data-theme] .settings-save-feedback[data-state="error"]{color:var(--tk-hot)}
+html[data-theme] .settings-save-feedback[data-state="warning"],html[data-theme] .settings-save-feedback[data-state="unsaved"]{color:var(--tk-accent)}
+html[data-theme] .login-screen{background:var(--tk-spectrum)}
+html[data-theme] dialog{max-width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;background:var(--tk-panel);color:var(--tk-text)}
+html[data-theme] .dialog-form{min-width:0;padding:clamp(16px,3vw,28px)}
+html[data-theme] .dialog-actions{border-color:var(--tk-line)}
+html[data-theme] .dialog-form label{min-width:0;color:var(--tk-muted)}
+html[data-theme] .dialog-form input,html[data-theme] .dialog-form select,html[data-theme] .dialog-form textarea{max-width:100%;min-width:0}
+html[data-theme] .dialog-form .field-grid{min-width:0}
+html[data-theme] .dialog-form .field-grid>p{grid-column:1/-1}
+html[data-theme] .sensor-usb-dialog details{padding:12px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised)}
+html[data-theme] .sensor-usb-dialog details summary{cursor:pointer;font-weight:700;color:var(--tk-text)}
+html[data-theme] .sensor-usb-dialog details[open] summary{margin-bottom:10px}
+html[data-theme] .sensor-usb-dialog details>label{margin-block:10px}
+html[data-theme] #usb-status:not(:empty){padding:10px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised);overflow-wrap:anywhere}
+.tk-empty-state{margin:0 0 14px;padding:24px;display:grid;justify-items:start;gap:10px}
+.tk-empty-state h3{margin:0;font-size:16px;color:var(--tk-text)}
+.tk-empty-state p{color:var(--tk-muted);font-size:13px}
+#readings-empty{margin:0;border-top:1px solid var(--tk-line)}
+#tk-sensor-empty{border-style:dashed}
+html[data-theme] .sensor-presentation{padding:10px 12px;border:1px solid var(--tk-line);border-radius:9px;background:var(--tk-panel)}
+html[data-theme] .sensor-presentation label{font-size:13px;color:var(--tk-muted)}
+html[data-theme] #sensor-detail>details{border-color:var(--tk-line)}
+html[data-theme] .sensor-sync-times dd{overflow-wrap:anywhere}
+html[data-theme] .sensor-sync-times{grid-template-columns:minmax(0,1fr) minmax(0,auto)}
+html[data-theme] .sensor-firmware-panel #sensor-bundled-status{color:var(--tk-muted)}
+html[data-theme] .sensor-firmware-panel #sensor-firmware-downloads a{border:1px solid var(--tk-line)}
+@media(max-width:900px){
+  html[data-theme] .settings-picker{padding:12px;background:var(--tk-panel);border:1px solid var(--tk-line);border-radius:9px}
+}
+@media(max-width:700px){
+  html[data-theme] .heading>.heading-actions{width:100%}
+  html[data-theme] .heading>.heading-actions .btn{flex:1 1 120px}
+  html[data-theme] .dialog-form .field-grid{grid-template-columns:minmax(0,1fr)}
+  html[data-theme] .dialog-actions .btn{flex:1 1 100px}
+  html[data-theme] .max-staff-toolbar input[type=search]{min-width:0}
+  html[data-theme] .settings-pane .settings-panel{padding:16px}
+  .tk-empty-state{padding:18px}
+}
+@media(max-width:360px){
+  html[data-theme] .report-kpis{grid-template-columns:minmax(0,1fr)}
+  html[data-theme] .sensor-presentation select{width:100%}
+}
+
+/* Reading widths: keep the workspace aligned at the left, and size it for its
+   content rather than stretching every list across an ultrawide display. */
+.main>.topbar{max-width:1280px}
+.main>.view{width:100%;max-width:1280px;margin-inline:0}
+.main>#view-rooms,.main>#view-reports,.main>#view-settings{max-width:1180px}
+.main>#view-readings{max-width:1000px}
+.main>#view-staff{max-width:900px}
+#view-overview .latest-readings{max-width:1060px}
+#view-staff .max-staff-list{max-width:100%;min-width:0}
+#view-staff .max-staff-toolbar{gap:10px}
+#view-staff .max-staff-toolbar input[type=search]{flex:0 1 380px;max-width:100%}
+#view-staff .max-staff-entry{gap:12px;padding:12px}
+#view-staff .max-staff-info{flex:1;min-width:0}
+#view-settings .settings-content{max-width:880px}
+#view-settings .settings-form>label:not(.settings-toggle){max-width:560px}
+#view-settings .settings-form>.field-grid{max-width:760px}
+#view-settings .backup-list,#view-settings .notification-history{max-width:760px}
+#view-settings .notification-draft{max-width:760px}
+#view-reports .report-filters,#view-reports .report-schedule-form{max-width:940px}
+#view-reports .report-filters label,#view-reports .report-schedule-form label{flex:0 1 220px}
+#view-reports .report-missing-scroll{max-width:100%}
+#view-reports .report-building-bars{max-width:820px}
+#view-sensors .sensor-firmware-panel{max-width:1000px}
+#view-sensors .sensor-presentation{max-width:100%}
+#view-sensors .sensor-cards{grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))}
+#view-sensors .sensor-card{padding:16px}
+#view-sensors .sensor-sync-times{gap:4px 8px}
+#view-sensors .sensor-sync-times dd{max-width:100%;text-align:right}
+html[data-theme] .table-scroll table:not(.heatmap-table):not(.building-matrix-table) :is(th,td){padding-inline:clamp(8px,1vw,14px)}
+html[data-theme] .table-scroll table:not(.heatmap-table):not(.building-matrix-table) th{white-space:normal;overflow-wrap:normal;line-height:1.4}
+html[data-theme] .table-scroll table:not(.heatmap-table):not(.building-matrix-table) td{overflow-wrap:anywhere}
+.latest-table th:first-child,.readings-table th:first-child{width:30%}
+.latest-table td:first-child,.readings-table td:first-child{max-width:260px;white-space:normal}
+.readings-table td:nth-child(5){max-width:200px;white-space:normal}
+.readings-table td:last-child .btn{white-space:normal;margin:0;padding:7px 10px}
+#tk-sensor-table table :is(th,td){white-space:normal}
+#tk-sensor-table td:nth-child(2){max-width:200px;min-width:125px}
+#tk-sensor-table td:nth-child(3){min-width:120px;max-width:170px}
+#tk-sensor-table td:nth-child(4),#tk-sensor-table td:nth-child(5),#tk-sensor-table td:nth-child(7){white-space:nowrap}
+#tk-sensor-table td:last-child{white-space:nowrap}
+.sensor-record-scroll td:last-child{white-space:normal;min-width:110px;max-width:200px}
+#report-results table td:first-child,#report-results table td:nth-child(2),#report-results table td:nth-child(3){white-space:normal;max-width:240px}
+#view-settings #audit-records td{white-space:normal;max-width:240px}
+@media(min-width:701px){
+  .rooms-table .room-name-cell,.rooms-table .room-building-cell{min-width:100px;max-width:190px}
+  .rooms-table .max-users-cell{min-width:160px;max-width:220px}
+  .rooms-table .room-actions-cell{min-width:170px;max-width:210px}
+  .rooms-table .room-actions-cell button{padding:7px 8px}
+}
+@media(min-width:1280px){
+  #view-sensors .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-cards{grid-template-columns:minmax(0,1fr)}
+  /* A full-width table must not be squeezed into the narrow card-list column. */
+  #view-sensors .tk-sensor-workspace:has(#sensor-detail:not([hidden])):has(#tk-sensor-table:not([hidden])){display:block}
+  #view-sensors .tk-sensor-workspace:has(#tk-sensor-table:not([hidden])) #sensor-detail{max-width:1000px}
+  #view-sensors .tk-sensor-workspace:has(#tk-sensor-table:not([hidden])) .sensor-table-panel .table-scroll{max-height:none}
+}
+@media(max-width:700px){
+  #view-staff .max-staff-toolbar input[type=search]{flex:1 1 100%}
+  #view-reports .report-filters label,#view-reports .report-schedule-form label{min-width:0}
+  #view-sensors .sensor-cards{grid-template-columns:minmax(0,1fr)}
+  /* The mobile rooms table is a stacked card list; keep its own cell padding. */
+  html[data-theme] .table-scroll .rooms-table :is(th,td){padding:0}
+}
+
+/* Shared, density-aware workspace controls. */
+:root{--tk-card-pad:16px;--tk-section-gap:16px;--tk-form-gap:14px}
+html[data-density="compact"]{--tk-card-pad:12px;--tk-section-gap:10px;--tk-form-gap:9px}
+html[data-density="wide"]{--tk-card-pad:22px;--tk-section-gap:22px;--tk-form-gap:19px}
+html[data-theme] .nav-group-label{padding:9px 10px 3px;color:var(--tk-muted);font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700}
+html[data-navigation="compact"] .nav-group-label{font-size:0;border-top:1px solid var(--tk-line);padding:4px 0 0;margin:6px 4px 0}
+html[data-theme] .sensor-card,html[data-theme] .max-staff-entry,html[data-theme] .report-kpi,html[data-theme] .settings-summary-card{padding:var(--tk-card-pad)}
+html[data-theme] .sensor-cards,html[data-theme] .settings-summary-grid,html[data-theme] .max-staff-list{gap:var(--tk-section-gap)}
+html[data-theme] .settings-pane .settings-form,html[data-theme] .dialog-form{gap:var(--tk-form-gap)}
+html[data-theme] .settings-pane{gap:var(--tk-section-gap)}
+html[data-theme] .settings-pane form[data-dirty="true"]{border-left:3px solid var(--tk-accent)}
+html[data-theme] .dialog-actions{position:sticky;bottom:0;z-index:2;background:var(--tk-panel);padding:12px 0 4px}
+.tk-table-tools{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:8px 14px;border-block:1px solid var(--tk-line);background:var(--tk-panel)}
+.tk-table-tools .muted{margin-right:auto}
+.tk-table-tools .btn{min-height:32px;padding:5px 10px}
+.tk-column-picker{position:relative}
+.tk-column-picker>summary{cursor:pointer;color:var(--tk-text);font-size:13px;font-weight:650;padding:5px 8px}
+.tk-column-choices{display:grid;gap:8px;padding:10px;background:var(--tk-raised);border:1px solid var(--tk-line);border-radius:8px}
+.tk-column-choices label{display:flex;align-items:center;gap:8px;font-size:12px}
+.tk-column-choices input{width:auto}
+.tk-sort{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;text-align:left;padding:0;white-space:normal}
+.tk-sort::after{content:"↕";color:var(--tk-muted)}
+.tk-sort[data-direction="asc"]::after{content:"↑";color:var(--tk-accent)}
+.tk-sort[data-direction="desc"]::after{content:"↓";color:var(--tk-accent)}
+.tk-chart-expand{margin:5px 0;font-size:12px}
+:fullscreen{background:var(--tk-panel);color:var(--tk-text)}
+:fullscreen canvas{height:calc(100vh - 90px)!important;max-height:none!important}
+#history-content[data-stale="true"]::before{content:"Не удалось обновить. Показаны последние полученные данные.";display:block;color:var(--tk-accent);padding:8px;font-size:12px}
+@media(min-width:701px){
+  .table-scroll:has(.tk-sort){max-height:65vh;overflow:auto}
+  .table-scroll:has(.tk-sort) th{position:sticky;top:0;z-index:1}
+}
+@media(max-width:1023px){
+  html[data-navigation="compact"] .nav-group-label,html[data-theme] .nav-group-label{font-size:10px;padding:6px 8px;margin:0;border:0;grid-column:1/-1}
+}
+
+html[data-theme] .settings-form [data-tk-edited]{border-color:var(--tk-accent);box-shadow:0 0 0 1px var(--tk-accent)}
+.tk-log-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
+.tk-log-tools input{flex:1 1 140px;min-width:0;width:auto}
+.tk-log-tools select{flex:0 1 155px;min-width:0;width:auto}
+.tk-log-tools .btn{min-height:38px;padding:7px 10px}
+.tk-log-tools .hint{flex:1 0 100%}
+.tk-log-tools .hint:empty{display:none}
+.tk-log-results{height:clamp(110px,20vh,220px);border-color:var(--tk-accent)}
+.debug-console:fullscreen,#usb-log-panel:fullscreen{padding:18px;overflow:auto}
+.debug-console:fullscreen #debug-log,#usb-log-panel:fullscreen #usb-log{height:55vh}
+
+/* Accessible loading, chart range and consistent control glyphs. */
+.tk-action-icon,.theme-toggle svg{width:17px;height:17px;flex:none;vertical-align:middle}
+.theme-toggle svg{width:20px;height:20px}
+.refresh-symbol{display:inline-flex;align-items:center}
+.tk-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
+.tk-chart-range{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:5px 0 8px}
+.tk-chart-range label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tk-muted)}
+.tk-chart-range select{width:auto;max-width:100%;font-size:12px;padding:7px 10px}
+[data-loading="true"]{position:relative}
+#history-state[data-loading="true"]{min-height:230px;padding:18px;display:block;text-align:left}
+#sensor-state[data-loading="true"],#report-status[data-loading="true"]{min-height:52px}
+#history-state[data-loading="true"]::after,#sensor-state[data-loading="true"]::after,#report-status[data-loading="true"]::after{content:"";display:block;border-radius:6px;margin-top:10px;background:linear-gradient(100deg,var(--tk-line) 25%,var(--tk-raised) 50%,var(--tk-line) 75%);background-size:200% 100%;height:10px;max-width:100%;animation:tk-skeleton 1.5s ease-in-out infinite}
+#history-state[data-loading="true"]::after{height:160px;background:repeating-linear-gradient(0deg,var(--tk-line) 0 1px,transparent 1px 39px),linear-gradient(100deg,var(--tk-raised) 25%,var(--tk-line) 50%,var(--tk-raised) 75%);background-size:100% 100%,200% 100%}
+@keyframes tk-skeleton{0%{background-position:100% 0}100%{background-position:-100% 0}}
+@media(prefers-reduced-motion:reduce){[data-loading="true"]::after{animation:none!important}}
+@media(max-width:700px){.tk-chart-range label{max-width:100%;flex-wrap:wrap}.tk-chart-range select{min-width:0}}

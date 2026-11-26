@@ -29,6 +29,7 @@
   <script src="/static/settings.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/max-admin.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/app.js?v=__ASSET_FINGERPRINT__" defer></script>
+  <script src="/static/workspace.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/school-calendar.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/building-accounts.js?v=__ASSET_FINGERPRINT__" defer></script>
   <script src="/static/sensors.js?v=__ASSET_FINGERPRINT__" defer></script>
@@ -62,11 +63,14 @@
       <button type="button" id="navigation-toggle" class="navigation-toggle" aria-expanded="false" aria-controls="sidebar-menu">Разделы</button>
       <div id="sidebar-menu" class="sidebar-menu">
         <nav class="navigation" aria-label="Разделы">
+          <span class="nav-group-label">Мониторинг</span>
           <button type="button" data-tab="overview" class="nav-button active" aria-current="page" aria-label="Обзор" title="Обзор"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-label">Обзор</span></button>
           <button type="button" data-tab="readings" class="nav-button" data-admin-only aria-label="Измерения" title="Измерения"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 5-8 4 3"/></svg></span><span class="nav-label">Измерения</span></button>
-          <button type="button" data-tab="rooms" class="nav-button" data-admin-only aria-label="Помещения" title="Помещения"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V3h16v18M9 21v-5h6v5M8 7h2m4 0h2M8 11h2m4 0h2"/></svg></span><span class="nav-label">Помещения</span></button>
           <button type="button" data-tab="reports" class="nav-button" aria-label="Отчёты" title="Отчёты"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h12l4 4v14H4zM16 3v4h4M8 17v-4m4 4V9m4 8v-6"/></svg></span><span class="nav-label">Отчёты</span></button>
+          <span class="nav-group-label" data-admin-only>Управление</span>
+          <button type="button" data-tab="rooms" class="nav-button" data-admin-only aria-label="Помещения" title="Помещения"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V3h16v18M9 21v-5h6v5M8 7h2m4 0h2M8 11h2m4 0h2"/></svg></span><span class="nav-label">Помещения</span></button>
           <button type="button" data-tab="staff" class="nav-button" data-admin-only aria-label="Сотрудники" title="Сотрудники"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="4"/><path d="M2 21v-3a8 8 0 0 1 16 0v3M18 4a4 4 0 0 1 0 7m2 3a6 6 0 0 1 2 5v2"/></svg></span><span class="nav-label">Сотрудники</span></button>
+          <span class="nav-group-label" data-admin-only>Система</span>
           <button type="button" data-tab="sensors" class="nav-button" data-admin-only aria-label="Датчики" title="Датчики"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 2v3m6-3v3m-6 14v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/><circle cx="12" cy="12" r="2"/></svg></span><span class="nav-label">Датчики</span></button>
           <button type="button" data-tab="settings" class="nav-button" data-admin-only aria-label="Настройки" title="Настройки"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M10 2h4l1 3 3 1 3 3-2 3 2 3-3 3-3 1-1 3h-4l-1-3-3-1-3-3 2-3-2-3 3-3 3-1z"/></svg></span><span class="nav-label">Настройки</span></button>
         </nav>
@@ -81,7 +85,7 @@
           <time id="updated-at" class="muted" hidden></time>
         </div>
         <div class="topbar-actions">
-          <button type="button" id="refresh" class="btn secondary" aria-label="Обновить данные" title="Обновить данные"><span class="refresh-symbol" aria-hidden="true">↻</span><span class="refresh-label">Обновить</span></button>
+          <button type="button" id="refresh" class="btn secondary" aria-label="Обновить данные" title="Обновить данные"><span class="refresh-symbol" aria-hidden="true"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 14-3l1 7M19 16a8 8 0 0 1-14 3l-1-7"/></svg></span><span class="refresh-label">Обновить</span></button>
           <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
         </div>
       </header>
@@ -141,10 +145,10 @@
                   <option value="90">90 дней</option>
                 </select>
               </label>
-              <button type="button" class="btn secondary" id="history-export" aria-label="Скачать историю в CSV">↓ CSV</button>
+              <button type="button" class="btn secondary" id="history-export" aria-label="Скачать историю в CSV"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> CSV</button>
             </div>
           </div>
-          <div id="history-state" class="history-state" role="status" aria-live="polite">Загружаем историю…</div>
+          <div id="history-state" class="history-state" data-loading="true" role="status" aria-live="polite">Загружаем историю…</div>
           <div id="history-content" hidden>
             <div id="history-chart-frame" class="history-chart-frame">
               <canvas id="history-chart" width="900" height="310" role="img" aria-label="График средней суточной температуры помещений"></canvas>
@@ -202,17 +206,17 @@
       </section>
 
       <section id="view-readings" class="view" hidden>
-        <div class="heading"><div><h1>Журнал измерений</h1><p>История показаний от сотрудников и датчиков.</p></div><div class="heading-actions"><button type="button" id="export-csv" class="btn secondary">↓ Скачать CSV</button><button type="button" id="add-reading" class="btn primary">+ Новое измерение</button></div></div>
+        <div class="heading"><div><h1>Журнал измерений</h1><p>История показаний от сотрудников и датчиков.</p></div><div class="heading-actions"><button type="button" id="export-csv" class="btn secondary"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> Скачать CSV</button><button type="button" id="add-reading" class="btn primary">+ Новое измерение</button></div></div>
         <div class="panel">
           <div class="panel-heading"><div><h2>Последние измерения</h2><p id="reading-chart-hint">Выберите помещение, чтобы увидеть его график.</p></div><select id="reading-filter" aria-label="Фильтр по помещению"><option value="">Все помещения</option></select></div>
           <div class="chart-container" id="reading-chart-panel" hidden><canvas id="reading-chart" width="900" height="200" role="img" aria-label="График температуры выбранного помещения"></canvas></div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Журнал измерений"><table class="readings-table"><thead><tr><th scope="col">Помещение</th><th scope="col">°C</th><th scope="col">Дата и время</th><th scope="col">Источник</th><th scope="col">Автор</th><th scope="col">История</th></tr></thead><tbody id="readings-table"></tbody></table></div>
-          <p id="readings-empty" class="empty" hidden>Показаний пока нет.</p>
+          <div id="readings-empty" class="tk-empty-state" hidden><h3>Показаний пока нет</h3><p>Они появятся после ручного ввода, сообщения в MAX или передачи с датчика.</p><button type="button" id="tk-empty-reading" class="btn secondary">Добавить измерение</button></div>
         </div>
       </section>
 
       <section id="view-sensors" class="view" hidden>
-        <div class="heading"><h1>Автономные датчики</h1><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-defaults-open" class="btn secondary" type="button">Настройки по умолчанию</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
+        <div class="heading"><div><h1>Автономные датчики</h1><p>Измерения, связь, питание и обновления ESP32-C3.</p></div><div class="heading-actions"><button id="sensor-refresh" class="btn secondary" type="button">Обновить</button><button id="sensor-defaults-open" class="btn secondary" type="button">Настройки по умолчанию</button><button id="sensor-add" class="btn secondary" type="button">Подключить по коду</button><button id="sensor-usb-open" class="btn primary" type="button">Прошить и подключить по USB</button></div></div>
         <p id="sensor-state" role="status" aria-live="polite"></p>
         <div class="panel sensor-firmware-panel">
           <div class="sensor-firmware-heading">
@@ -237,13 +241,14 @@
         <div id="tk-sensor-workspace" class="tk-sensor-workspace"><div class="tk-sensor-list">
         <div class="sensor-presentation"><input id="tk-sensor-search" type="search" placeholder="Название, помещение, ID" aria-label="Поиск активных датчиков"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
         <p id="tk-sensor-no-match" class="hint" role="status" hidden>Активные датчики по запросу не найдены.</p>
+        <div id="tk-sensor-empty" class="panel tk-empty-state" hidden><h2>Нет активных датчиков</h2><p id="tk-sensor-empty-description">Подключите первый датчик, чтобы видеть измерения и состояние связи.</p><div class="heading-actions"><button type="button" class="btn primary" id="tk-empty-usb">Подключить по USB</button><button type="button" class="btn secondary" id="tk-empty-code">Подключить по коду</button></div></div>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="tk-sensor-table" class="panel sensor-table-panel" hidden><div class="table-scroll" tabindex="0" role="region" aria-label="Таблица датчиков"><table><thead><tr><th scope="col">Датчик</th><th scope="col">Помещение</th><th scope="col">Состояние</th><th scope="col">Последний замер</th><th scope="col">Напряжение</th><th scope="col">Последняя связь</th><th scope="col">Прошивка</th><th scope="col">Действия</th></tr></thead><tbody id="tk-sensor-rows"></tbody></table></div></div>
         <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
         <details id="sensor-rejected-panel" class="panel sensor-disclosure" hidden><summary id="sensor-rejected-title">Отклонённые заявки</summary><p>Этим платам доступ закрыт. При необходимости можно разрешить подключение вручную.</p><div id="sensor-rejected-claims"></div></details>
         </div>
         <div id="sensor-detail" class="panel" hidden aria-labelledby="sensor-title">
-          <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p><dl id="sensor-sync-times" class="sensor-sync-times"></dl><p id="sensor-sync-notes" hidden></p></div><div class="heading-actions"><button type="button" id="sensor-export" class="btn secondary">↓ Скачать CSV</button><button type="button" id="tk-sensor-close" class="btn secondary">Закрыть карточку</button></div></div>
+          <div class="panel-heading"><div><h2 id="sensor-title" tabindex="-1"></h2><p id="sensor-detail-state"></p><dl id="sensor-sync-times" class="sensor-sync-times"></dl><p id="sensor-sync-notes" hidden></p></div><div class="heading-actions"><button type="button" id="sensor-export" class="btn secondary"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> Скачать CSV</button><button type="button" id="tk-sensor-close" class="btn secondary">Закрыть карточку</button></div></div>
           <form id="sensor-device-form" class="sensor-form"><label>Название<input id="sensor-edit-name" required maxlength="100"></label><label>Помещение<select id="sensor-edit-room" required></select></label><label class="archive-toggle"><input type="checkbox" id="sensor-enabled">Разрешить подключение</label><button class="btn secondary">Сохранить</button><button type="button" id="sensor-rekey" class="btn secondary">Перевыпустить ключ</button></form>
           <div class="chart-container">
             <canvas id="sensor-chart" width="900" height="260" role="img" aria-label="График измерений датчика"></canvas>
@@ -265,7 +270,7 @@
       <section id="view-rooms" class="view" hidden>
         <div class="heading"><div><h1>Помещения</h1><p>Кабинеты, нормы температуры и привязки MAX.</p></div><div class="heading-actions"><button type="button" id="add-room" class="btn primary">Добавить помещение</button><button type="button" id="bulk-rooms" class="btn secondary">＋ Добавить списком</button><button type="button" id="bulk-max-codes" class="btn secondary">Коды MAX</button><button type="button" id="open-staff" class="btn secondary">Сотрудники MAX</button></div></div>
         <div class="panel">
-          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус, сотрудник" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms">↓ Скачать CSV</button></div>
+          <div class="panel-heading room-controls"><input id="rooms-search" type="search" placeholder="Помещение, корпус, сотрудник" aria-label="Поиск помещений"><label class="archive-toggle"><input id="show-inactive" type="checkbox"> Показать отключённые</label><button type="button" class="btn secondary" id="export-rooms"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> Скачать CSV</button></div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Список помещений"><table class="rooms-table" role="table"><thead role="rowgroup"><tr role="row"><th scope="col">Название</th><th scope="col">Корпус</th><th scope="col">Этаж</th><th>Тип</th><th>Норма</th><th>Привязка MAX</th><th>Действия</th></tr></thead><tbody id="rooms-table" role="rowgroup"></tbody></table></div>
           <p id="rooms-empty" class="empty" hidden>Добавьте первое помещение.</p>
         </div>
@@ -273,7 +278,7 @@
       <section id="view-staff" class="view" hidden>
         <div class="heading">
           <div><h1>Сотрудники MAX</h1><p>Управление пользователями бота и назначение кабинетов без кодов.</p></div>
-          <button type="button" id="staff-refresh" class="btn secondary">↻ Обновить список</button>
+          <button type="button" id="staff-refresh" class="btn secondary"><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 14-3l1 7M19 16a8 8 0 0 1-14 3l-1-7"/></svg> Обновить список</button>
         </div>
         <div class="panel max-staff-panel">
           <div class="max-staff-toolbar">
@@ -291,8 +296,8 @@
         <div class="heading">
           <div><h1>Отчёты</h1><p>Сдача показаний, температурный режим, здания и сотрудники.</p></div>
           <div class="heading-actions">
-            <button type="button" class="btn secondary" id="report-export-excel" disabled>↓ Excel</button>
-            <button type="button" class="btn secondary" id="report-export-pdf" disabled>↓ PDF</button>
+            <button type="button" class="btn secondary" id="report-export-excel" disabled><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> Excel</button>
+            <button type="button" class="btn secondary" id="report-export-pdf" disabled><svg class="tk-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg> PDF</button>
           </div>
         </div>
         <div class="panel report-filter-panel">
@@ -469,7 +474,7 @@
                   <label class="theme-choice"><input type="radio" name="theme-preference" value="dark"><span class="theme-preview theme-preview-dark" aria-hidden="true"></span><span class="theme-choice-title">Тёмная</span><small>Тёмный фон</small></label>
                 </div>
                 <p class="hint">Тема применяется сразу и сохраняется в этом браузере.</p>
-                <label class="tk-density" for="tk-density">Плотность таблиц<select id="tk-density"><option value="compact">Компактная</option><option value="normal">Стандартная</option><option value="wide">Свободная</option></select></label>
+                <label class="tk-density" for="tk-density">Плотность интерфейса<select id="tk-density"><option value="compact">Компактная</option><option value="normal">Стандартная</option><option value="wide">Свободная</option></select></label>
               </article>
             </div>
             <div class="settings-pane" data-settings-view="notifications" hidden>

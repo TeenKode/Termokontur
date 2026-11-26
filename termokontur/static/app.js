@@ -54,9 +54,21 @@ const dialogObserver=new MutationObserver(syncFeedbackContainer);
 for(const dialog of document.querySelectorAll("dialog")){
   dialogObserver.observe(dialog,{attributes:true,attributeFilter:["open"]});
 }
+const toastQueue=[];
 function hideToast(){
   clearTimeout(toastTimer);
   show("toast",false);
+  if(toastQueue.length)showNextToast();
+}
+function showNextToast(){
+  const next=toastQueue.shift();
+  if(!next)return;
+  syncFeedbackContainer();
+  $("toast").dataset.kind=next.isError?"error":"success";
+  $("toast-message").setAttribute("role",next.isError?"alert":"status");
+  $("toast-message").textContent=next.message;
+  show("toast",true);
+  scheduleToast();
 }
 function scheduleToast(){
   clearTimeout(toastTimer);
@@ -71,12 +83,12 @@ for(const type of ["pointerenter","pointerleave","focusin","focusout"]){
 }
 function toast(message,isError=false){
   if(!message||message===sessionEndedMessage||isError&&message===connectionProblem)return;
-  syncFeedbackContainer();
-  $("toast").dataset.kind=isError?"error":"success";
-  $("toast-message").setAttribute("role",isError?"alert":"status");
-  show("toast",true);
-  $("toast-message").textContent=message;
-  scheduleToast();
+  message=String(message);
+  if(!$("toast").hidden&&$("toast-message").textContent===message&&$("toast").dataset.kind===(isError?"error":"success"))return;
+  if(toastQueue.some(item=>item.message===message&&item.isError===isError))return;
+  if(toastQueue.length>=8)toastQueue.splice(Math.max(0,toastQueue.findIndex(item=>!item.isError)),1);
+  toastQueue.push({message,isError});
+  if($("toast").hidden)showNextToast();
 }
 function renderOperationStatus(){
   let message=connectionProblem;
@@ -176,7 +188,7 @@ async function api(path,method="GET",body){
 function enterLogin(message="") {
   closeNavigation();
   for(const dialog of document.querySelectorAll("dialog[open]"))dialog.close();
-  hideToast();
+  toastQueue.length=0;hideToast();
   show("login-screen",true); show("app-root",false); $("password").value="";
   $("login-error").textContent=message;
 }
@@ -322,11 +334,12 @@ function renderOverview() {
     const tr=el("tr");
     cell(tr,item.name).append(el("small","table-building",item.building));
     const val=cell(tr,temperature(item.last_temp),"temp"+(item.status==="below"?" low":item.status==="above"?" high":""));
+    val.dataset.sortValue=item.last_temp??"";
     val.title=item.last_source?"Источник: "+(sources[item.last_source]||item.last_source):"";
     const label=item.status==="missing"&&item.last_at?"Устарело":statuses[item.status];
     const statusTd=cell(tr,"");statusTd.append(el("span","status "+item.status,label||item.status));
     cell(tr,Number(item.min_temp).toLocaleString("ru-RU")+"–"+Number(item.max_temp).toLocaleString("ru-RU")+" °C");
-    cell(tr,when(item.last_at));
+    cell(tr,when(item.last_at)).dataset.sortValue=item.last_at||"";
     tbody.append(tr);
   }
   show("overview-empty",filtered.length===0);
@@ -501,14 +514,21 @@ function resetHistorySummary(){
   for(const id of ["avg-today-desc","avg-change","today-coverage-desc","coverage-progress","today-alerts","building-panel","room-drilldown"])
     show(id,false);
 }
-async function refreshHistory(){
+async function refreshHistory({background=false}={}){
   const sequence=++historyRequestId,building=$("building-filter").value,days=$("history-period").value;
+  const keep=background&&historyData&&(historyData.building||"")===building&&Number(historyData.days)===Number(days);
   if(historyData&&(historyData.building||"")!==building)resetHistorySummary();
-  $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
-  $("history-content").hidden=true;
+  if(!keep){
+    $("history-state").hidden=false;$("history-state").textContent="Загружаем средние температуры…";
+    $("history-content").hidden=true;
+    $("history-state").dataset.loading="true";
+  }
+  $("history-content").setAttribute("aria-busy","true");
   try{
     const data=await api("/api/dashboard/history?days="+encodeURIComponent(days)+"&building="+encodeURIComponent(building));
     if(sequence!==historyRequestId)return;
+    $("history-content").removeAttribute("data-stale");
+    if(keep&&JSON.stringify(historyData)===JSON.stringify(data))return;
     historyData=data;
     $("history-state").hidden=true;$("history-content").hidden=false;
     show("building-panel",true);
@@ -516,8 +536,11 @@ async function refreshHistory(){
     renderHistory();
   }catch(error){
     if(sequence!==historyRequestId)return;
+    if(keep){$("history-content").setAttribute("data-stale","true");return;}
     resetHistorySummary();
     $("history-state").textContent="Не удалось загрузить историю: "+error.message;
+  }finally{
+    if(sequence===historyRequestId){$("history-content").removeAttribute("aria-busy");delete $("history-state").dataset.loading;}
   }
 }
 function exportHistory(){
@@ -611,8 +634,8 @@ function renderReadings(){
   for(const row of readings) {
     const tr=el("tr");
     cell(tr,row.room_name).append(el("small","table-building",row.building));
-    cell(tr,temperature(row.value),"temp");
-    cell(tr,when(row.observed_at));
+    cell(tr,temperature(row.value),"temp").dataset.sortValue=row.value??"";
+    cell(tr,when(row.observed_at)).dataset.sortValue=row.observed_at||"";
     cell(tr,sources[row.source]||row.source);
     cell(tr,row.reporter_display||row.reporter||"—");
     const actions=el("td");
@@ -667,13 +690,20 @@ async function refresh({background=false}={}) {
     const adminData=buildingScope?[]:[api("/api/rooms"),
       api("/api/rooms?include_inactive=true"),api("/api/max/users")];
     const [dash,day,activeRooms,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
-    overview=dash.rooms;rooms=activeRooms||dash.rooms;daily=day;
-    renderFilters();renderOverview();renderDaily();
+    const changed=(oldValue,newValue)=>!background||JSON.stringify(oldValue)!==JSON.stringify(newValue);
+    const nextRooms=activeRooms||dash.rooms;
+    const roomChange=changed(rooms,nextRooms),overviewChange=changed(overview,dash.rooms),dailyChange=changed(daily,day);
+    overview=dash.rooms;rooms=nextRooms;daily=day;
+    if(roomChange)renderFilters();
+    if(roomChange||overviewChange)renderOverview();
+    if(roomChange||dailyChange)renderDaily();
     if(!buildingScope){
+      const allChange=changed(allRooms,all),staffChange=changed(maxStaff,staff);
       allRooms=all;maxStaff=staff;
-      renderRooms();renderMaxStaff();
+      if(allChange)renderRooms();
+      if(allChange||staffChange)renderMaxStaff();
     }
-    await Promise.all([refreshHistory(),buildingScope?undefined:refreshReadings({background})]);
+    await Promise.all([refreshHistory({background}),buildingScope?undefined:refreshReadings({background})]);
     const updated=$("updated-at");
     updated.dateTime=dash.generated_at;
     updated.textContent="Обновлено "+when(dash.generated_at);
@@ -686,6 +716,7 @@ async function refreshReadings({background=false}={}){
   try{
     const result=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));
     if(request!==readingRequestId)return;
+    if(background&&JSON.stringify(readings)===JSON.stringify(result))return;
     readings=result;
     renderReadings();
   }catch(error){if(request===readingRequestId&&!background)toast(error.message,true);}
@@ -775,6 +806,7 @@ $("reading-filter").addEventListener("change",()=>{
 });
 $("quick-reading").addEventListener("click",()=>openReading({building:$("building-filter").value}));
 $("add-reading").addEventListener("click",()=>openReading({room:$("reading-filter").value}));
+$("tk-empty-reading")?.addEventListener("click",()=>$("add-reading").click());
 $("add-room").addEventListener("click",()=>openRoom());
 $("rooms-search").addEventListener("input",renderRooms);
 onOperation($("report-filter-form"),"Формируем отчёт…",loadReport);
