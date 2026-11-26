@@ -114,9 +114,17 @@ def _sensor_sync_status(conn: sqlite3.Connection, _: str) -> None:
             WHERE last_seen IS NOT NULL AND (last_complete_sync IS NULL OR last_seen > last_complete_sync)""")
 
 
+def _sensor_schedule(conn: sqlite3.Connection, _: str) -> None:
+    _add_columns(conn, "sensor_devices", {"next_send_hint": "INTEGER"})
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_config_history (
+        device_id TEXT NOT NULL REFERENCES sensor_devices(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL, config TEXT NOT NULL,
+        PRIMARY KEY(device_id, version))""")
+
+
 _MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors,
                _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures,
-               _admin_audit, _sensor_sync_status)
+               _admin_audit, _sensor_sync_status, _sensor_schedule)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

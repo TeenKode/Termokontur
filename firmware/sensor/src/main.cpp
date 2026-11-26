@@ -571,6 +571,7 @@ static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
 static bool server_supports_usb_sync = false;
 static bool server_supports_tail_loss = false;
+static bool server_supports_next_send = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -600,6 +601,7 @@ static bool sync_time() {
   server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
   server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
   server_supports_tail_loss = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_tail_loss"));
+  server_supports_next_send = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_next_send"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -847,7 +849,7 @@ static cJSON *measurement_json(const Record &r) {
 }
 
 static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
-                 bool allow_ota) {
+                 bool allow_ota, uint64_t preserved_send) {
   // Reuse the trusted server time and Wi-Fi connection if already obtained.
   if (!time_prepared) {
     if (!wifi_up())
@@ -874,6 +876,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     add(j, "firmware", firmware_version());
     num(j, "next_seq", state.next);
     num(j, "lost", lost);
+    if (server_supports_next_send && preserved_send) {
+      const auto now = uptime_now();
+      num(j, "next_send_in_s", preserved_send > now ? preserved_send - now : 0);
+    }
     if (server_supports_replay) {
       num(j, "device_ack", state.ack);
       num(j, "device_lost_base", state.lost_base);
@@ -1130,7 +1136,7 @@ static esp_err_t setup_save(httpd_req_t *req) {
 }
 enum class Command {
   help, hello, status, config, power, clock, journal, network, ota_status,
-  test_measurement, hold, resume, sample_now, sync_now, sleep, reboot,
+  test_measurement, hold, resume, sample_now, sync_now, delivery_test, sleep, reboot,
   setup_wifi, arm_boot_debug, sign, configure, verify_configuration, finish_setup,
 };
 enum class CommandMode { either, setup, wake };
@@ -1147,6 +1153,7 @@ static constexpr CommandSpec commands[] = {
     {"hold", Command::hold, CommandMode::wake}, {"resume", Command::resume, CommandMode::wake},
     {"sample_now", Command::sample_now, CommandMode::wake},
     {"sync_now", Command::sync_now, CommandMode::wake},
+    {"delivery_test", Command::delivery_test, CommandMode::wake},
     {"sleep", Command::sleep, CommandMode::wake}, {"reboot", Command::reboot},
     {"setup_wifi", Command::setup_wifi, CommandMode::setup},
     {"arm_boot_debug", Command::arm_boot_debug, CommandMode::setup},
@@ -1165,6 +1172,7 @@ struct ConsoleSession {
   ConsoleAction action = ConsoleAction::none;
   uint32_t sleep_seconds = 0;
   bool sync_after_sample = false;
+  bool repeat_delivery = false;
   bool held = false;
 };
 
@@ -1281,6 +1289,7 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
     cJSON_AddBoolToObject(out, "pending_records", state.next != state.ack);
     cJSON_AddBoolToObject(out, "verified_setup", session.setup);
     cJSON_AddBoolToObject(out, "provisioned", session.setup ? setup_provisioned : !ssid.empty());
+    cJSON_AddBoolToObject(out, "delivery_test", !session.setup);
     break;
   }
   case Command::status: {
@@ -1374,6 +1383,20 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
     if (session.wifi_allowed) session.action = ConsoleAction::sync;
     else add(out, "error", "wifi_below_battery_threshold");
     break;
+  case Command::delivery_test: {
+    const auto *repeat = cJSON_GetObjectItemCaseSensitive(request, "repeat");
+    if (repeat && !cJSON_IsBool(repeat)) add(out, "error", "delivery_test: repeat must be true or false");
+    else if (!cfg.enabled) add(out, "error", "measurements_disabled");
+    else if (!session.wifi_allowed) add(out, "error", "wifi_below_battery_threshold");
+    else {
+      session.action = ConsoleAction::sample;
+      session.sync_after_sample = true;
+      session.repeat_delivery = cJSON_IsTrue(repeat);
+      num(out, "seq", state.next);
+      add(out, "boot_id", hex64(rt.boot));
+    }
+    break;
+  }
   case Command::sleep: {
     uint64_t seconds;
     if (!integer_option(request, "seconds", 1, 604800, cfg.measure_s, seconds)) {
@@ -1836,8 +1859,9 @@ extern "C" void app_main() {
   const bool requested_sync = console.action == ConsoleAction::sync || console.sync_after_sample;
 
   // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
+  const bool scheduled_measure = uptime_now() >= rt.next_measure;
   const bool measurement_due =
-      boot_debug || (cfg.enabled && (requested_sample || pending || uptime_now() >= rt.next_measure));
+      boot_debug || (cfg.enabled && (requested_sample || pending || scheduled_measure));
   const uint32_t radio_budget = sensor::radio_budget_s(cfg.wifi_budget_s, boot_debug);
   // Measure before any station connection, even after a cold boot. The
   // setup AP is already stopped by setup_ap() before the BOOT test.
@@ -1870,8 +1894,8 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool scheduled_send = sensor::radio_due(boot_debug, uptime_now(), rt.next_send_uptime);
-  const bool send_due = scheduled_send || requested_sync;
+  const bool scheduled_send = sensor::radio_due(uptime_now(), rt.next_send_uptime);
+  const bool send_due = scheduled_send || boot_debug || requested_sync;
   printf("TK PLAN measure_due=%d send_due=%d wifi_allowed=%d config_version=%u measure_s=%u send_s=%u\n",
          measurement_due, send_due, wifi_allowed, (unsigned)cfg.version,
          (unsigned)cfg.measure_s, (unsigned)cfg.send_s);
@@ -1902,7 +1926,7 @@ extern "C" void app_main() {
     sleep_for(cfg.measure_s);
   }
   if (measured) {
-    rt.next_measure = measurement.uptime + cfg.measure_s;
+    if (scheduled_measure || pending) rt.next_measure = measurement.uptime + cfg.measure_s;
     measurement.seq = state.next;
     state.next++;
     if (!save_state())
@@ -1925,17 +1949,14 @@ extern "C" void app_main() {
     printf("TK SYNC start ack_seq=%llu next_seq=%llu\n",
            (unsigned long long)state.ack, (unsigned long long)state.next);
     bool ok = (!bootstrap_after_sample || time_prepared) &&
-              sync(journal, mv, time_prepared, scheduled_send && !boot_debug);
+              sync(journal, mv, time_prepared, scheduled_send && !boot_debug && !requested_sync,
+                   scheduled_send ? 0 : rt.next_send_uptime);
     stop_network();
-    if (ok) {
-      rt.failures = 0;
-      rt.next_send_uptime = sensor::radio_next_send(uptime_now(),
-          state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s);
-    } else {
-      uint32_t backoff = (last_error == "authorization_pending" || !factory_ticket.empty()) ? 300 : sensor::retry_delay(cfg.send_s, rt.failures);
-      if (rt.failures < 4) rt.failures++;
-      rt.next_send_uptime = sensor::radio_next_send(uptime_now(), backoff);
-    }
+    const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
+    const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, scheduled_send, ok,
+        uptime_now(), cfg.send_s, next_interval, last_error == "authorization_pending" || !factory_ticket.empty());
+    rt.next_send_uptime = updated.next;
+    rt.failures = updated.failures;
     printf("TK SYNC result=%s ack_seq=%llu next_seq=%llu next_send=%llu error=%s\n",
            ok ? "ok" : "failed", (unsigned long long)state.ack, (unsigned long long)state.next,
            (unsigned long long)rt.next_send_uptime, last_error.empty() ? "-" : last_error.c_str());
@@ -1964,5 +1985,5 @@ extern "C" void app_main() {
   // for its independent radio deadline, without forcing another sample.
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
       wifi_allowed, rt.next_send_uptime, uptime);
-  sleep_for(sleep_s);
+  sleep_for(console.repeat_delivery && !rt.charging ? std::min<uint32_t>(sleep_s, 10) : sleep_s);
 }

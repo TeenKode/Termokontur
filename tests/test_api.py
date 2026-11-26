@@ -289,7 +289,7 @@ def test_dashboard_assets_bust_cache_and_match_html(client):
     expected = sha256(b"".join(
         (static / name).read_bytes() for name in (
             "app.js", "charts.js", "reports.js", "notifications.js", "updates.js", "settings.js", "max-admin.js", "school-calendar.js", "building-accounts.js", "sensors.js", "sensor-onboarding.js",
-            "sensor-usb.mjs", "firmware-debug.mjs", "firmware-test.mjs", "sensor-log.mjs",
+            "sensor-usb.mjs", "firmware-debug.mjs", "firmware-test.mjs", "firmware-delivery.mjs", "sensor-log.mjs",
             "vendor/esptool.bundle.js", "style.css", "max-pairing.css", "maintenance.css", "feedback.css", "overview.css", "theme.css", "overview-history.css", "notifications.css", "reading-history.css", "sensors.css", "max-staff.css", "reports.css", "charts.css", "theme.js", "icon-32.png", "icon-192.png",
         )
     )).hexdigest()[:16]

@@ -21,6 +21,26 @@ SIMULATED_USB=r'''(() => {
  const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
  const der=raw=>{const data=new Uint8Array(raw);const integer=part=>{let a=Array.from(part);while(a.length>1&&a[0]===0)a.shift();if(a[0]&128)a.unshift(0);return [2,a.length,...a];};const r=integer(data.slice(0,32)),s=integer(data.slice(32));return new Uint8Array([48,r.length+s.length,...r,...s]);};
  let port;
+ async function sendTestSample(fixture,seq,bootId,repeat) {
+   const record={seq,boot_id:bootId,uptime_s:seq*10,measured_at:Math.floor(Date.now()/1000),time_quality:'rtc',temperature:21.5,humidity:44.2,battery_mv:3950,interval_s:1800,error:''};
+   fixture.pending.push(record);
+   if(seq===2){
+     window.emitSensorLog(['TK NET stage=tcp result=failed dns_ms=1 tcp_ms=1000 tls_ms=-1',
+       'HTTPS: /api/sensors/devices/tk-fixture/sync failed at open (open=ESP_ERR_HTTP_CONNECT, HTTP 0)',
+       `TK SYNC result=failed ack_seq=${fixture.ack} error=https_sync_failed`]);
+   }else{
+     const reply=await fetch('/api/sensors/devices/'+fixture.id+'/sync',{
+       method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+fixture.token},
+       body:JSON.stringify({model:'c3-sht40-v1',sensor_type:'sht4x',firmware:'1.5.0',records:fixture.pending,
+         next_seq:seq+1,lost:0,rssi:-55,battery_mv:3950,config_version:1,boots:1})});
+     if(!reply.ok)throw Error(await reply.text());
+     fixture.ack=(await reply.json()).ack_seq;
+     fixture.pending=[];
+     window.emitSensorLog(['TK NET stage=tls result=ok dns_ms=1 tcp_ms=10 tls_ms=21',
+       `TK SYNC result=ok ack_seq=${fixture.ack} error=-`]);
+   }
+   if(repeat)setTimeout(()=>window.emitSensorLog(['TK READY uart0=1 usb=0 window_ms=350']),100);
+ }
  Object.defineProperty(navigator,'serial',{value:{requestPort:async options=>{
   if(window.simCancel)throw new DOMException('Dismissed','NotFoundError');
   window.simSerialOptions=options;
@@ -32,6 +52,12 @@ SIMULATED_USB=r'''(() => {
    if(req.cmd==='hello'){
     Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
     if(!window.simOmitProvisioned)response.provisioned=Boolean(window.savedUSB);
+    if(window.simDelivery)Object.assign(response,{hardware_id:'4423456789ab',delivery_test:true,provisioned:true});
+   }
+   else if(req.cmd==='delivery_test'){
+     const fixture=window.simDelivery,seq=fixture.next++,bootId='00000000000000a1';
+     Object.assign(response,{seq,boot_id:bootId});
+     setTimeout(()=>void sendTestSample(fixture,seq,bootId,req.repeat),0);
    }
    else if(req.cmd==='sign')response.signature=hex(der(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},pair.privateKey,new TextEncoder().encode(req.message))));
    else if(req.cmd==='configure'){if(window.simSaveFailure){response.error='NVS test failure';}else{window.savedUSB=req;response.saved=true;response.verified=true;}}
@@ -365,10 +391,32 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.evaluate('window.emitSensorLog(["TK READY uart0=1 usb=0 window_ms=350", "TK SLEEP seconds=1800"])')
                 expect(page.locator('#debug-log')).to_contain_text('TK SLEEP seconds=1800')
                 assert page.evaluate('window.simSerialCommands') == ['status']
+
+                bench_room=api.post('/api/rooms',json={'building':'Демо: школа','name':'Тест доставки'}).json()
+                bench=api.post('/api/sensors/devices',json={'name':'Стенд UART0','room_id':bench_room['id']}).json()
+                enrollment=api.post('/api/sensors/enroll',json={'device_id':bench['device_id'],'code':bench['code'],
+                    'model':'c3-sht40-v1','sensor_type':'sht4x','hardware_id':'4423456789ab'})
+                assert enrollment.is_success, enrollment.text
+                page.evaluate('fixture=>window.simDelivery=fixture',{'id':bench['device_id'],'token':enrollment.json()['token'],
+                    'next':1,'ack':1,'pending':[]})
+                page.click('#debug-delivery-start')
+                expect(page.locator('#debug-delivery-state')).to_contain_text('Ждём пробуждения')
+                page.click('#debug-delivery-stop')
+                expect(page.locator('#debug-delivery-state')).to_have_text('Проверка остановлена.')
+                assert page.evaluate('window.simSerialCommands') == ['status']
+                page.click('#debug-delivery-start')
+                expect(page.locator('#debug-delivery-state')).to_contain_text('Ждём пробуждения')
+                page.evaluate('window.emitSensorLog(["TK READY uart0=1 usb=0 window_ms=350"])')
+                expect(page.locator('#debug-delivery-state')).to_have_text(
+                    'Сразу подтверждено 2 из 3 записей. С повторной доставкой — 3 из 3.')
+                expect(page.locator('#debug-delivery-results li').nth(1)).to_contain_text('Сбой на этапе TCP')
+                expect(page.locator('#debug-delivery-results li').nth(1)).to_contain_text('Запись догружена')
+                records=api.get(f"/api/sensors/devices/{bench['device_id']}/records").json()
+                assert [row['seq'] for row in records] == [3, 2, 1]
                 page.click('#debug-disconnect')
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1')
                 assert not errors,errors
                 browser.close()
-            print('Browser/API passed: bundled firmware, simulated USB flash and diagnostics, authorization, signed ingest, and desktop/mobile layout. Physical USB not tested.')
+            print('Browser/API passed: bundled firmware, simulated USB flash, UART delivery and recovery, signed ingest, and desktop/mobile layout. Physical USB not tested.')
         finally:
             server.terminate();server.wait(timeout=10)

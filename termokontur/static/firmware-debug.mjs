@@ -1,18 +1,25 @@
 import {SensorSerial, parseSerialCommand, verifyIdentity} from "./sensor-usb.mjs";
 import {createSerialLog} from "./sensor-log.mjs";
 import {runBenchTest, manualChecks} from "./firmware-test.mjs";
+import {runDeliveryTest} from "./firmware-delivery.mjs";
 
 const field = name => document.getElementById("debug-" + name);
 const panelVersion = field("panel-version").textContent;
 const supported = Boolean(window.isSecureContext && navigator.serial);
 const log = field("log");
 const journal = createSerialLog(log, field("log-end"), 65536);
+const serialLines = new EventTarget();
 const diagnostics = ["firmware", "hardware", "sensor-type", "pending", "temperature", "humidity", "battery"];
 const clock = new Intl.DateTimeFormat("ru-RU", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const number = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 2});
 const measurementErrors = {
   sensor_crc: "Датчик вернул неверную контрольную сумму.",
   sensor_io: "Нет ответа датчика. Проверьте тип модуля и подключение.",
+};
+const deliveryErrors = {
+  wifi_below_battery_threshold: "Напряжение аккумулятора ниже порога Wi-Fi.",
+  measurements_disabled: "Измерения отключены в настройках датчика.",
+  sleep: "Плата ушла в сон до завершения отправки.",
 };
 
 let serial = null;
@@ -22,6 +29,7 @@ let connecting = false;
 let checking = false;
 let bootArmed = false;
 let testing = false, testCancelled = false, testReport = null;
+let delivery = null;
 let auto = false, timer = null, successes = 0, failures = 0;
 function stats() { field("stats").textContent = "Успешно: "+successes+" · Ошибок: "+failures; }
 function stopAuto() { auto = false; clearTimeout(timer); timer = null; controls(); }
@@ -34,7 +42,7 @@ function controls() {
   field("connect").disabled = !supported || connecting || Boolean(serial);
   field("connect-uart").disabled = field("connect").disabled;
   field("disconnect").disabled = !serial;
-  const commandsDisabled = !serial || checking || bootArmed || testing || auto;
+  const commandsDisabled = !serial || checking || bootArmed || testing || auto || Boolean(delivery);
   const queriesDisabled = !serial || uartMode || checking || bootArmed || testing;
   for (const name of ["identify", "boot"]) field(name).disabled = queriesDisabled || auto;
   field("wifi").disabled = field("wifi-details").hidden && (queriesDisabled || auto);
@@ -45,6 +53,8 @@ function controls() {
   field("test-start").disabled = queriesDisabled || auto;
   field("test-stop").disabled = !testing || testCancelled;
   field("test-report").disabled = !testReport || testing;
+  field("delivery-start").disabled = commandsDisabled || !uartMode || Boolean(queuedCommand);
+  field("delivery-stop").disabled = !delivery || delivery.signal.aborted;
   field("clear").disabled = log.textContent.length === 0;
   field("save").disabled = field("clear").disabled;
   field("command").disabled = commandsDisabled || Boolean(queuedCommand);
@@ -61,6 +71,7 @@ function appendLog(line) {
 
 function serialLog(line) {
   const clean = line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  if (delivery) serialLines.dispatchEvent(new CustomEvent("line", {detail:clean.trimStart()}));
   appendLog(clean.replace(/^\s*SETUP password:.*$/i, "SETUP password: [скрыт]"));
   if (bootArmed && clean.startsWith("BOOT: ")) field("result").textContent = clean.slice(6);
   if (queuedCommand && serial && !checking && clean.trimStart().startsWith("TK READY ")) {
@@ -185,6 +196,7 @@ async function closePort(connection, message) {
   serial = null;
   uartMode = false;
   queuedCommand = null;
+  delivery?.abort();
   field("command-state").textContent = "";
   if(testing)testCancelled=true;
   stopAuto();
@@ -260,6 +272,57 @@ field("auto").addEventListener("click", () => {
   auto = true; controls(); void checkBoard("test_measurement");
 });
 field("boot").addEventListener("click", () => checkBoard("arm_boot_debug"));
+
+async function deliveryApi(path, signal) {
+  const response = await fetch(path, {cache:"no-store", signal:AbortSignal.any([signal, AbortSignal.timeout(5000)])});
+  if (!response.ok) throw Error("Не удалось проверить журнал на сервере. HTTP " + response.status + ".");
+  return response.json();
+}
+
+field("delivery-start").addEventListener("click", async () => {
+  if (field("delivery-start").disabled) return;
+  const controller = new AbortController();
+  delivery = controller;
+  const state = field("delivery-state"), results = field("delivery-results");
+  results.replaceChildren(); results.hidden = true;
+  state.textContent = "Загружаем список датчиков…";
+  controls();
+  try {
+    const attempts = await runDeliveryTest(serial, serialLines, {
+      signal:controller.signal,
+      listDevices:signal => deliveryApi("/api/sensors/devices", signal),
+      readRecord:async (id, seq, signal) => (await deliveryApi(
+        `/api/sensors/devices/${encodeURIComponent(id)}/records?limit=1&before_seq=${seq + 1}`, signal))[0],
+      onState:message => {state.textContent = message;},
+      onTrial:trial => {
+        const ok = trial.stored && trial.acknowledged;
+        const row = results.children[trial.index - 1] || document.createElement("li");
+        const result = trial.recovered ? "Запись догружена при повторной отправке" : ok ? "Запись подтверждена сервером" :
+          trial.stored ? "Запись на сервере, плата не получила подтверждение" :
+          trial.acknowledged ? "Плата получила подтверждение, запись в журнале сервера не найдена" : "Запись пока не доставлена";
+        const reason = trial.measurementError ? measurementErrors[trial.measurementError] :
+          !ok && trial.stage ? "Сбой на этапе " + trial.stage :
+          !ok && trial.error && trial.error !== "-" ? deliveryErrors[trial.error] || trial.error : "";
+        row.textContent = `№${trial.seq} · ${result}${reason ? ". " + reason : ""}`;
+        if (!row.parentNode) results.append(row);
+        results.hidden = false;
+      },
+    });
+    const immediate = attempts.filter(trial => trial.stored && trial.acknowledged).length;
+    const recovered = attempts.filter(trial => trial.recovered).length;
+    state.textContent = `Сразу подтверждено ${immediate} из ${attempts.length} записей.` +
+      (recovered ? ` С повторной доставкой — ${immediate + recovered} из ${attempts.length}.` : "");
+  } catch (error) {
+    state.textContent = controller.signal.aborted ? "Проверка остановлена." :
+      error.name === "TimeoutError" ? "Панель не ответила при проверке журнала." : deliveryErrors[error.message] || error.message;
+  } finally {
+    controller.abort();
+    delivery = null;
+    controls();
+  }
+});
+field("delivery-stop").addEventListener("click", () => { delivery?.abort(); controls(); });
+
 const manual = new Map();
 for(const [id, description] of manualChecks){
   const label=document.createElement("label");

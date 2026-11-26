@@ -140,7 +140,7 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
         if config:
             wanted = config.model_dump(exclude={'version'})
             if wanted != conf.model_dump(exclude={'version'}):
-                config.version = conf.version + 1
+                config.version = sensors.remember_config(conn, d) + 1
                 conf = config
         conn.execute("UPDATE sensor_devices SET enabled=1,name=?,config=?,sensor_type=?,hardware_id=? WHERE id=?",
                      (name.strip(), conf.model_dump_json(), sensor_type or d['sensor_type'], identity['hardware_id'], device))
@@ -166,7 +166,7 @@ def router(require_admin):
         if len(certificate.encode("utf-8")) > 8000:
             raise HTTPException(503, "Цепочка сертификатов превышает 8000 байт")
         return JSONResponse({'time': int(time.time()), 'ca': certificate, 'sync_replay': True,
-                             'usb_powered_sync': True, 'sync_tail_loss': True}, headers={
+                             'usb_powered_sync': True, 'sync_tail_loss': True, 'sync_next_send': True}, headers={
             'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
         })
 

@@ -50,14 +50,16 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   await until(()=>d.querySelector(".sensor-card strong")?.textContent==="Выгрузка не завершена");d.querySelector(".sensor-card button").click();
   await until(()=>d.querySelectorAll("#sensor-records tr").length===1);
   const uploadTimes=d.getElementById("sensor-sync-times");
-  assert.deepEqual(Array.from(uploadTimes.querySelectorAll("dt"),item=>item.textContent),["Последняя связь","Полная выгрузка"]);
+  assert.deepEqual(Array.from(uploadTimes.querySelectorAll("dt"),item=>item.textContent),["Последняя связь","Полная выгрузка","Последний корректный замер"]);
   assert.notEqual(uploadTimes.querySelector("dd").textContent,"—");
-  assert.equal(uploadTimes.querySelector("dd:last-child").textContent,"—");
+  assert.equal(uploadTimes.querySelectorAll("dd")[1].textContent,"—");
+  assert.match(uploadTimes.querySelector("dd:last-child").textContent,/21,5 °C/);
   assert.equal(d.getElementById("sensor-title").textContent,"Датчик <тест>");
   assert.equal(d.getElementById("sensor-title").children.length,0);
   d.querySelector('#sensor-config-form input[name="measure_s"]').value="3600";
   d.getElementById("sensor-config-form").dispatchEvent(new w.Event("submit",{bubbles:true,cancelable:true}));
   await until(()=>d.getElementById("sensor-detail-state").textContent.includes("1 / 2"));
+  assert.match(d.getElementById("sensor-sync-notes").textContent,/Настройки ожидают применения/);
   const rekey=await api("/api/sensors/devices/"+id+"/rekey",{});
   const ds=await api("/api/sensors/enroll",{device_id:id,code:rekey.code,hardware_id:"0123456789ab",model:"c3-sht40-v1",sensor_type:"ds18b20"});
   const dsPayload={...payload,sensor_type:"ds18b20",next_seq:3,records:[{...payload.records[0],seq:2,humidity:null}]};
@@ -66,7 +68,7 @@ async function until(fn){for(let i=0;i<200;i++){if(fn())return;await new Promise
   d.getElementById("sensor-refresh").click();
   await until(()=>d.getElementById("sensor-detail-state").textContent.includes("DS18B20"));
   assert.equal(d.querySelector(".sensor-card strong").textContent,"Данные получены");
-  assert.notEqual(uploadTimes.querySelector("dd:last-child").textContent,"—");
+  assert.notEqual(uploadTimes.querySelectorAll("dd")[1].textContent,"—");
   assert.equal(d.querySelectorAll("#sensor-records tr").length,2);
   assert.equal(d.querySelector("#sensor-records tr").children[3].textContent,"—");
   assert.equal(d.querySelector("#sensor-new-model"),null);

@@ -78,7 +78,7 @@
 
     <section class="panel firmware-debug-panel">
       <h2>Приёмочный тест датчика</h2>
-      <p class="hint">Без изменения настроек: проверка USB, версии и 5 пробных замеров. Для сети, аккумулятора и OTA предусмотрены отдельные ручные шаги.</p>
+      <p class="hint">Проверяет USB, версию и 5 локальных замеров.</p>
       <div class="heading-actions">
         <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
         <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
@@ -110,6 +110,13 @@
         </div>
       </form>
       <p id="debug-command-state" class="hint" role="status"></p>
+      <div class="heading-actions">
+        <button type="button" id="debug-delivery-start" class="btn secondary" disabled>Проверить доставку</button>
+        <button type="button" id="debug-delivery-stop" class="btn secondary" disabled>Остановить проверку доставки</button>
+      </div>
+      <p class="hint">На тестовой плате с UART0. Запишет три замера в журнал подключённого датчика.</p>
+      <p id="debug-delivery-state" role="status"></p>
+      <ol id="debug-delivery-results" hidden></ol>
     </section>
   </main>
 </body>

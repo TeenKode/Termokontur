@@ -152,6 +152,7 @@ class Sync(Strict):
     device_lost_base: int | None = Field(default=None, ge=0, le=9007199254740991)
     replay: bool = False
     journal_end: bool = False
+    next_send_in_s: int | None = Field(default=None, ge=0, le=604800)
 
     @model_validator(mode="after")
     def sequence(self):
@@ -186,7 +187,11 @@ def event(conn, device, kind, detail):
 
 
 def get_device(conn, device):
-    row = conn.execute("SELECT * FROM sensor_devices WHERE id=?", (device,)).fetchone()
+    row = conn.execute("""
+        SELECT d.*,h.config AS previous_config FROM sensor_devices d
+        LEFT JOIN sensor_config_history h ON h.device_id=d.id AND h.version=d.config_version
+        WHERE d.id=?
+    """, (device,)).fetchone()
     if row is None:
         raise HTTPException(404, "Датчик не найден")
     return dict(row)
@@ -221,23 +226,38 @@ def version_tuple(v):
     return tuple(map(int, v.split(".")))
 
 
+MIN_REPORT_TEMP, MAX_REPORT_TEMP = -40, 60
+
+
+def remember_config(conn, device):
+    config = json.loads(device["config"])
+    conn.execute("INSERT OR IGNORE INTO sensor_config_history(device_id,version,config) VALUES(?,?,?)",
+                 (device["id"], config["version"], device["config"]))
+    return config["version"]
+
+
 def public_device(d):
     d = dict(d)
     for key in ("token_hash", "enrollment_hash", "restore_pending"):
         d.pop(key, None)
     d["config"] = json.loads(d["config"])
     d["sync_incomplete"] = bool(d["sync_incomplete"])
+    d["config_pending"] = bool(d["hardware_id"] and d["config_version"] < d["config"]["version"])
+    times = sensor_monitor.upload_times(d)
+    low_battery = sensor_monitor.battery_warning(d)
+    d.pop("previous_config", None)
+    d.pop("next_send_hint")
     if d["model"] != MODEL:
         return {**d, "enabled": 0, "next_sync_at": None, "status": "retired"}
     if d.get("identity_state") in ("pending", "rejected"):
         return {**d, "next_sync_at": None, "status": "rejected" if d["identity_state"] == "rejected" else "authorization_pending"}
-    scheduled, deadline = sensor_monitor.upload_times(d)
-    d["next_sync_at"] = scheduled if d["enabled"] and d["config"]["enabled"] and d["hardware_id"] else None
+    d["next_sync_at"] = times[0] if times and d["enabled"] and d["config"]["enabled"] and d["hardware_id"] else None
     d["status"] = ("disabled" if not d["enabled"] or not d["config"]["enabled"]
                    else "not_enrolled" if not d["hardware_id"]
-                   else "stale" if time.time() > deadline else "waiting" if not d["last_seen"]
-                   else "low_battery" if sensor_monitor.battery_warning(d)
-                   else "sync_incomplete" if d["sync_incomplete"] else "recent")
+                   else "stale" if times and time.time() > times[1] else "waiting" if not d["last_seen"]
+                   else "low_battery" if low_battery
+                   else "sync_incomplete" if d["sync_incomplete"]
+                   else "measurement_unavailable" if d.get("measurement_issue") else "recent")
     return d
 
 
@@ -248,8 +268,28 @@ def router(require_admin):
     @r.get("/devices", dependencies=admin)
     def devices():
         with db.connect() as conn:
-            return [public_device(x) for x in conn.execute("SELECT d.*,r.name room_name,r.building,i.fingerprint identity_fingerprint,i.state identity_state "
-                    "FROM sensor_devices d JOIN rooms r ON r.id=d.room_id LEFT JOIN sensor_identities i ON i.device_id=d.id ORDER BY r.building,r.name,d.name")]
+            rows = conn.execute("""
+                SELECT d.*,r.name AS room_name,r.building,i.fingerprint AS identity_fingerprint,
+                       i.state AS identity_state,h.config AS previous_config,
+                       valid.measured_at AS last_valid_at,valid.temperature AS last_valid_temperature,
+                       CASE WHEN newest.error<>'' THEN newest.error
+                            WHEN newest.seq IS NULL THEN NULL
+                            WHEN newest.measured_at IS NULL THEN 'unknown_time'
+                            WHEN newest.temperature IS NULL OR newest.temperature NOT BETWEEN ? AND ?
+                                THEN 'outside_report_range' END AS measurement_issue
+                FROM sensor_devices d JOIN rooms r ON r.id=d.room_id
+                LEFT JOIN sensor_identities i ON i.device_id=d.id
+                LEFT JOIN sensor_config_history h ON h.device_id=d.id AND h.version=d.config_version
+                LEFT JOIN sensor_records newest ON newest.device_id=d.id AND newest.seq=(
+                    SELECT seq FROM sensor_records WHERE device_id=d.id AND room_id=d.room_id
+                    ORDER BY seq DESC LIMIT 1)
+                LEFT JOIN sensor_records valid ON valid.device_id=d.id AND valid.seq=(
+                    SELECT seq FROM sensor_records WHERE device_id=d.id AND room_id=d.room_id AND measured_at IS NOT NULL
+                        AND error='' AND temperature BETWEEN ? AND ?
+                    ORDER BY measured_at DESC,seq DESC LIMIT 1)
+                ORDER BY r.building,r.name,d.name
+            """, (MIN_REPORT_TEMP, MAX_REPORT_TEMP, MIN_REPORT_TEMP, MAX_REPORT_TEMP))
+            return [public_device(row) for row in rows]
 
     @r.post("/devices", dependencies=admin)
     def create(payload: DeviceIn):
@@ -302,7 +342,7 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = get_supported_device(conn, device)
-            payload.version = json.loads(d["config"])["version"] + 1
+            payload.version = remember_config(conn, d) + 1
             conn.execute("UPDATE sensor_devices SET config=? WHERE id=?", (payload.model_dump_json(), device))
             event(conn, device, "config", f"Ожидает доставки: версия {payload.version}")
         return payload.model_dump()
@@ -399,7 +439,7 @@ def router(require_admin):
                              (device, rec.seq, room_id, rec.measured_at, now, rec.boot_id, rec.uptime_s,
                               rec.time_quality, rec.temperature, rec.humidity, rec.battery_mv, rec.interval_s,
                               rec.error, fingerprint))
-                if rec.measured_at and not rec.error and -40 <= rec.temperature <= 60:
+                if rec.measured_at and not rec.error and MIN_REPORT_TEMP <= rec.temperature <= MAX_REPORT_TEMP:
                     observed = datetime.fromtimestamp(rec.measured_at, timezone.utc).isoformat(timespec="seconds")
                     conn.execute("INSERT INTO readings(room_id,value,source,reporter,observed_at,external_id) "
                                  "VALUES(?,?,'ha',?,?,?)", (room_id, rec.temperature, "Датчик "+device,
@@ -422,14 +462,15 @@ def router(require_admin):
                 ack = payload.next_seq
             restore_pending = int(bool(d["restore_pending"] and ack == initial_ack))
             complete = ack == payload.next_seq
+            next_send_hint = None if payload.next_send_in_s is None else now + payload.next_send_in_s
             conn.execute("""UPDATE sensor_devices SET last_seen=?,firmware=?,battery_mv=?,rssi=?,boots=?,lost=?,
                          ack_seq=?,config_version=?,acknowledged_lost=?,ota_failures=?,error=?,
-                         restore_pending=?,sync_incomplete=?,
+                         restore_pending=?,sync_incomplete=?,next_send_hint=?,
                          last_complete_sync=CASE WHEN ? THEN ? ELSE last_complete_sync END,
                          enrollment_hash=NULL WHERE id=?""",
                          (now, payload.firmware, payload.battery_mv, payload.rssi, payload.boots, payload.lost,
                           ack, payload.config_version, lost_confirmed, payload.ota_failures, payload.error,
-                          restore_pending, not complete, complete, now, device))
+                          restore_pending, not complete, next_send_hint, complete, now, device))
             if payload.error:
                 event(conn, device, "device_error", payload.error)
             conn.execute("""INSERT INTO sensor_mqtt_outbox(device_id) VALUES(?) ON CONFLICT(device_id)

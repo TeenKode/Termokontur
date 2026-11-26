@@ -106,6 +106,66 @@ def test_reports_partial_upload_even_in_same_second_as_complete(admin, monkeypat
     assert resumed["status"] == "recent" and resumed["sync_incomplete"] is False
 
 
+def test_sensor_status_tracks_last_valid_measurement_and_exclusion_reason(admin):
+    device, _, headers, _ = setup_sensor(admin)
+
+    def send(sample):
+        response = sync(admin, device, headers, batch([sample], next_seq=sample["seq"] + 1))
+        assert response.status_code == 200, response.text
+        return admin.get("/api/sensors/devices").json()[0]
+
+    failed = send(record(temperature=None, humidity=None, error="sensor_crc"))
+    assert failed["last_complete_sync"] and failed["status"] == "measurement_unavailable"
+    assert failed["measurement_issue"] == "sensor_crc" and failed["last_valid_at"] is None
+    valid = send(record(2, temperature=22.25))
+    assert valid["status"] == "recent" and valid["measurement_issue"] is None
+    assert valid["last_valid_at"] == record(2)["measured_at"]
+    assert valid["last_valid_temperature"] == 22.25
+    undated = send(record(3, measured_at=None, time_quality="unknown"))
+    assert undated["measurement_issue"] == "unknown_time"
+    outlier = send(record(4, temperature=65))
+    assert outlier["measurement_issue"] == "outside_report_range"
+    assert outlier["last_valid_at"] == valid["last_valid_at"]
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM readings").fetchone()[0] == 1
+
+
+def test_expected_sync_uses_confirmed_version_across_multiple_edits(admin, monkeypatch):
+    device, _, headers, _ = setup_sensor(admin)
+    stamp = int(time.time()) - 4 * 3600
+    with monkeypatch.context() as early:
+        early.setattr(sensors, "time", SimpleNamespace(time=lambda: stamp))
+        assert sync(admin, device, headers, batch()).status_code == 200
+
+    def view():
+        return admin.get("/api/sensors/devices").json()[0]
+
+    path = f"/api/sensors/devices/{device['device_id']}/config"
+    for version, send_s in ((2, 3600), (3, 7200)):
+        response = admin.put(path, json={**view()["config"], "send_s": send_s})
+        assert response.json()["version"] == version
+        status = view()
+        assert status["config_pending"] and status["status"] == "recent"
+        assert status["next_sync_at"] == stamp + 86400
+
+    assert sync(admin, device, headers, batch([], config_version=2)).status_code == 200
+    intermediate = view()
+    assert intermediate["config_pending"] and intermediate["next_sync_at"] == intermediate["last_seen"] + 3600
+    assert sync(admin, device, headers, batch([], config_version=3)).status_code == 200
+    final = view()
+    assert not final["config_pending"] and final["next_sync_at"] == final["last_seen"] + 7200
+
+
+def test_out_of_schedule_upload_reports_preserved_deadline(admin):
+    device, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, device, headers, batch(next_send_in_s=3700)).status_code == 200
+    manual = admin.get("/api/sensors/devices").json()[0]
+    assert manual["next_sync_at"] == manual["last_seen"] + 3700
+    assert sync(admin, device, headers, batch([])).status_code == 200
+    scheduled = admin.get("/api/sensors/devices").json()[0]
+    assert scheduled["next_sync_at"] == scheduled["last_seen"] + 86400
+
+
 def test_idempotent_history_and_conflicting_replay(admin):
     d,enroll,headers,room=setup_sensor(admin)
     payload=batch()
@@ -196,7 +256,7 @@ def test_report_waits_for_complete_sensor_batch_across_midnight(admin):
     config = sensors.Config(send_s=172800).model_dump_json()
     with db.connect() as conn:
         conn.execute("UPDATE rooms SET created_at=? WHERE id=?", (monday.isoformat(), room["id"]))
-        conn.execute("UPDATE sensor_devices SET config=?,created_at=?,last_seen=?,last_complete_sync=? WHERE id=?",
+        conn.execute("UPDATE sensor_devices SET config=?,config_version=1,created_at=?,last_seen=?,last_complete_sync=? WHERE id=?",
                      (config, monday.isoformat(), int(monday.timestamp()), int(monday.timestamp()), device["device_id"]))
     assert reports.build("2026-11-16", "2026-11-16", now=tuesday)["summary"]["awaiting"] == 1
     assert report_schedule.queue_due(tuesday)["queued"] == 0
