@@ -15,6 +15,15 @@ int main() {
     assert(r.error == 2); // Disconnected lines never turn into successful zeros.
   }
   assert(supported("bmp280"));
+  assert(!supported(nullptr) && !is_i2c(nullptr));
+  {
+    mock::clear();
+    const CancelCheck cancel = [] { return true; };
+    assert(!recover_i2c(true, &cancel));
+    I2C bus(100000, false, &cancel);
+    assert(!bus.ready && !bus.probe(0x44));
+    assert(mock::live_bus == 0 && mock::live_dev == 0);
+  }
   // Cancellation during conversion must prevent any subsequent I2C read
   // or retry; DHT's two-second startup wait must also terminate promptly.
   {
