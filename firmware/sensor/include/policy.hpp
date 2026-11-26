@@ -4,6 +4,13 @@
 #include <cmath>
 #include <string>
 namespace sensor {
+// Allow the battery input to settle after power-up or radio shutdown,
+// without repeating a delay already spent on initialization.
+inline uint32_t battery_settle_remaining_ms(int64_t elapsed_us) {
+  if (elapsed_us <= 0) return 500;
+  if (elapsed_us >= 500000) return 0;
+  return static_cast<uint32_t>((500000 - elapsed_us + 999) / 1000);
+}
 // Wall time is sampled immediately before and after Deep Sleep, before any
 // network clock correction. GPIO can wake the device before its timer expires.
 inline uint64_t sleep_elapsed_s(int64_t started_us, int64_t woke_us) {
