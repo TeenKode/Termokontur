@@ -1890,13 +1890,15 @@ extern "C" void app_main() {
     printf("Journal read/corruption error\n");
     sleep_for(3600);
   }
-  if (!journal.entries().empty() &&
-      journal.entries().back().seq >= state.next) {
-    printf("NVS sequence behind journal; preserve data\n");
+  const auto previous_next = state.next;
+  const auto newest = journal.entries().empty() ? 0 : journal.entries().back().seq;
+  if (!sensor::recover_next(state.ack, state.next, newest)) {
+    puts("Invalid journal/NVS sequence; preserving data");
     sleep_for(3600);
   }
-  if (state.ack > state.next || state.next > 9007199254740000ULL)
-    sleep_for(3600);
+  if (state.next != previous_next)
+    printf("Recovered next sequence from committed journal: %llu -> %llu\n",
+           (unsigned long long)previous_next, (unsigned long long)state.next);
   state.boots++;
   if (!save_state())
     sleep_for(3600);
@@ -2001,6 +2003,10 @@ extern "C" void app_main() {
   }
   if (measured) {
     if (scheduled_measure || pending) rt.next_measure = measurement.uptime + cfg.measure_s;
+    if (state.next >= sensor::sequence_limit) {
+      last_error = "sequence_exhausted";
+      sleep_for(3600);
+    }
     measurement.seq = state.next;
     state.next++;
     if (!save_state())
