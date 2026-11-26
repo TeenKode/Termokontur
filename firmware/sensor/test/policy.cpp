@@ -27,6 +27,23 @@ static void test_serial_lines() {
 }
 
 int main() {
+  {
+    bool ready = false, success = false;
+    unsigned calls = 0;
+    auto prepare = [&] { ++calls; return success; };
+    assert(!sensor::prepare_identity(false, false, ready, prepare));
+    assert(!sensor::prepare_identity(true, true, ready, prepare));
+    assert(!ready && calls == 0);
+    assert(!sensor::prepare_identity(true, false, ready, prepare));
+    assert(!ready && calls == 1);
+    success = true;
+    assert(sensor::prepare_identity(true, false, ready, prepare));
+    assert(ready && calls == 2);
+    assert(sensor::prepare_identity(true, true, ready, prepare));
+    assert(sensor::prepare_identity(true, false, ready, prepare));
+    assert(calls == 2);
+  }
+
   assert(sensor::battery_settle_remaining_ms(-1) == 500);
   assert(sensor::battery_settle_remaining_ms(0) == 500);
   assert(sensor::battery_settle_remaining_ms(1) == 500);
