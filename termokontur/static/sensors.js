@@ -60,6 +60,8 @@ async function refreshSensors(){
     const cards=$("sensor-cards"),archive=$("sensor-archive-cards");cards.replaceChildren();archive.replaceChildren();
     const archived=d=>!d.enabled||["retired","rejected","authorization_pending"].includes(d.status);
     const activeDevices=devices.filter(d=>!archived(d));
+    const rows=$("tk-sensor-rows");
+    if(rows){rows.replaceChildren();for(const d of activeDevices){const tr=el("tr");for(const v of [d.name,d.building+" · "+d.room_name,sensorStatusText(d),d.last_valid_at?temperature(d.last_valid_temperature):"—",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"—",sensorWhen(d.last_seen),d.firmware||"—"])tr.append(el("td","",v));const action=el("td");action.append(sensorButton("Открыть",()=>openSensor(d.id,true)));tr.append(action);rows.append(tr);}if(!activeDevices.length){const tr=el("tr"),td=el("td","muted","Нет активных датчиков");td.colSpan=8;tr.append(td);rows.append(tr);}}
     const archivedDevices=devices.filter(archived);
     $("sensor-archive").hidden=!archivedDevices.length;
     $("sensor-archive-title").textContent="Архив и отключённые ("+archivedDevices.length+")";
