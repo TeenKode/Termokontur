@@ -305,6 +305,23 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.evaluate("document.querySelectorAll('[data-tk-stress]').forEach(row=>row.remove())")
                 room_tools.get_by_role('button',name='Сбросить').click()
                 expect(room_tools.locator('.tk-row-count')).to_have_text('1')
+                # Exercise the shared renderer with gaps and keyboard navigation.
+                page.evaluate("""() => {
+                    const frame=document.createElement('div');frame.id='tk-chart-test';frame.style.cssText='position:relative;width:520px;max-width:100%';
+                    const canvas=document.createElement('canvas');canvas.style.cssText='width:100%;height:240px;display:block';
+                    frame.append(canvas);document.querySelector('#view-rooms').append(frame);
+                    renderTrend(canvas,{points:Array.from({length:20},(_,i)=>({label:String(i+1)})),series:[{name:'Тест',unit:'°C',color:'#984516',values:Array.from({length:20},(_,i)=>i===18?null:20+i/10)}]});
+                }""")
+                chart=page.locator('#tk-chart-test')
+                chart.locator('select').select_option('7')
+                chart.locator('canvas').focus()
+                page.keyboard.press('Home')
+                expect(chart.locator('.tk-chart-live')).to_contain_text('14;')
+                page.keyboard.press('End')
+                expect(chart.locator('.tk-chart-live')).to_contain_text('20;')
+                page.keyboard.press('ArrowLeft')
+                expect(chart.locator('.tk-chart-live')).to_contain_text('нет данных')
+                page.evaluate("document.getElementById('tk-chart-test').remove()")
                 page.click('[data-tab="sensors"]')
                 expect(page.locator('#tk-sensor-empty')).to_be_visible()
                 page.select_option('#tk-sensor-view','table')

@@ -32,6 +32,7 @@ function renderTrend(canvas,options){
   const raw=options;const count=raw.points.length;
   let state=trendWindows.get(canvas);
   if(!state){state={size:0};trendWindows.set(canvas,state);}
+  if(count<15)state.size=0;
   const size=state.size&&Math.min(state.size,count),offset=size?Math.max(0,count-size):0;
   if(offset)options={...raw,points:raw.points.slice(offset),series:raw.series.map(s=>({...s,values:s.values.slice(offset)})),contiguous:raw.contiguous?i=>raw.contiguous(i+offset):undefined};
   const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;
