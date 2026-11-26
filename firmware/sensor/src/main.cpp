@@ -1927,7 +1927,12 @@ extern "C" void app_main() {
     timeval tv{(time_t)state.saved_time, 0};
     settimeofday(&tv, nullptr);
   }
-  vTaskDelay(pdMS_TO_TICKS(500));
+  // On a normal radio-off wake, initialization already contributes to
+  // ADC settling. Keep the full delay after setup/BOOT radio activity.
+  const auto settle_ms = sensor::battery_settle_remaining_ms(
+      setup_requested ? 0 : esp_timer_get_time());
+  if (settle_ms) vTaskDelay(pdMS_TO_TICKS(settle_ms) + 1);
+  if (charging()) sleep_for(cfg.measure_s);
   uint16_t mv = battery_mv();
   printf("TK POWER battery_mv=%u cutoff_mv=%u wifi_min_mv=%u ota_min_mv=%u charging=%d usb=%d\n",
          (unsigned)mv, (unsigned)cfg.cutoff_mv, (unsigned)cfg.wifi_min_mv,
