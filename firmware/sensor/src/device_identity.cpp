@@ -1,5 +1,6 @@
 #include "device_identity.hpp"
 #include "nvs_store.hpp"
+#include "policy.hpp"
 #include "bootloader_random.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -11,6 +12,8 @@
 namespace sensor::identity {
 static mbedtls_ecdsa_context identity_key;
 static std::string identity_public, identity_fingerprint;
+static bool key_valid = false, public_ready = false, public_calculated = false;
+bool has_key() { return key_valid; }
 const std::string &public_key() { return identity_public; }
 const std::string &fingerprint() { return identity_fingerprint; }
 
@@ -32,37 +35,62 @@ std::string hardware_id() {
 }
 bool init(nvs_handle_t nv) {
   mbedtls_ecdsa_init(&identity_key);
-  uint8_t secret[32] = {}, pub[65], hash[32];
-  int loaded = sensor::load_blob(nv, "identity", secret, sizeof secret);
-  if (loaded < 0) return false; // Never replace a corrupt key silently.
-  // Enable hardware entropy before RF/ADC start; disable it before battery ADC use.
-  bootloader_random_enable();
+  uint8_t secret[32] = {};
+  const int loaded = sensor::load_blob(nv, "identity", secret, sizeof secret);
+  if (loaded < 0) {
+    mbedtls_platform_zeroize(secret, sizeof secret);
+    return false; // Never replace a corrupt key silently.
+  }
   int err;
-  size_t len = 0;
   if (!loaded) {
+    // Initial enrollment still needs fresh hardware entropy and a durable key.
+    size_t len = 0;
+    bootloader_random_enable();
     err = mbedtls_ecdsa_genkey(&identity_key, MBEDTLS_ECP_DP_SECP256R1, identity_rng, nullptr);
+    bootloader_random_disable();
     if (!err) err = mbedtls_ecp_write_key_ext(&identity_key, &len, secret, sizeof secret);
     if (!err && (len != sizeof secret || !sensor::save_blob(nv, "identity", secret, sizeof secret))) err = -1;
+    public_calculated = !err;
   } else {
+    // mbedtls_ecp_read_key checks the private scalar's validity. The
+    // expensive public-point multiplication is deferred until needed.
     err = mbedtls_ecp_read_key(MBEDTLS_ECP_DP_SECP256R1, &identity_key, secret, sizeof secret);
-    if (!err) err = mbedtls_ecp_keypair_calc_public(&identity_key, identity_rng, nullptr);
   }
-  bootloader_random_disable();
   mbedtls_platform_zeroize(secret, sizeof secret);
-  if (!err) err = mbedtls_ecp_write_public_key(&identity_key, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, pub, sizeof pub);
-  if (err || len != sizeof pub || mbedtls_sha256(pub, sizeof pub, hash, 0)) return false;
-  identity_public = bytes_hex(pub, sizeof pub);
-  identity_fingerprint = bytes_hex(hash, sizeof hash);
-  return true;
+  key_valid = err == 0;
+  return key_valid;
 }
-std::string sign(const std::string &message) {
+bool prepare_public(bool radio_active) {
+  return sensor::prepare_identity(key_valid, radio_active, public_ready, [] {
+    if (!public_calculated) {
+      bootloader_random_enable();
+      const int err = mbedtls_ecp_keypair_calc_public(&identity_key, identity_rng, nullptr);
+      bootloader_random_disable();
+      if (err) return false;
+      public_calculated = true;
+    }
+    uint8_t pub[65], hash[32];
+    size_t len = 0;
+    if (mbedtls_ecp_write_public_key(&identity_key, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, pub, sizeof pub) ||
+        len != sizeof pub || mbedtls_sha256(pub, sizeof pub, hash, 0)) return false;
+    identity_public = bytes_hex(pub, sizeof pub);
+    identity_fingerprint = bytes_hex(hash, sizeof hash);
+    return true;
+  });
+}
+std::string sign(const std::string &message, bool radio_active) {
   if (message.rfind("TK-AUTH-1\n", 0) || message.size() > 400 ||
+      !prepare_public(radio_active) ||
       message.find("\n" + identity_fingerprint + "\n" + hardware_id() + "\n") == std::string::npos)
     return "";
   uint8_t hash[32], signature[MBEDTLS_ECDSA_MAX_LEN]; size_t len = 0;
-  if (mbedtls_sha256((const uint8_t *)message.data(), message.size(), hash, 0) ||
-      mbedtls_ecdsa_write_signature(&identity_key, MBEDTLS_MD_SHA256, hash, sizeof hash,
-                                    signature, sizeof signature, &len, identity_rng, nullptr)) return "";
-  return bytes_hex(signature, len);
+  if (mbedtls_sha256((const uint8_t *)message.data(), message.size(), hash, 0)) return "";
+  // RF supplies entropy during network authorization. For the standalone
+  // UART console (ADC already released), explicitly enable hardware entropy.
+  if (!radio_active) bootloader_random_enable();
+  const int err = mbedtls_ecdsa_write_signature(&identity_key, MBEDTLS_MD_SHA256, hash, sizeof hash,
+                                    signature, sizeof signature, &len, identity_rng, nullptr);
+  if (!radio_active) bootloader_random_disable();
+  return err ? "" : bytes_hex(signature, len);
 }
 } // namespace sensor::identity
