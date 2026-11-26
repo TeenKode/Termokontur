@@ -24,11 +24,13 @@ inline std::map<int,std::vector<uint8_t>> samples;
 inline std::map<std::pair<int,int>,std::vector<uint8_t>> registers;
 inline std::vector<std::vector<uint8_t>> writes;
 inline int fail_reads = 0;
+inline unsigned delay_ticks = 0;
+inline unsigned transactions = 0;
 inline std::vector<uint32_t> speeds;
 inline std::vector<bool> pullups;
 inline int stuck_pin = -1;
 inline int live_bus = 0, live_dev = 0;
-inline void clear() { samples.clear(); registers.clear(); writes.clear(); speeds.clear(); pullups.clear(); fail_reads = 0; stuck_pin = -1; }
+inline void clear() { samples.clear(); registers.clear(); writes.clear(); speeds.clear(); pullups.clear(); fail_reads = 0; stuck_pin = -1; delay_ticks = 0; transactions = 0; }
 inline int copy(const std::vector<uint8_t> &data,uint8_t *out,size_t n) {
   if (data.size()<n) return -1;
   memcpy(out,data.data(),n); return ESP_OK;
@@ -46,17 +48,19 @@ inline int i2c_master_probe(i2c_master_bus_handle_t,uint16_t a,int) {
   return mock::samples.count(a) || mock::registers.count({a,0xd0}) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 inline int i2c_master_transmit(i2c_master_dev_handle_t h,const uint8_t *b,size_t n,int) {
+  ++mock::transactions;
   mock::writes.emplace_back(b,b+n);
   return mock::samples.count(h->device_address) || mock::registers.count({h->device_address,0xd0}) ? ESP_OK : -1;
 }
 inline int i2c_master_receive(i2c_master_dev_handle_t h,uint8_t *b,size_t n,int) {
+  ++mock::transactions;
   if (mock::fail_reads > 0) { --mock::fail_reads; return -1; }
   return mock::copy(mock::samples[h->device_address],b,n);
 }
 inline int i2c_master_transmit_receive(i2c_master_dev_handle_t h,const uint8_t *reg,size_t,uint8_t *b,size_t n,int) {
   return mock::copy(mock::registers[{h->device_address,*reg}],b,n);
 }
-inline void vTaskDelay(unsigned) {}
+inline void vTaskDelay(unsigned ticks) { mock::delay_ticks += ticks; }
 inline void esp_rom_delay_us(unsigned) {}
 inline int64_t esp_timer_get_time() { static int64_t t=0; return ++t; }
 inline int gpio_set_level(int,int) { return ESP_OK; }
