@@ -14,6 +14,10 @@ inline int64_t boot_radio_end(int64_t now, uint32_t budget_s, int64_t session_en
   const int64_t normal_end = now + int64_t(budget_s) * 1000000;
   return session_end > 0 ? std::min(normal_end, session_end) : normal_end;
 }
+// A new operation must not start after the session deadline.
+inline bool boot_work_allowed(int64_t now, int64_t session_end, bool charging) {
+  return !charging && (session_end == 0 || now < session_end);
+}
 // Accept a complete short press only after a stable initial release.
 // A held button (including BOOT used to enter setup) cannot fire repeatedly.
 class BootPress {
