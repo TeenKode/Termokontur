@@ -298,7 +298,7 @@ function renderAttention(selected){
     });
     item.append(link);list.append(item);
   }
-  if(issues.length>8){const item=el("li","tk-attention-more"),button=el("button","btn secondary","Показать все ("+issues.length+")");button.type="button";button.addEventListener("click",()=>document.querySelector('[data-overview-status=""]').click());item.append(button);list.append(item);}
+  if(issues.length>8){const item=el("li","tk-attention-more"),button=el("button","btn secondary","Открыть список помещений");button.type="button";button.addEventListener("click",()=>document.querySelector('[data-overview-status=""]').click());item.append(button);list.append(item);}
 }
 function renderOverview() {
   const building=$("building-filter").value;
