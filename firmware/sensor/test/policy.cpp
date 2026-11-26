@@ -1,4 +1,5 @@
 #include "policy.hpp"
+#include "boot_debug.hpp"
 #include "serial_console.hpp"
 #include <cassert>
 #include <iostream>
@@ -27,6 +28,38 @@ static void test_serial_lines() {
 }
 
 int main() {
+  for (double duration : {300.0, 900.0, 1800.0, 3600.0})
+    assert(sensor::boot_debug_duration(duration));
+  for (double duration : {0.0, -1.0, 299.0, 300.5, 3601.0, INFINITY * 1.0, NAN * 1.0})
+    assert(!sensor::boot_debug_duration(duration));
+  {
+    sensor::BootPress button;
+    assert(!button.update(true, 0)); // held from entering setup
+    assert(!button.update(true, 2000000));
+    assert(!button.update(false, 2010000));
+    assert(!button.update(true, 2020000)); // release bounce
+    assert(!button.update(false, 2030000));
+    assert(!button.update(false, 2060000));
+    assert(button.can_sleep());
+    assert(!button.update(true, 2100000));
+    assert(!button.update(false, 2110000)); // short glitch
+    assert(!button.update(false, 2140000));
+    assert(button.can_sleep());
+    assert(!button.update(true, 2200000));
+    assert(!button.update(true, 3300000)); // long hold, reject
+    assert(!button.update(false, 3310000));
+    assert(!button.update(false, 3340000));
+    assert(button.can_sleep());
+    assert(!button.update(true, 3400000));
+    assert(!button.update(false, 3450000));
+    assert(!button.update(true, 3460000)); // release bounce
+    assert(!button.update(false, 3470000));
+    assert(!button.update(false, 3499999));
+    assert(button.update(false, 3500000));
+    assert(button.can_sleep());
+    assert(!button.update(false, 3600000)); // one event only
+  }
+
   {
     bool ready = false, success = false;
     unsigned calls = 0;
