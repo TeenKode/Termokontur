@@ -168,7 +168,43 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 except Exception as exc:
                     log.seek(0)
                     raise AssertionError(f"Login failed: {page.locator('#login-error').inner_text()}; JS errors: {errors}; server: {log.read()[-5000:]}") from exc
+                # Real panel design regression: navigate every existing route and keep
+                # the original USB/API tests below, using the same authenticated session.
+                original_size=page.viewport_size
+                page.set_viewport_size({"width":1440,"height":900})
+                page.evaluate("window.termokonturTheme.setPreference('dark')")
+                assert page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--tk-bg').trim()") == '#10161c'
+                collapse=page.locator('#tk-collapse')
+                collapse.click()
+                expect(collapse).to_have_attribute('aria-pressed','true')
+                collapse.click()
+                expect(collapse).to_have_attribute('aria-pressed','false')
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    for width in (390,768,1024,1366,1920):
+                        page.set_viewport_size({"width":width,"height":900})
+                        for tab in ('overview','readings','rooms','reports','staff','sensors','settings'):
+                            if width<1024:
+                                page.locator('#navigation-toggle').click()
+                            page.locator(f'[data-tab="{tab}"]').click()
+                            expect(page.locator(f'#view-{tab}')).to_be_visible()
+                            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), (mode,width,tab)
+                page.set_viewport_size(original_size)
+                page.evaluate("window.termokonturTheme.setPreference('light')")
+                page.click('[data-tab="settings"]')
+                # Select the actual appearance navigation by its visible label.
+                page.get_by_role('button',name='Внешний вид',exact=True).click()
+                page.select_option('#tk-density','compact')
+                assert page.evaluate("document.documentElement.dataset.density") == 'compact'
+                assert page.evaluate("localStorage.getItem('termokontur-density')") == 'compact'
+                page.select_option('#tk-density','normal')
                 page.click('[data-tab="sensors"]')
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-table')).to_be_visible()
+                expect(page.locator('#sensor-cards')).to_be_hidden()
+                page.select_option('#tk-sensor-view','cards')
+                expect(page.locator('#tk-sensor-table')).to_be_hidden()
+                expect(page.locator('#sensor-cards')).to_be_visible()
                 firmware_url = f'/api/sensors/firmware/bundled/{version}'
                 expect(page.locator('#sensor-bundled-status')).to_contain_text(version)
                 with page.expect_download() as download:
