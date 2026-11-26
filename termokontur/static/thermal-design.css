@@ -92,3 +92,37 @@ html[data-theme] .panel-version{background:var(--tk-raised);border-color:var(--t
   .dashboard-hero{gap:8px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* Live operational dashboard and master/detail, using the existing API data. */
+.tk-overview-operational{display:grid;gap:14px;margin-bottom:18px;align-items:start}
+.tk-overview-operational .daily-panel{margin:0}
+.tk-attention>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;font-weight:700;cursor:pointer}
+.tk-attention>summary::before{content:"+";color:var(--tk-accent)}
+.tk-attention[open]>summary::before{content:"−"}
+.tk-attention>summary span{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--tk-accent)}
+.tk-attention>p{padding:0 18px 16px}
+#tk-attention-items{padding:0;margin:0;list-style:none;max-height:260px;overflow:auto}
+.tk-attention-item{border-top:1px solid var(--tk-line)}
+.tk-attention-link{display:flex;gap:10px;justify-content:space-between;align-items:center;width:100%;text-align:left;padding:9px 16px;background:transparent;color:var(--tk-text);border:0}
+.tk-attention-link:hover{background:var(--tk-raised)}
+.tk-attention-room,.tk-attention-value{display:grid;gap:3px;min-width:0;overflow-wrap:anywhere}
+.tk-attention-room small,.tk-attention-value small{font-size:12px;color:var(--tk-muted)}
+.tk-attention-value{text-align:right;flex:0 1 auto}
+.tk-attention-value.above strong{color:var(--tk-hot)}
+.tk-attention-value.below strong{color:var(--tk-cold)}
+.tk-attention-value.missing strong{color:var(--tk-muted)}
+.tk-attention-more{padding:10px 16px}
+.tk-sensor-workspace,.tk-sensor-list{min-width:0}
+#sensor-detail .panel-heading{align-items:start}
+#sensor-detail .panel-heading>div{min-width:0;overflow-wrap:anywhere}
+#sensor-detail{margin-bottom:16px;scroll-margin-top:14px}
+html[data-theme="dark"] .heatmap-table .heatmap-value.high{color:#ffb0a5}
+html[data-theme="dark"] .heatmap-table .heatmap-value.low{color:#b6d9ff}
+html[data-theme="dark"] .heatmap-table .heatmap-value.normal{color:#a3e1cb}
+@media(min-width:1280px){
+  .tk-overview-operational{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);align-items:start;gap:16px}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-cards{grid-template-columns:minmax(0,1fr)}
+  .tk-sensor-workspace:has(#sensor-detail:not([hidden])) .sensor-table-panel .table-scroll{max-height:65vh;overflow:auto}
+}
+@media(max-width:1279px){#sensor-detail:not([hidden]){position:relative;scroll-margin-top:76px}}
