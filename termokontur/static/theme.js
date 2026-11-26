@@ -56,12 +56,13 @@
   const density=read("termokontur-density","normal");
   root.dataset.density=["compact","normal","wide"].includes(density)?density:"normal";
   const media=window.matchMedia?.("(min-width: 1024px) and (max-width: 1439px)");
-  const nav=()=>{const value=read("termokontur-navigation","auto");return value==="compact"||value==="full"?value:media?.matches?"compact":"full";};
+  let navPreference=read("termokontur-navigation","auto");
+  const nav=()=>navPreference==="compact"||navPreference==="full"?navPreference:media?.matches?"compact":"full";
   root.dataset.navigation=nav();
   document.addEventListener("DOMContentLoaded",()=>{
     const toggle=document.getElementById("tk-collapse"), select=document.getElementById("tk-density");
     function syncNavigation(){const compact=nav()==="compact";root.dataset.navigation=compact?"compact":"full";if(toggle){const label=compact?"Развернуть меню":"Свернуть меню";toggle.textContent=label;toggle.setAttribute("aria-label",label);toggle.setAttribute("aria-pressed",String(compact));}}
-    toggle?.addEventListener("click",()=>{save("termokontur-navigation",nav()==="compact"?"full":"compact");syncNavigation();window.dispatchEvent(new Event("resize"));});
+    toggle?.addEventListener("click",()=>{navPreference=nav()==="compact"?"full":"compact";save("termokontur-navigation",navPreference);syncNavigation();window.dispatchEvent(new Event("resize"));});
     media?.addEventListener?.("change",syncNavigation);
     syncNavigation();
     if(select){select.value=root.dataset.density;select.addEventListener("change",()=>{if(["compact","normal","wide"].includes(select.value)){root.dataset.density=select.value;save("termokontur-density",select.value);}});}
