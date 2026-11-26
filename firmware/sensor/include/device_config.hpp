@@ -28,4 +28,16 @@ inline bool valid_config(const Config &c) {
          c.ota_min_mv <= 4200 && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
          c.adc_scale_ppm >= 1600000 && c.adc_scale_ppm <= 2400000;
 }
+// Only a genuinely absent record may bypass recovery. A present but
+// unreadable record could contain a partially applied setup transaction.
+inline bool provision_recovery_allowed(bool absent, bool valid_size,
+                                       int read_result, bool valid_json) {
+  return absent || (valid_size && read_result == 1 && valid_json);
+}
+// The intent contains the complete new provisioning JSON, Config and clock.
+// A caller must not begin normal work until all three idempotent steps succeed.
+template<class SaveConfig, class SaveState, class ClearIntent>
+bool finish_setup_transaction(SaveConfig config, SaveState state, ClearIntent clear) {
+  return config() && state() && clear();
+}
 } // namespace sensor

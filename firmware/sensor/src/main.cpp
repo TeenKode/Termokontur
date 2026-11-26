@@ -634,11 +634,10 @@ static const char *sensor_error_name(uint8_t error) {
   if (error == 2) return "sensor_io";
   return "";
 }
-static bool config_from(cJSON *j, bool local = false) {
+static bool parse_config(cJSON *j, Config &c) {
   if (!cJSON_IsObject(j))
     return false;
-  Config c = cfg;
-#define GET(field) do { auto value = number(j, #field, c.field); if (!std::isfinite(value) || value < 0 || value > UINT32_MAX || std::floor(value) != value) return false; c.field = static_cast<uint32_t>(value); } while (0)
+#define GET(field) do { const auto *item = cJSON_GetObjectItemCaseSensitive(j, #field); if (item && !cJSON_IsNumber(item)) return false; auto value = number(j, #field, c.field); if (!std::isfinite(value) || value < 0 || value > UINT32_MAX || std::floor(value) != value) return false; c.field = static_cast<uint32_t>(value); } while (0)
   GET(version);
   GET(measure_s);
   GET(send_s);
@@ -651,11 +650,65 @@ static bool config_from(cJSON *j, bool local = false) {
   GET(adc_scale_ppm);
 #undef GET
   auto en = cJSON_GetObjectItemCaseSensitive(j, "enabled");
+  if (en && !cJSON_IsBool(en)) return false;
   if (cJSON_IsBool(en))
     c.enabled = cJSON_IsTrue(en);
-  if ((local || c.version > cfg.version) && valid_config(c) &&
+  return valid_config(c);
+}
+static bool config_from(cJSON *j) {
+  Config c = cfg;
+  if (parse_config(j, c) && c.version > cfg.version &&
       save_blob("config", &c, sizeof c)) { cfg = c; return true; }
   return false;
+}
+// A provisioning intent is stored inside the existing CRC-protected
+// provision blob, avoiding an extra copy of the potentially large CA chain.
+// Legacy fields and NVS keys remain unchanged after the transaction.
+static bool finish_provision_intent(cJSON *j) {
+  auto *pending = cJSON_GetObjectItemCaseSensitive(j, "_pending_setup");
+  if (!pending) return true;
+  Config candidate{};
+  const double epoch = number(pending, "epoch");
+  if (!cJSON_IsObject(pending) ||
+      !parse_config(cJSON_GetObjectItemCaseSensitive(pending, "config"), candidate) ||
+      !std::isfinite(epoch) || std::floor(epoch) != epoch ||
+      epoch < 1700000000 || epoch > 4102444800) return false;
+  State next = state;
+  next.saved_time = static_cast<int64_t>(epoch);
+  cJSON_DeleteItemFromObjectCaseSensitive(j, "_pending_setup");
+  const auto final_json = stringify(j);
+  if (final_json.empty()) return false;
+  const bool ok = sensor::finish_setup_transaction(
+      [&] { return save_blob("config", &candidate, sizeof candidate); },
+      [&] { return save_blob("state", &next, sizeof next); },
+      [&] { return save_blob("provision", final_json.c_str(), final_json.size() + 1); });
+  if (ok) { cfg = candidate; state = next; }
+  return ok;
+}
+static bool recover_provision_intent() {
+  size_t size = 0;
+  const auto err = nvs_get_blob(nv, "provision", nullptr, &size);
+  if (err == ESP_ERR_NVS_NOT_FOUND) return true;
+  if (err != ESP_OK || size < 9 || size > 12000) return false;
+  std::vector<char> payload(size - 8);
+  const int result = load_blob("provision", payload.data(), payload.size());
+  if (result != 1 || payload.back() != '\0') return false;
+  auto *j = cJSON_ParseWithLengthOpts(payload.data(), payload.size(), nullptr, true);
+  if (!sensor::provision_recovery_allowed(false, true, result, cJSON_IsObject(j))) {
+    cJSON_Delete(j);
+    return false;
+  }
+  const bool ok = finish_provision_intent(j);
+  cJSON_Delete(j);
+  return ok;
+}
+static void add_config_json(cJSON *j, const Config &c) {
+#define PUT(field) num(j, #field, c.field)
+  PUT(version); PUT(measure_s); PUT(send_s); PUT(cool_s);
+  PUT(wifi_budget_s); PUT(wifi_min_mv); PUT(cutoff_mv);
+  PUT(ota_min_mv); PUT(tx_qdbm); PUT(adc_scale_ppm);
+#undef PUT
+  cJSON_AddBoolToObject(j, "enabled", c.enabled);
 }
 static cJSON *identity_payload() {
   auto *j = cJSON_CreateObject();
@@ -1042,8 +1095,8 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   bool setup_password_valid = random_setup_password ||
       ((entered_setup_password.empty() || sensor::valid_setup_password(entered_setup_password)) &&
        entered_setup_password == text(j, "setup_password_confirm"));
-  int64_t epoch = number(j, "epoch");
-  bool valid = sensor::supported(kind.c_str()) && (!require_nonce || text(j, "csrf") == setup_nonce) && !s.empty() && s.size() <= 32 &&
+  const double epoch = number(j, "epoch");
+  bool valid = std::isfinite(epoch) && std::floor(epoch) == epoch && sensor::supported(kind.c_str()) && (!require_nonce || text(j, "csrf") == setup_nonce) && !s.empty() && s.size() <= 32 &&
                (p.empty() || (p.size() >= 8 && p.size() <= 63)) &&
                url.rfind("https://", 0) == 0 && url.size() > 8 &&
                url.size() <= 240 && url.find('@') == std::string::npos &&
@@ -1056,24 +1109,53 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
   if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
   auto config = cJSON_GetObjectItemCaseSensitive(j, "config");
-  if (config && !config_from(config, true)) return "Проверьте параметры. Не удалось сохранить настройки.";
-  while (url.back() == '/')
-    url.pop_back();
-  ssid = s;
-  password = p;
-  server = url;
-  dns_primary = primary; dns_secondary = secondary;
-  device = id;
-  code = key;
-  token.clear();
-  ca = root;
-  sensor_type = kind;
-  setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
-                                                  random_setup_password);
-  state.saved_time = epoch;
-  factory_ticket = factory ? text(j,"factory_ticket") : "";
+  Config candidate = cfg;
+  if (config && !parse_config(config, candidate)) return "Проверьте параметры.";
+  while (!url.empty() && url.back() == '/') url.pop_back();
+  if (url.size() <= 8) return "Проверьте адрес сервера.";
+  const auto new_setup_password = sensor::choose_setup_password(setup_password, entered_setup_password,
+                                                                  random_setup_password);
+  // Do not modify globals or individual legacy keys until a complete intent
+  // has been committed. A reboot after any subsequent failure replays it.
+  auto *intent = cJSON_CreateObject();
+  if (!intent) return "Недостаточно памяти.";
+  add(intent, "ssid", s); add(intent, "password", p); add(intent, "server", url);
+  add(intent, "device", id); add(intent, "code", key); add(intent, "token", "");
+  add(intent, "ca", root); add(intent, "sensor_type", kind);
+  add(intent, "setup_password", new_setup_password);
+  add(intent, "factory_ticket", factory ? text(j,"factory_ticket") : "");
+  // Preserve canonical field order used by verify_saved_configuration().
+  add(intent, "dns_primary", primary); add(intent, "dns_secondary", secondary);
+  auto *pending = cJSON_AddObjectToObject(intent, "_pending_setup");
+  num(pending, "epoch", epoch);
+  add_config_json(cJSON_AddObjectToObject(pending, "config"), candidate);
+  const auto payload = stringify(intent);
+  // Validate all required fields before committing (cJSON may fail on OOM).
+  auto count_fields = [](const cJSON *obj) {
+    unsigned count = 0;
+    for (auto *child = obj ? obj->child : nullptr; child; child = child->next) ++count;
+    return count;
+  };
+  const bool complete = pending && cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(pending, "config")) &&
+      count_fields(intent) == 13 && count_fields(pending) == 2 &&
+      count_fields(cJSON_GetObjectItemCaseSensitive(pending, "config")) == 11;
+  if (!complete || payload.empty() || payload.size() + 9 > 12000 ||
+      !save_blob("provision", payload.c_str(), payload.size() + 1)) {
+    cJSON_Delete(intent);
+    return "Не удалось сохранить настройки в памяти платы.";
+  }
+  if (!finish_provision_intent(intent)) {
+    cJSON_Delete(intent);
+    puts("SETUP: committed intent pending recovery; restarting");
+    esp_restart();
+  }
+  cJSON_Delete(intent);
+  // The complete committed record is now authoritative.
+  if (!load_provision()) {
+    puts("SETUP: committed settings failed readback; restarting");
+    esp_restart();
+  }
   deferred_configuration = false;
-  if (!save_state() || !save_provision()) return "Не удалось сохранить настройки в памяти платы.";
   const bool defer = !require_nonce && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "defer_finish"));
   if (defer || factory) {
     if (!verify_saved_configuration()) return "Проверка чтения настроек из NVS не пройдена.";
@@ -1170,12 +1252,7 @@ struct ConsoleSession {
 };
 
 static void report_config(cJSON *config) {
-#define REPORT(field) num(config, #field, cfg.field)
-  REPORT(version); REPORT(measure_s); REPORT(send_s); REPORT(cool_s);
-  REPORT(wifi_budget_s); REPORT(wifi_min_mv); REPORT(cutoff_mv);
-  REPORT(ota_min_mv); REPORT(tx_qdbm); REPORT(adc_scale_ppm);
-#undef REPORT
-  cJSON_AddBoolToObject(config, "enabled", cfg.enabled);
+  add_config_json(config, cfg);
 }
 
 static bool command_available(const CommandSpec &spec, const ConsoleSession &session) {
@@ -1711,6 +1788,10 @@ extern "C" void app_main() {
   if (config_loaded < 0 || !valid_config(cfg)) {
     printf("Config invalid; using defaults\n");
     cfg = Config{};
+  }
+  if (!recover_provision_intent()) {
+    puts("SETUP: pending transaction recovery failed; preserving NVS");
+    sleep_for(3600);
   }
   if (rt.clock_valid && time(nullptr) >= 1700000000)
     time_quality = 3;
