@@ -689,14 +689,15 @@ static bool recover_provision_intent() {
   size_t size = 0;
   const auto err = nvs_get_blob(nv, "provision", nullptr, &size);
   if (err == ESP_ERR_NVS_NOT_FOUND) return true;
-  // A corrupt legacy record is handled by the existing setup recovery path.
-  if (err != ESP_OK) return false;
-  if (size < 9 || size > 12000) return true;
+  if (err != ESP_OK || size < 9 || size > 12000) return false;
   std::vector<char> payload(size - 8);
-  if (load_blob("provision", payload.data(), payload.size()) != 1) return true;
-  if (payload.back() != '\0') return true;
-  auto *j = cJSON_Parse(payload.data());
-  if (!j) return true;
+  const int result = load_blob("provision", payload.data(), payload.size());
+  if (result != 1 || payload.back() != '\0') return false;
+  auto *j = cJSON_ParseWithLengthOpts(payload.data(), payload.size(), nullptr, true);
+  if (!sensor::provision_recovery_allowed(false, true, result, cJSON_IsObject(j))) {
+    cJSON_Delete(j);
+    return false;
+  }
   const bool ok = finish_provision_intent(j);
   cJSON_Delete(j);
   return ok;
@@ -1119,11 +1120,12 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   auto *intent = cJSON_CreateObject();
   if (!intent) return "Недостаточно памяти.";
   add(intent, "ssid", s); add(intent, "password", p); add(intent, "server", url);
-  add(intent, "dns_primary", primary); add(intent, "dns_secondary", secondary);
   add(intent, "device", id); add(intent, "code", key); add(intent, "token", "");
   add(intent, "ca", root); add(intent, "sensor_type", kind);
   add(intent, "setup_password", new_setup_password);
   add(intent, "factory_ticket", factory ? text(j,"factory_ticket") : "");
+  // Preserve canonical field order used by verify_saved_configuration().
+  add(intent, "dns_primary", primary); add(intent, "dns_secondary", secondary);
   auto *pending = cJSON_AddObjectToObject(intent, "_pending_setup");
   num(pending, "epoch", epoch);
   add_config_json(cJSON_AddObjectToObject(pending, "config"), candidate);
