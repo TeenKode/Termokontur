@@ -45,5 +45,23 @@ int main() {
   encoded = original;
   encoded.pop_back();
   assert(!sensor::decode_blob(encoded, &restored, sizeof restored));
-  std::cout << "Persistent config and legacy NVS envelope checks passed\n";
+  // Model a reboot after each component commit: the intent stays durable
+  // until every component has been applied. Reapplying is idempotent.
+  for (int cut = 0; cut <= 3; ++cut) {
+    int stored_config = 1, stored_epoch = 1;
+    bool intent = true;
+    int steps = 0;
+    const auto attempt = [&](int budget) {
+      steps = 0;
+      return sensor::finish_setup_transaction(
+          [&] { if (steps++ >= budget) return false; stored_config = 2; return true; },
+          [&] { if (steps++ >= budget) return false; stored_epoch = 2; return true; },
+          [&] { if (steps++ >= budget) return false; intent = false; return true; });
+    };
+    assert(attempt(cut) == (cut == 3));
+    assert(intent == (cut != 3));
+    if (intent) assert(attempt(3));
+    assert(stored_config == 2 && stored_epoch == 2 && !intent);
+  }
+  std::cout << "Persistent config, setup transaction recovery and legacy NVS envelope checks passed\n";
 }
