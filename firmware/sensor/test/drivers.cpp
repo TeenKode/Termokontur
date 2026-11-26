@@ -15,6 +15,29 @@ int main() {
     assert(r.error == 2); // Disconnected lines never turn into successful zeros.
   }
   assert(supported("bmp280"));
+  // Cancellation during conversion must prevent any subsequent I2C read
+  // or retry; DHT's two-second startup wait must also terminate promptly.
+  {
+    mock::clear();
+    mock::samples[0x44] = {0xbe,0xef,0x92,0xbe,0xef,0x92};
+    Record cancelled_sample{};
+    unsigned count = 0;
+    assert(!read_sensor_retry("sht4x", cancelled_sample,
+        [] { return mock::delay_ticks >= 20; }, &count));
+    assert(count == 1 && mock::transactions == 1);
+    assert(mock::live_bus == 0 && mock::live_dev == 0);
+    mock::clear();
+    assert(!read_sensor_retry("dht22", cancelled_sample,
+        [] { return mock::delay_ticks >= 60; }, &count));
+    assert(count == 1 && mock::delay_ticks == 60);
+    mock::clear();
+    cancelled_sample.temperature = 12345;
+    cancelled_sample.humidity = 56789;
+    assert(!read_sensor("unknown", cancelled_sample));
+    assert(cancelled_sample.error == 2 && cancelled_sample.temperature == 0 &&
+           cancelled_sample.humidity == NO_HUMIDITY && mock::live_bus == 0);
+    assert(!read_sensor(nullptr, cancelled_sample));
+  }
   for (auto name : {"sht3x","sht4x"}) {
     mock::clear();
     int address = !strcmp(name,"sht3x") ? 0x45 : 0x46;
@@ -74,6 +97,14 @@ int main() {
   assert(read_sensor("bme280",r));
   assert(r.temperature >= 25080 && r.temperature <= 25085);
   assert(r.humidity > 63000 && r.humidity < 64000);
+  mock::registers[{0x77,0x88}] = std::vector<uint8_t>(26, 0xff);
+  assert(!read_sensor("bme280",r) && r.error == 2);
+  mock::registers[{0x77,0x88}] = cal;
+  const auto humidity_cal = mock::registers[{0x77,0xe1}];
+  mock::registers[{0x77,0xe1}] = std::vector<uint8_t>(7, 0);
+  assert(!read_sensor("bme280",r) && r.error == 2);
+  mock::registers[{0x77,0xe1}] = humidity_cal;
+  assert(read_sensor("bme280",r));
   mock::registers[{0x77,0xd0}] = {0x58}; // BMP280 is rejected.
   assert(!read_sensor("bme280",r) && r.error == 2);
   // BMP280 accepts both I2C addresses, reports Bosch reference T=25.08 C,
