@@ -14,12 +14,13 @@ function setup(saved,osDark=true){
     querySelector:()=>meta,querySelectorAll:s=>s==="[data-theme-toggle]"?buttons:choices,
     getElementById:id=>id==="settings-summary-theme"?summary:id==="view-readings"?view:null};
   const media={matches:osDark,addEventListener:(type,fn)=>media.change=fn};
+  const navMedia={matches:false,addEventListener:(type,fn)=>navMedia.change=fn};
   let redraws=0;
   const window={localStorage:{getItem:key=>data.get(key)??null,setItem:(key,v)=>data.set(key,v)},
-    matchMedia:()=>media,addEventListener:(type,fn)=>window[type]=fn,drawChart:()=>redraws++};
-  vm.runInNewContext(src,{window,document,CustomEvent:class{constructor(type,opt){this.type=type;this.detail=opt.detail;}}});
+    matchMedia:query=>query.includes("prefers-color-scheme")?media:navMedia,addEventListener:(type,fn)=>window[type]=fn,drawChart:()=>redraws++};
+  vm.runInNewContext(src,{window,document,localStorage:window.localStorage,CustomEvent:class{constructor(type,opt){this.type=type;this.detail=opt.detail;}}});
   document.dispatchEvent({type:"DOMContentLoaded"});
-  return {window,document,media,buttons,choices,data,summary,meta,get redraws(){return redraws;}};
+  return {window,document,media,navMedia,buttons,choices,data,summary,meta,get redraws(){return redraws;}};
 }
 test("system mode switches automatically and repaints chart",()=>{
   const h=setup();
@@ -31,6 +32,9 @@ test("system mode switches automatically and repaints chart",()=>{
   assert.equal(h.meta.content,"#eff2f5");
   assert.equal(h.buttons[0].attrs["aria-label"],"Включить тёмную тему");
   assert.ok(h.redraws>0);
+  h.navMedia.matches=true;h.navMedia.change();
+  assert.equal(h.document.documentElement.dataset.navigation,"compact");
+  assert.equal(h.document.documentElement.dataset.theme,"light");
 });
 test("dark choice persists and quick switch works",()=>{
   const h=setup("light",true);
