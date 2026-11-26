@@ -48,6 +48,16 @@ function sensorSyncNotes(device){
 }
 function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";onOperation(b,"Загружаем карточку датчика…",action);return b;}
 function sensorRoomOptions(select,chosen){select.replaceChildren();for(const r of rooms)option(select,String(r.id),r.building+" · "+r.name);select.value=String(chosen||rooms[0]?.id||"");}
+function tkSensorSearchKey(d){return [d.name,d.building,d.room_name,d.id,d.firmware].filter(Boolean).join(" ").toLocaleLowerCase("ru");}
+function filterSensorPresentation(){
+  const input=$("tk-sensor-search"),empty=$("tk-sensor-no-match");
+  if(!input||!empty)return;
+  const query=input.value.trim().toLocaleLowerCase("ru");
+  const cards=[...document.querySelectorAll("#sensor-cards [data-tk-search]")];
+  for(const node of document.querySelectorAll("#sensor-cards [data-tk-search], #tk-sensor-rows [data-tk-search]"))node.hidden=!node.dataset.tkSearch.includes(query);
+  empty.hidden=!query||!cards.length||cards.some(card=>!card.hidden);
+}
+$("tk-sensor-search")?.addEventListener("input",filterSensorPresentation);
 async function refreshSensors(){
   const request=++sensorRefreshId;
   $("sensor-state").textContent="Загружаем датчики…";
@@ -61,20 +71,26 @@ async function refreshSensors(){
     const archived=d=>!d.enabled||["retired","rejected","authorization_pending"].includes(d.status);
     const activeDevices=devices.filter(d=>!archived(d));
     const rows=$("tk-sensor-rows");
-    if(rows){rows.replaceChildren();for(const d of activeDevices){const tr=el("tr");for(const v of [d.name,d.building+" · "+d.room_name,sensorStatusText(d),d.last_valid_at?temperature(d.last_valid_temperature):"—",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"—",sensorWhen(d.last_seen),d.firmware||"—"])tr.append(el("td","",v));const action=el("td");action.append(sensorButton("Открыть",()=>openSensor(d.id,true)));tr.append(action);rows.append(tr);}if(!activeDevices.length){const tr=el("tr"),td=el("td","muted","Нет активных датчиков");td.colSpan=8;tr.append(td);rows.append(tr);}}
+    if(rows){rows.replaceChildren();for(const d of activeDevices){const tr=el("tr");tr.dataset.tkSearch=tkSensorSearchKey(d);for(const v of [d.name,d.building+" · "+d.room_name,sensorStatusText(d),d.last_valid_at?temperature(d.last_valid_temperature):"—",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"—",sensorWhen(d.last_seen),d.firmware||"—"])tr.append(el("td","",v));const action=el("td");action.append(sensorButton("Открыть",()=>openSensor(d.id,true)));tr.append(action);rows.append(tr);}if(!activeDevices.length){const tr=el("tr"),td=el("td","muted","Нет активных датчиков");td.colSpan=8;tr.append(td);rows.append(tr);}}
     const archivedDevices=devices.filter(archived);
     $("sensor-archive").hidden=!archivedDevices.length;
     $("sensor-archive-title").textContent="Архив и отключённые ("+archivedDevices.length+")";
     for(const d of devices){
       const card=el("article","panel sensor-card"),name=el("h2","",d.name);
       const times=el("dl","sensor-sync-times");renderSensorSyncTimes(times,d);
+      card.dataset.tkSearch=tkSensorSearchKey(d);
+      const telemetry=el("div","tk-sensor-telemetry");
+      const temp=el("div","tk-sensor-metric");temp.append(el("small","","Последний корректный замер"),el("span","tk-sensor-temperature",d.last_valid_at?temperature(d.last_valid_temperature):"—"));
+      const battery=el("div","tk-sensor-metric");battery.append(el("small","","Напряжение"),el("span","tk-sensor-voltage",d.battery_mv?Number(d.battery_mv/1000).toLocaleString("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:2})+" В":"—"));
+      telemetry.append(temp,battery);
       card.append(name,el("p","muted",d.building+" · "+d.room_name+(d.status==="retired"?"":" · ESP32-C3")),el("strong","",sensorStatusText(d)),
-        times,el("p","",d.battery_mv?Number(d.battery_mv/1000).toFixed(2)+" В":"Напряжение неизвестно"),
+        telemetry,times,
         sensorButton("Открыть",()=>openSensor(d.id,true)));(archived(d)?archive:cards).append(card);
       const notes=sensorSyncNotes(d);
       if(notes)card.insertBefore(el("p","muted",notes),card.lastChild);
       if(d.next_sync_at&&d.status!=="stale")card.insertBefore(el("p","muted","Следующая связь около "+sensorWhen(d.next_sync_at)),card.lastChild);
     }
+    filterSensorPresentation();
     $("sensor-state").textContent=activeDevices.length?"Датчиков: "+activeDevices.length:archivedDevices.length?"Нет активных датчиков. История доступна в архиве.":"Подключите первый датчик по USB или по коду.";
     // Do not overwrite a partially edited MQTT form during refresh.
     if($("sensor-mqtt-form").dataset.dirty!=="true"){

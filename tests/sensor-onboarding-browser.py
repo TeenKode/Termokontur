@@ -201,6 +201,11 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                             expect(page.locator(f'#view-{tab}')).to_be_visible()
                             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), (mode,width,tab)
                             if width==1366 or width==390:
+                                if tab=="sensors":
+                                    expect(page.locator("#sensor-state")).not_to_have_text("Загружаем датчики…")
+                                if tab=="overview":
+                                    expect(page.locator("#history-content")).to_be_visible()
+                                page.evaluate("window.scrollTo(0,0)")
                                 page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-design-{mode}-{width}-{tab}.png')
                 page.set_viewport_size(original_size)
                 page.evaluate("window.termokonturTheme.setPreference('light')")
@@ -326,6 +331,27 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.select_option('#tk-sensor-view','table')
                 expect(page.locator('#tk-sensor-rows tr')).to_contain_text('Данные получены')
                 page.select_option('#tk-sensor-view','cards')
+                expect(page.locator('.sensor-card')).to_be_visible()
+                expect(page.locator('.tk-sensor-temperature')).to_contain_text('21,5')
+                page.fill('#tk-sensor-search','нет такого датчика')
+                expect(page.locator('#tk-sensor-no-match')).to_be_visible()
+                expect(page.locator('.sensor-card')).to_be_hidden()
+                page.select_option('#tk-sensor-view','table')
+                expect(page.locator('#tk-sensor-rows tr')).to_be_hidden()
+                page.fill('#tk-sensor-search','Кабинет 101')
+                expect(page.locator('#tk-sensor-rows tr')).to_be_visible()
+                page.fill('#tk-sensor-search','')
+                page.select_option('#tk-sensor-view','cards')
+                page.click('[data-tab="overview"]')
+                page.click('#refresh')
+                expect(page.locator('#avg-today')).to_contain_text('21,5')
+                expect(page.locator('#history-content')).to_be_visible()
+                for mode in ('light','dark'):
+                    page.evaluate("(mode)=>window.termokonturTheme.setPreference(mode)",mode)
+                    page.evaluate("window.scrollTo(0,0)")
+                    page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-live-overview-{mode}.png',full_page=True)
+                page.evaluate("window.termokonturTheme.setPreference('light')")
+                page.click('[data-tab="sensors"]')
                 expect(page.locator('.sensor-card')).to_be_visible()
                 # Rejected reconfiguration must leave the previous USB settings in place.
                 for omit_provisioned in (False, True):

@@ -235,7 +235,8 @@
         </div>
         <article class="panel sensor-claims-panel" id="sensor-claims-panel" hidden><h2>Ожидают разрешения</h2><p>Разрешите подключение знакомых устройств. При настройке по USB доступ выдаётся автоматически.</p><div id="sensor-claims"></div></article>
         <div id="tk-sensor-workspace" class="tk-sensor-workspace"><div class="tk-sensor-list">
-        <div class="sensor-presentation"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
+        <div class="sensor-presentation"><input id="tk-sensor-search" type="search" placeholder="Название, помещение, ID" aria-label="Поиск активных датчиков"><label for="tk-sensor-view">Представление датчиков</label><select id="tk-sensor-view"><option value="cards">Карточки</option><option value="table">Таблица</option></select></div>
+        <p id="tk-sensor-no-match" class="hint" role="status" hidden>Активные датчики по запросу не найдены.</p>
         <div id="sensor-cards" class="sensor-cards"></div>
         <div id="tk-sensor-table" class="panel sensor-table-panel" hidden><div class="table-scroll" tabindex="0" role="region" aria-label="Таблица датчиков"><table><thead><tr><th scope="col">Датчик</th><th scope="col">Помещение</th><th scope="col">Состояние</th><th scope="col">Последний замер</th><th scope="col">Напряжение</th><th scope="col">Последняя связь</th><th scope="col">Прошивка</th><th scope="col">Действия</th></tr></thead><tbody id="tk-sensor-rows"></tbody></table></div></div>
         <details id="sensor-archive" class="panel sensor-disclosure" hidden><summary id="sensor-archive-title">Архив и отключённые</summary><p>История сохраняется. Откройте карточку, чтобы восстановить подключение поддерживаемого датчика.</p><div id="sensor-archive-cards" class="sensor-cards"></div></details>
