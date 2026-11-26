@@ -174,4 +174,16 @@ public:
     return true;
   }
 };
+// Flash is authoritative for new measurements. Only publish the next
+// sequence to NVS after the slot is durably committed and verified.
+// A legacy RTC retry may already have reserved exactly this sequence.
+template<class SaveNext>
+bool commit_measurement(Journal &journal, const Record &record,
+                        uint64_t ack, uint64_t next, SaveNext save_next) {
+  if (!ack || ack > next || next > sequence_limit ||
+      record.seq < ack || record.seq >= sequence_limit ||
+      (record.seq != next && record.seq != next - 1)) return false;
+  if (!journal.append(record)) return false;
+  return record.seq < next || save_next(record.seq + 1);
+}
 } // namespace sensor
