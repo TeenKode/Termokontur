@@ -409,7 +409,24 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 page.set_viewport_size({'width':1440,'height':1100})
                 page.get_by_role('link', name='Отладка прошивки').click()
                 expect(page.get_by_role('heading', name='Отладка прошивки')).to_be_visible()
+                expect(page.locator('#debug-connection')).to_have_attribute('data-state','idle')
+                for theme in ('light','dark'):
+                    page.evaluate('(theme)=>window.termokonturTheme.setPreference(theme)',theme)
+                    for width in (320,390,768,1024,1440,1920):
+                        page.set_viewport_size({'width':width,'height':900})
+                        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), (theme,width)
+                        assert page.locator('.firmware-debug-panel').evaluate_all('els=>els.every(el=>el.scrollWidth<=el.clientWidth+1)'), (theme,width)
+                        assert page.locator('.debug-console').is_visible()
+                        if width>=1100:
+                            assert page.locator('.debug-console').bounding_box()['x'] > page.locator('.debug-diagnostics').bounding_box()['x']
+                        else:
+                            assert page.locator('.debug-console').bounding_box()['y'] < page.locator('.debug-acceptance').bounding_box()['y']
+                        if width in (390,1440):
+                            page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-debug-{theme}-{width}.png',full_page=True)
+                page.set_viewport_size({'width':1440,'height':1100})
+                page.evaluate("window.termokonturTheme.setPreference('light')")
                 page.click('#debug-connect')
+                expect(page.locator('#debug-connection')).to_have_attribute('data-state','usb')
                 expect(page.locator('#debug-hardware')).to_have_text('0123456789ab')
                 expect(page.locator('#debug-result')).to_contain_text(version)
                 page.click('#debug-measure')
@@ -430,6 +447,15 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-log')).to_contain_text('SETUP password: [скрыт]')
                 expect(page.locator('#debug-log')).not_to_contain_text('masked-test-password')
                 verify_log_follow(page, 'debug-log', 'lines=>window.emitSensorLog(lines)')
+                expect(page.locator('#debug-log-follow')).to_have_attribute('data-state','following')
+                page.locator('#debug-log').evaluate('el=>{el.scrollTop=0}')
+                expect(page.locator('#debug-log-follow')).to_have_attribute('data-state','paused')
+                page.click('#debug-log-end')
+                expect(page.locator('#debug-log-follow')).to_have_attribute('data-state','following')
+                for theme in ('light','dark'):
+                    page.evaluate('(theme)=>window.termokonturTheme.setPreference(theme)',theme)
+                    page.screenshot(path=SCREENSHOTS/f'termokontur-sensors-debug-connected-{theme}.png',full_page=True)
+                page.evaluate("window.termokonturTheme.setPreference('light')")
                 with page.expect_download() as debug_log:
                     page.click('#debug-save')
                 saved_log = debug_log.value.path().read_text(encoding='utf-8')
@@ -455,6 +481,7 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-wifi-password')).to_be_empty()
                 page.click('#debug-connect-uart')
                 expect(page.locator('#debug-connection')).to_contain_text('UART0 подключён')
+                expect(page.locator('#debug-connection')).to_have_attribute('data-state','uart')
                 expect(page.locator('#debug-command-on-wake')).to_be_checked()
                 assert page.evaluate('window.simSerialOptions') == {}
                 assert page.evaluate('window.simSerialCommands') == []

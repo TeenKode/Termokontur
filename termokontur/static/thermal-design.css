@@ -167,3 +167,60 @@ html[data-theme] dialog{border-color:var(--tk-line);border-radius:12px}
 .tk-sensor-voltage{font-size:clamp(18px,1.6vw,24px);font-weight:650;line-height:1.4;color:var(--tk-text)}
 #sensor-chart{height:clamp(200px,23vw,265px)}
 @media(max-width:700px){#tk-sensor-search{flex-basis:100%;max-width:none;width:100%}}
+
+/* Firmware debug is a workbench, not a long settings page. */
+.firmware-debug-page{width:min(1600px,calc(100% - 48px));margin:24px auto 48px}
+.firmware-debug-page .debug-page-heading{align-items:center;margin-bottom:18px}
+.debug-back{display:inline-flex;align-items:center;min-height:32px;color:var(--tk-accent);font-size:13px;font-weight:700;text-decoration:none}
+.debug-back:hover{text-decoration:underline}
+.firmware-debug-page .firmware-debug-panel{min-width:0;padding:18px;margin:0;overflow:visible}
+.firmware-debug-page .debug-connection-panel{margin-bottom:16px}
+.debug-workspace{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"diagnostics" "console" "acceptance";gap:16px;align-items:start}
+.debug-diagnostics{grid-area:diagnostics}
+.debug-console{grid-area:console}
+.debug-acceptance{grid-area:acceptance}
+.firmware-debug-page .heading-actions{align-items:center;gap:8px;margin-top:10px}
+.firmware-debug-page .heading-actions .btn{white-space:normal;max-width:100%;text-align:center;min-height:40px;overflow-wrap:anywhere}
+.firmware-debug-page .btn:disabled{opacity:.48;cursor:not-allowed;filter:none}
+.firmware-debug-page .firmware-debug-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0}
+.firmware-debug-page .firmware-debug-values>div{min-width:0;padding:10px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised)}
+.firmware-debug-page .firmware-debug-values dt{font-size:12px;color:var(--tk-muted);line-height:1.45}
+.firmware-debug-page .firmware-debug-values dd{font-size:13px;color:var(--tk-text);line-height:1.45}
+.firmware-debug-page .debug-telemetry{grid-template-columns:repeat(3,minmax(0,1fr))}
+.firmware-debug-page .debug-telemetry dd{font-size:clamp(18px,1.65vw,27px);font-weight:700;color:var(--tk-accent)}
+.firmware-debug-page #debug-humidity{color:var(--tk-cold)}
+.firmware-debug-page #debug-battery{color:var(--tk-text)}
+.debug-status,.debug-message:not(:empty){padding:9px 11px;border:1px solid var(--tk-line);border-radius:8px;background:var(--tk-raised);overflow-wrap:anywhere}
+.debug-status{font-size:13px;color:var(--tk-muted)}
+.debug-status[data-state="usb"],.debug-status[data-state="uart"]{color:var(--tk-ok);border-left:3px solid var(--tk-ok)}
+.debug-status[data-state="busy"]{color:var(--tk-accent);border-left:3px solid var(--tk-accent)}
+.debug-status[data-state="error"],.debug-status[data-state="unsupported"]{color:var(--tk-hot);border-left:3px solid var(--tk-hot)}
+.debug-message:empty{display:none}
+.debug-interval{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--tk-muted)}
+.debug-interval select{width:auto;min-height:40px}
+.debug-log-meta{display:flex;align-items:center;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;color:var(--tk-muted);font-size:11px;margin-top:14px}
+#debug-log-follow[data-state="following"]{color:var(--tk-ok)}
+#debug-log-follow[data-state="paused"]{color:var(--tk-accent)}
+.firmware-debug-page #debug-log{height:clamp(230px,43vh,480px);margin-top:7px;font-size:12px;line-height:1.6}
+.firmware-debug-command input:not([type="checkbox"]){font-family:"JetBrains Mono",ui-monospace,monospace;min-width:0}
+.debug-delivery,.debug-manual-details{margin-top:16px;padding-top:14px;border-top:1px solid var(--tk-line)}
+.debug-delivery h3{font-size:15px;margin:0}
+.debug-manual-details summary{cursor:pointer;font-weight:700;font-size:14px}
+.firmware-debug-page .firmware-test-result{margin:0;padding:8px 0;border-bottom:1px solid var(--tk-line);font-size:13px}
+.firmware-test-result[data-status="pass"] strong{color:var(--tk-ok)}
+.firmware-test-result[data-status="fail"] strong{color:var(--tk-hot)}
+.firmware-test-result[data-status="warn"] strong{color:var(--tk-accent)}
+.firmware-test-result[data-status="skipped"] strong{color:var(--tk-muted)}
+#debug-delivery-results{padding-left:22px;overflow-wrap:anywhere;font-size:13px}
+#debug-delivery-results li{padding:7px 0;border-bottom:1px solid var(--tk-line)}
+@media(min-width:1100px){
+  .debug-workspace{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);grid-template-areas:"diagnostics console" "acceptance console";grid-template-rows:auto 1fr}
+}
+@media(max-width:700px){
+  .firmware-debug-page{width:calc(100% - 24px);margin:12px auto 36px}
+  .firmware-debug-page .firmware-debug-panel{padding:14px}
+  .firmware-debug-page .debug-telemetry{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .firmware-debug-page .debug-telemetry>div:last-child{grid-column:1/-1}
+  .firmware-debug-page .heading-actions .btn{flex:1 1 120px}
+  .firmware-debug-page .firmware-debug-values dd{overflow-wrap:anywhere}
+}

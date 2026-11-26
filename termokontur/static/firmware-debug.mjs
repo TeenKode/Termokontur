@@ -26,6 +26,7 @@ let serial = null;
 let uartMode = false;
 let queuedCommand = null;
 let connecting = false;
+let connectionError = false;
 let checking = false;
 let bootArmed = false;
 let testing = false, testCancelled = false, testReport = null;
@@ -38,7 +39,18 @@ function scheduleAuto() {
   if (auto && serial) timer = setTimeout(() => void checkBoard("test_measurement"), Number(field("interval").value)*1000);
 }
 
+function updateLogFollow() {
+  const following = log.scrollHeight - log.clientHeight - log.scrollTop <= 2;
+  const state = field("log-follow");
+  state.dataset.state = following ? "following" : "paused";
+  state.textContent = following ? "Автопрокрутка включена" : "Автопрокрутка приостановлена";
+}
+log.addEventListener("scroll",updateLogFollow,{passive:true});
+field("log-end").addEventListener("click",updateLogFollow);
+
 function controls() {
+  field("connection").dataset.state = !supported ? "unsupported" : connecting ? "busy" : serial ? (uartMode ? "uart" : "usb") : connectionError ? "error" : "idle";
+  updateLogFollow();
   field("connect").disabled = !supported || connecting || Boolean(serial);
   field("connect-uart").disabled = field("connect").disabled;
   field("disconnect").disabled = !serial;
@@ -202,6 +214,7 @@ async function closePort(connection, message) {
   stopAuto();
   checking = false;
   connecting = true;
+  field("connection").textContent = "Освобождаем COM-порт…";
   bootArmed = false;
   setSetupWifi(null);
   controls();
@@ -214,6 +227,8 @@ async function closePort(connection, message) {
 async function connectBoard(external) {
   if (!supported || connecting || serial) return;
   connecting = true;
+  connectionError = false;
+  field("connection").textContent = "Выберите COM-порт…";
   controls();
   try {
     const port = await navigator.serial.requestPort(external ? {} : {filters: [{usbVendorId: 0x303a}]});
@@ -229,6 +244,7 @@ async function connectBoard(external) {
     void connection.reading.then(() => closePort(connection, "Связь с платой завершилась. Подключите USB снова."));
     if (!external) void checkBoard("hello");
   } catch (error) {
+    connectionError = error.name !== "NotFoundError";
     field("connection").textContent = error.name === "NotFoundError" ? "Порт не выбран." :
       "Не удалось открыть порт. Закройте USB-мастер или другой монитор порта.";
   } finally {
@@ -339,7 +355,7 @@ function renderTest(report){
   const result=field("test-results");result.replaceChildren();
   const labels={pass:"Пройдено",fail:"Ошибка",warn:"Требует внимания",skipped:"Не завершено"};
   for(const step of report.steps){
-    const row=document.createElement("p");row.className="firmware-test-result";
+    const row=document.createElement("p");row.className="firmware-test-result";row.dataset.status=step.status;
     const status=document.createElement("strong");status.textContent=labels[step.status]+": ";
     row.append(status,document.createTextNode(step.message));result.append(row);
   }

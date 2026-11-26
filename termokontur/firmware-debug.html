@@ -25,33 +25,36 @@
 </head>
 <body>
   <main class="firmware-debug-page">
-    <header class="heading">
+    <header class="heading debug-page-heading">
       <div>
-        <a href="/">← В панель</a>
+        <a href="/" class="debug-back">← В панель</a>
         <h1>Отладка прошивки</h1>
-        <p>ESP32-C3 · версия панели <strong id="debug-panel-version">__APP_VERSION__</strong></p>
+        <p>ESP32-C3 · версия панели <strong class="panel-version" id="debug-panel-version">__APP_VERSION__</strong></p>
       </div>
       <button type="button" class="theme-toggle" data-theme-toggle aria-label="Переключить тему">☾</button>
     </header>
 
-    <section class="panel firmware-debug-panel">
-      <h2>Подключение к COM-порту</h2>
+    <section class="panel firmware-debug-panel debug-connection-panel" aria-labelledby="debug-connection-title">
+      <h2 id="debug-connection-title">Подключение к COM-порту</h2>
       <p class="hint">Встроенный USB открывает режим настройки. Для записи пробуждений используйте внешний USB–UART 3,3 В и питание платы от аккумулятора.</p>
       <div class="heading-actions">
         <button type="button" id="debug-connect" class="btn primary" disabled>Подключить USB</button>
         <button type="button" id="debug-connect-uart" class="btn secondary" disabled>Подключить UART0</button>
         <button type="button" id="debug-disconnect" class="btn secondary" disabled>Отключить</button>
       </div>
-      <p id="debug-connection" role="status">Ожидаем подключения платы.</p>
+      <p id="debug-connection" class="debug-status" data-state="idle" role="status">Ожидаем подключения платы.</p>
     </section>
 
-    <section class="panel firmware-debug-panel">
-      <h2>Диагностика платы</h2>
+    <div class="debug-workspace">
+    <section class="panel firmware-debug-panel debug-diagnostics" aria-labelledby="debug-diagnostics-title">
+      <h2 id="debug-diagnostics-title">Диагностика платы</h2>
       <dl class="firmware-debug-values">
         <div><dt>Прошивка платы</dt><dd id="debug-firmware">—</dd></div>
         <div><dt>Идентификатор платы</dt><dd id="debug-hardware">—</dd></div>
         <div><dt>Тип датчика</dt><dd id="debug-sensor-type">—</dd></div>
         <div><dt>Журнал на плате</dt><dd id="debug-pending">—</dd></div>
+      </dl>
+      <dl class="firmware-debug-values debug-telemetry">
         <div><dt>Температура</dt><dd id="debug-temperature">—</dd></div>
         <div><dt>Влажность</dt><dd id="debug-humidity">—</dd></div>
         <div><dt>Напряжение аккумулятора</dt><dd id="debug-battery">—</dd></div>
@@ -63,10 +66,10 @@
         <button type="button" id="debug-boot" class="btn secondary" disabled>Отправить замер по BOOT</button>
       </div>
       <div class="heading-actions">
-        <label>Интервал <select id="debug-interval"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="30">30 с</option></select></label>
+        <label class="debug-interval">Интервал <select id="debug-interval"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="30">30 с</option></select></label>
         <button type="button" id="debug-auto" class="btn secondary" disabled>Запустить автозамер</button>
       </div>
-      <p id="debug-stats" role="status">Успешно: 0 · Ошибок: 0</p>
+      <p id="debug-stats" class="debug-status" role="status">Успешно: 0 · Ошибок: 0</p>
       <div id="debug-wifi-details" hidden>
         <dl class="firmware-debug-values">
           <div><dt>Сеть настройки</dt><dd id="debug-wifi-ssid"></dd></div>
@@ -74,33 +77,19 @@
         </dl>
         <p class="hint">Подключитесь к этой сети и откройте http://192.168.4.1 на том же устройстве.</p>
       </div>
-      <p id="debug-result" class="hint" role="status"></p>
+      <p id="debug-result" class="hint debug-message" role="status"></p>
     </section>
 
-    <section class="panel firmware-debug-panel">
-      <h2>Приёмочный тест датчика</h2>
-      <p class="hint">Проверяет USB, версию и 5 локальных замеров.</p>
-      <div class="heading-actions">
-        <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
-        <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
-        <button type="button" id="debug-test-report" class="btn secondary" disabled>Скачать отчёт JSON</button>
-      </div>
-      <p id="debug-test-state" role="status">Тест ещё не запускался.</p>
-      <div id="debug-test-results"></div>
-      <h3>Проверки на реальном оборудовании</h3>
-      <p class="hint">Проводите на отдельном тестовом датчике, не на действующем кабинете. Отмечайте фактический результат; непроверенные шаги не считаются успешными.</p>
-      <div id="debug-test-manual" class="firmware-test-manual"></div>
-    </section>
-
-    <section class="panel firmware-debug-panel">
+    <section class="panel firmware-debug-panel debug-console" aria-labelledby="debug-console-title">
       <div class="sensor-firmware-heading">
-        <h2>Журнал и команды COM</h2>
+        <h2 id="debug-console-title">Журнал и команды COM</h2>
         <div class="heading-actions">
           <button type="button" id="debug-log-end" class="btn secondary" disabled>К последней строке</button>
           <button type="button" id="debug-clear" class="btn secondary" disabled>Очистить</button>
           <button type="button" id="debug-save" class="btn secondary" disabled>Скачать .txt</button>
         </div>
       </div>
+      <div class="debug-log-meta"><span id="debug-log-follow" data-state="following">Автопрокрутка включена</span><span>115200 бод · последние 64 Ки символов</span></div>
       <pre id="debug-log" class="serial-log" tabindex="0" role="region" aria-label="Журнал платы"></pre>
       <form id="debug-command-form" class="firmware-debug-command">
         <label>Команда <input id="debug-command" autocomplete="off" spellcheck="false" maxlength="12240" placeholder="help" required disabled></label>
@@ -110,15 +99,32 @@
           <button id="debug-command-cancel" type="button" class="btn secondary" disabled>Отменить ожидание</button>
         </div>
       </form>
-      <p id="debug-command-state" class="hint" role="status"></p>
+      <p id="debug-command-state" class="hint debug-message" role="status"></p>
+      <div class="debug-delivery"><h3>Доставка на сервер</h3>
       <div class="heading-actions">
         <button type="button" id="debug-delivery-start" class="btn secondary" disabled>Проверить доставку</button>
         <button type="button" id="debug-delivery-stop" class="btn secondary" disabled>Остановить проверку доставки</button>
       </div>
       <p class="hint">На тестовой плате с UART0. Запишет три замера в журнал подключённого датчика.</p>
       <p id="debug-delivery-state" role="status"></p>
-      <ol id="debug-delivery-results" hidden></ol>
+      <ol id="debug-delivery-results" hidden></ol></div>
     </section>
+    <section class="panel firmware-debug-panel debug-acceptance" aria-labelledby="debug-test-title">
+      <h2 id="debug-test-title">Приёмочный тест датчика</h2>
+      <p class="hint">Проверяет USB, версию и 5 локальных замеров.</p>
+      <div class="heading-actions">
+        <button type="button" id="debug-test-start" class="btn primary" disabled>Запустить тест</button>
+        <button type="button" id="debug-test-stop" class="btn secondary" disabled>Остановить</button>
+        <button type="button" id="debug-test-report" class="btn secondary" disabled>Скачать отчёт JSON</button>
+      </div>
+      <p id="debug-test-state" class="debug-status" role="status">Тест ещё не запускался.</p>
+      <div id="debug-test-results"></div>
+      <details class="debug-manual-details"><summary>Проверки на реальном оборудовании</summary>
+      <p class="hint">Проводите на отдельном тестовом датчике, не на действующем кабинете. Отмечайте фактический результат; непроверенные шаги не считаются успешными.</p>
+      <div id="debug-test-manual" class="firmware-test-manual"></div></details>
+    </section>
+
+    </div>
   </main>
 </body>
 </html>
