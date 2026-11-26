@@ -789,22 +789,32 @@ static bool enroll() {
 static void ota(cJSON *meta, uint16_t mv) {
   if (!cJSON_IsObject(meta) || mv < cfg.ota_min_mv || !available())
     return;
-  uint32_t generation = number(meta, "generation");
-  if (generation != state.ota_generation) {
-    state.ota_generation = generation;
-    state.ota_failures = 0;
+  const auto *generation_node = cJSON_GetObjectItemCaseSensitive(meta, "generation");
+  const auto *id_node = cJSON_GetObjectItemCaseSensitive(meta, "id");
+  const auto *size_node = cJSON_GetObjectItemCaseSensitive(meta, "size");
+  const auto *part = esp_ota_get_next_update_partition(nullptr);
+  const std::string sha = text(meta, "sha256"), ver = text(meta, "version");
+  if (!part || !cJSON_IsNumber(generation_node) || !cJSON_IsNumber(id_node) ||
+      !cJSON_IsNumber(size_node) ||
+      !sensor::ota_integer(generation_node->valuedouble, 0, UINT32_MAX) ||
+      !sensor::ota_integer(id_node->valuedouble, 1, INT32_MAX) ||
+      !sensor::ota_integer(size_node->valuedouble, 256, std::min<uint32_t>(part->size, INT32_MAX)) ||
+      !sensor::ota_sha256(sha) || !sensor::ota_upgrade(firmware_version(), ver)) {
+    last_error = "ota_invalid_metadata";
+    return;
   }
-  if (state.ota_failures >= 3)
-    return;
-  std::string sha = text(meta, "sha256"), ver = text(meta, "version");
-  int id = number(meta, "id"), size = number(meta, "size");
-  auto part = esp_ota_get_next_update_partition(nullptr);
-  if (!part || size < 256 || (size_t)size > part->size || sha.size() != 64 ||
-      ver == firmware_version())
-    return;
-  state.ota_failures++;
-  if (!save_state())
-    return;
+  const auto generation = static_cast<uint32_t>(generation_node->valuedouble);
+  const int id = static_cast<int>(id_node->valuedouble);
+  const int size = static_cast<int>(size_node->valuedouble);
+  State attempt = state;
+  if (generation != attempt.ota_generation) {
+    attempt.ota_generation = generation;
+    attempt.ota_failures = 0;
+  }
+  if (attempt.ota_failures >= 3) return;
+  ++attempt.ota_failures;
+  if (!save_blob("state", &attempt, sizeof attempt)) return;
+  state = attempt;
   std::string path =
       "/api/sensors/devices/" + device + "/firmware/" + std::to_string(id);
   auto h = http(path);
@@ -816,8 +826,9 @@ static void ota(cJSON *meta, uint16_t mv) {
   bool ok = false;
   mbedtls_sha256_context hash;
   mbedtls_sha256_init(&hash);
-  mbedtls_sha256_starts(&hash, 0);
-  if (esp_http_client_open(h, 0) == ESP_OK &&
+  const bool hash_ready = mbedtls_sha256_starts(&hash, 0) == 0;
+  if (hash_ready && esp_http_client_open(h, 0) == ESP_OK && available() &&
+      esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK &&
       esp_http_client_fetch_headers(h) == size &&
       esp_http_client_get_status_code(h) == 200 && available() &&
       esp_ota_begin(part, size, &handle) == ESP_OK) {
@@ -845,28 +856,28 @@ static void ota(cJSON *meta, uint16_t mv) {
                   strncmp(desc->version, ver.c_str(), 32) == 0;
     }
     if (header_ok && available() &&
+        mbedtls_sha256_update(&hash, b, header_size) == 0 &&
         esp_ota_write(handle, b, header_size) == ESP_OK) {
-      mbedtls_sha256_update(&hash, b, header_size);
       received = header_size;
       while (received < size && available()) {
         esp_http_client_set_timeout_ms(h, timeout_ms());
         int n = esp_http_client_read(h, (char *)b,
                                      std::min((int)sizeof b, size - received));
-        if (n <= 0 || esp_ota_write(handle, b, n) != ESP_OK)
+        if (n <= 0 || !available() || mbedtls_sha256_update(&hash, b, n) != 0 ||
+            esp_ota_write(handle, b, n) != ESP_OK)
           break;
-        mbedtls_sha256_update(&hash, b, n);
         received += n;
       }
     }
-    uint8_t out[32];
-    mbedtls_sha256_finish(&hash, out);
+    uint8_t out[32]{};
+    const bool hash_ok = mbedtls_sha256_finish(&hash, out) == 0;
     char hex[65];
     for (int i = 0; i < 32; i++)
       snprintf(hex + 2 * i, 3, "%02x", out[i]);
-    if (received == size && sha == hex && available()) {
+    if (hash_ok && received == size && sha == hex && available()) {
       auto end = esp_ota_end(handle);
       handle = 0;
-      if (end == ESP_OK && esp_ota_set_boot_partition(part) == ESP_OK)
+      if (end == ESP_OK && available() && esp_ota_set_boot_partition(part) == ESP_OK)
         ok = true;
     }
   }
@@ -1770,9 +1781,13 @@ extern "C" void app_main() {
          hex64(rt.boot).c_str(), (unsigned long long)sleep_elapsed,
          (unsigned long long)rt.uptime, (unsigned long long)rt.next_measure,
          (unsigned long long)rt.next_send_uptime);
-  // Charging takes priority over provisioning, measurements, diagnostics and
-  // OTA.
-  if (charging()) {
+  esp_ota_img_states_t ota_state;
+  const bool pending = esp_ota_get_state_partition(esp_ota_get_running_partition(),
+                                                  &ota_state) == ESP_OK &&
+                       ota_state == ESP_OTA_IMG_PENDING_VERIFY;
+  // Pending images must validate local storage before any Deep Sleep.
+  // No sensor or radio is used during this check, including while charging.
+  if (charging() && !pending) {
     puts("SLEEP: charger input GPIO4 is LOW.");
     rt.charging = true;
     sleep_for(1800);
@@ -1799,6 +1814,37 @@ extern "C" void app_main() {
   if (!recover_provision_intent()) {
     puts("SETUP: pending transaction recovery failed; preserving NVS");
     sleep_for(3600);
+  }
+  if (pending) {
+    const auto *datalog = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
+    bool storage_ok = false;
+    if (datalog) {
+      PartitionFlash flash(datalog);
+      sensor::Journal journal(flash);
+      uint64_t next = state.next;
+      if (journal.scan()) {
+        const auto newest = journal.entries().empty() ? 0 : journal.entries().back().seq;
+        storage_ok = sensor::recover_next(state.ack, next, newest);
+        if (storage_ok && next != state.next) storage_ok = save_next_sequence(next);
+      }
+    }
+    if (!storage_ok) {
+      puts("OTA: local storage self-test failed; requesting rollback");
+      const auto err = esp_ota_mark_app_invalid_rollback_and_reboot();
+      printf("OTA: rollback returned %s\n", esp_err_to_name(err));
+      sleep_for(3600);
+    }
+    const auto err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err != ESP_OK) {
+      printf("OTA: confirmation failed: %s\n", esp_err_to_name(err));
+      sleep_for(3600);
+    }
+    puts("OTA: local storage self-test passed; image confirmed");
+    State confirmed = state;
+    confirmed.ota_failures = 0;
+    if (save_blob("state", &confirmed, sizeof confirmed)) state = confirmed;
+    else puts("OTA: could not reset attempt counter");
   }
   if (rt.clock_valid && time(nullptr) >= 1700000000)
     time_quality = 3;
@@ -1919,10 +1965,6 @@ extern "C" void app_main() {
     }
     rt.pending = false;
   }
-  esp_ota_img_states_t ota_state;
-  bool pending = esp_ota_get_state_partition(esp_ota_get_running_partition(),
-                                             &ota_state) == ESP_OK &&
-                 ota_state == ESP_OTA_IMG_PENDING_VERIFY;
   bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   // The first boot of a new OTA image has to complete self-test immediately.
   const auto console = pending ? ConsoleSession{} : wake_serial_window(journal, mv, wifi_allowed);
@@ -1943,7 +1985,8 @@ extern "C" void app_main() {
   const bool requested_sample = console.action == ConsoleAction::sample;
   const bool requested_sync = console.action == ConsoleAction::sync || console.sync_after_sample;
 
-  // Local self-test only: lack of Wi-Fi alone must not invalidate a good image.
+  // The image has passed local storage self-test. External sensor faults
+  // are measurement errors, not firmware rollback triggers.
   const bool scheduled_measure = uptime_now() >= rt.next_measure;
   const bool measurement_due =
       boot_debug || (cfg.enabled && (requested_sample || pending || scheduled_measure));
@@ -1966,15 +2009,6 @@ extern "C" void app_main() {
   if (charging()) {
     rt.charging = true;
     sleep_for(cfg.measure_s);
-  }
-  if (pending) {
-    if ((cfg.enabled && (!measured || measurement.error)) || !journal.scan())
-      esp_ota_mark_app_invalid_rollback_and_reboot();
-    else {
-      esp_ota_mark_app_valid_cancel_rollback();
-      state.ota_failures = 0;
-      save_state();
-    }
   }
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
