@@ -18,6 +18,24 @@ inline int64_t boot_radio_end(int64_t now, uint32_t budget_s, int64_t session_en
 inline bool boot_work_allowed(int64_t now, int64_t session_end, bool charging) {
   return !charging && (session_end == 0 || now < session_end);
 }
+// An off-schedule local diagnostic is not a production journal record.
+// Scheduled work is independent of the manual diagnostic preference.
+struct BootOptions {
+  bool send_now = true;
+  bool preserve_schedule = true;
+  bool store(bool scheduled_measure, bool pending, bool explicit_sample) const {
+    return send_now || scheduled_measure || pending || explicit_sample;
+  }
+  bool send(bool scheduled_send, bool explicit_sync) const {
+    return send_now || scheduled_send || explicit_sync;
+  }
+  bool advance_measure(bool scheduled_measure, bool pending) const {
+    return scheduled_measure || pending || !preserve_schedule;
+  }
+  bool advance_send(bool scheduled_send) const {
+    return scheduled_send || (send_now && !preserve_schedule);
+  }
+};
 // Accept a complete short press only after a stable initial release.
 // A held button (including BOOT used to enter setup) cannot fire repeatedly.
 class BootPress {

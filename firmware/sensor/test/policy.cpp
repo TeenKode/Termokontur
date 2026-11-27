@@ -29,6 +29,22 @@ static void test_serial_lines() {
 
 int main() {
   {
+    const sensor::BootOptions legacy{};
+    assert(legacy.store(false, false, false) && legacy.send(false, false));
+    assert(!legacy.advance_measure(false, false) && !legacy.advance_send(false));
+    const sensor::BootOptions local{false, true};
+    assert(!local.store(false, false, false) && !local.send(false, false));
+    assert(local.store(true, false, false) && local.store(false, true, false));
+    assert(local.store(false, false, true) && local.send(true, false) && local.send(false, true));
+    assert(local.advance_measure(true, false) && local.advance_measure(false, true));
+    assert(!local.advance_measure(false, false) && !local.advance_send(false));
+    const sensor::BootOptions reset{true, false};
+    assert(reset.advance_measure(false, false) && reset.advance_send(false));
+    const sensor::BootOptions local_reset{false, false};
+    assert(local_reset.advance_measure(false, false) && !local_reset.advance_send(false));
+  }
+
+  {
     const auto end = sensor::boot_session_end(1000000, 300);
     assert(end == 301000000);
     assert(sensor::boot_work_allowed(end - 1, end, false));
