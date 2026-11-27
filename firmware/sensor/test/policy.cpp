@@ -29,6 +29,30 @@ static void test_serial_lines() {
 
 int main() {
   {
+    const std::string first(32, 'a'), second(32, 'b');
+    assert(sensor::boot_command_id(first));
+    assert(!sensor::boot_command_id(std::string(32, 'A')));
+    assert(!sensor::boot_command_id(std::string(31, 'a')));
+    assert(sensor::boot_command_expiry(1700000000, 1700000001));
+    assert(sensor::boot_command_expiry(1700000000, 1700000000 + 7 * 86400));
+    assert(!sensor::boot_command_expiry(1700000000, 1700000000));
+    assert(!sensor::boot_command_expiry(1700000000, 1700000000 + 7 * 86400 + 1));
+    assert(!sensor::boot_command_expiry(1700000000, 1700000000.5));
+    assert(!sensor::boot_command_expiry(NAN, 1700000001));
+    unsigned writes = 0;
+    std::string persisted;
+    auto save = [&](std::string_view id) { ++writes; persisted = id; return true; };
+    assert(sensor::consume_boot_command(first, persisted, save));
+    assert(persisted == first && writes == 1);
+    assert(!sensor::consume_boot_command(first, persisted, save));
+    assert(writes == 1);
+    assert(!sensor::consume_boot_command(second, persisted, [](std::string_view) { return false; }));
+    assert(persisted == first);
+    assert(sensor::consume_boot_command(second, persisted, save));
+    assert(persisted == second && writes == 2);
+  }
+
+  {
     constexpr int64_t now = 2250000, end = 302250000;
     // Uptime base 100: next sample at 105 and send at 103.
     assert(sensor::boot_schedule_end(now, end, 100, 105, 103, true, true) == 3000000);
