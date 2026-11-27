@@ -644,10 +644,28 @@ static bool server_supports_usb_sync = false;
 static bool server_supports_tail_loss = false;
 static bool server_supports_next_send = false;
 static bool server_supports_boot_debug = false;
+static bool apply_server_clock(int64_t epoch) {
+  if (!sensor::valid_clock_epoch(epoch)) return false;
+  timeval tv{static_cast<time_t>(epoch), 0};
+  if (settimeofday(&tv, nullptr) != 0) {
+    time_quality = 0;
+    rt.clock_valid = false;
+    last_error = "clock_set_failed";
+    return false;
+  }
+  time_quality = 2;
+  rt.clock_valid = true;
+  return true;
+}
+static void restore_tls_clock() {
+  if (time_quality || !sensor::valid_clock_epoch(state.saved_time)) return;
+  timeval tv{static_cast<time_t>(state.saved_time), 0};
+  if (settimeofday(&tv, nullptr) != 0) last_error = "clock_restore_failed";
+}
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
-  if (time(nullptr) < 1700000000 || time(nullptr) > 4102444800) {
+  if (!sensor::valid_clock_epoch(time(nullptr))) {
     last_error = "tls_clock_invalid"; puts("TLS: invalid clock; configure the board again"); return false;
   }
   auto response = post("/api/sensors/bootstrap", "{}", false);
@@ -667,10 +685,10 @@ static bool sync_time() {
     last_error = "invalid_server_bootstrap";
     return false;
   }
-  timeval tv{(time_t)epoch, 0};
-  settimeofday(&tv, nullptr);
-  time_quality = 2;
-  rt.clock_valid = true;
+  if (!apply_server_clock(static_cast<int64_t>(epoch))) {
+    cJSON_Delete(j);
+    return false;
+  }
   state.saved_time = (int64_t)epoch;
   // An empty chain means use the built-in public CA bundle (TLS proxy).
   std::string certificate = root->valuestring;
@@ -1039,7 +1057,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     if (!sync_time())
       return false;
   }
-  if (time(nullptr) < 1700000000) {
+  if (!sensor::valid_clock_epoch(time(nullptr))) {
     last_error = "time_required";
     return false;
   }
@@ -1164,10 +1182,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
       return false;
     }
     // Do not change the active wall clock if the NVS ACK checkpoint failed.
-    timeval tv{static_cast<time_t>(now), 0};
-    settimeofday(&tv, nullptr);
-    time_quality = 2;
-    rt.clock_valid = true;
+    if (!apply_server_clock(now)) {
+      cJSON_Delete(j);
+      return false;
+    }
     config_from(config_node);
     if (!code.empty()) {
       code.clear();
@@ -2137,8 +2155,8 @@ extern "C" void app_main() {
     if (persist_state(confirmed)) state = confirmed;
     else puts("OTA: could not reset attempt counter");
   }
-  if (rt.clock_valid && time(nullptr) >= 1700000000)
-    time_quality = 3;
+  rt.clock_valid = sensor::retained_clock_valid(rt.clock_valid, time(nullptr));
+  if (rt.clock_valid) time_quality = 3;
   if (rt.charging) {
     rt.charging = false;
     rt.cool_until = rt.uptime + cfg.cool_s;
@@ -2163,10 +2181,7 @@ extern "C" void app_main() {
   // USB factory enrollment alone does not sample. On battery, enrollment
   // follows the same radio-off measurement path as ordinary operation.
   if (provisioned && !factory_ticket.empty() && !physical && usb_host) {
-    if (!time_quality && state.saved_time >= 1700000000) {
-      timeval tv{(time_t)state.saved_time, 0};
-      settimeofday(&tv, nullptr);
-    }
+    restore_tls_clock();
     // Registration is independent of a measurement: a bare USB-powered
     // board can enroll, without inventing a battery reading or uploading data.
     // Externally powered enrollment needs several independent HTTPS requests.
@@ -2220,10 +2235,7 @@ extern "C" void app_main() {
   }
   // Stored time is a lower bound for TLS bootstrap, not a recovered measurement
   // time.
-  if (!time_quality && state.saved_time >= 1700000000) {
-    timeval tv{(time_t)state.saved_time, 0};
-    settimeofday(&tv, nullptr);
-  }
+  restore_tls_clock();
   // On a normal radio-off wake, initialization already contributes to
   // ADC settling. Keep the full delay after setup/BOOT radio activity.
   const auto settle_ms = sensor::battery_settle_remaining_ms(
