@@ -351,8 +351,12 @@ def test_remote_boot_debug_queue(admin):
     confirmed = sync(admin, device, headers, {**complete, "boot_debug_ack": command_id}).json()
     assert "boot_debug" not in confirmed
     assert admin.get(path).json()["status"] == "accepted"
+    assert admin.delete(path, params={"command_id": command_id}).status_code == 409
+    assert admin.get(path).json()["status"] == "accepted"
     replacement = admin.put(path, json={}).json()
     assert replacement["command_id"] != command_id
+    assert admin.delete(path, params={"command_id": command_id}).status_code == 409
+    assert admin.get(path).json()["command_id"] == replacement["command_id"]
     with db.connect() as conn:
         conn.execute("UPDATE sensor_boot_debug SET expires_at=0")
     assert admin.get(path).json()["status"] == "expired"
