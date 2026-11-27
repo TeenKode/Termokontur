@@ -252,7 +252,9 @@ static bool load_provision() {
          ((device.size() == 19 && (!code.empty() || !token.empty())) ||
           (code.empty() && sensor::identity::has_key()));
 }
+static void reset_post_client();
 static void stop_network() {
+  reset_post_client();
   if (net_started) {
     esp_wifi_stop();
     esp_wifi_deinit();
@@ -465,7 +467,8 @@ static esp_err_t http_diagnostic(esp_http_client_event_t *event) {
   }
   return ESP_OK;
 }
-static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *diagnostic = nullptr) {
+static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *diagnostic = nullptr,
+                                     const std::string *trust = nullptr) {
   esp_http_client_config_t h{};
   std::string url = server + path;
   h.url = url.c_str();
@@ -474,25 +477,48 @@ static esp_http_client_handle_t http(const std::string &path, HttpDiagnostic *di
   h.buffer_size = 2048;
   h.event_handler = http_diagnostic;
   h.user_data = diagnostic;
-  if (ca.empty())
+  const auto &certificate = trust ? *trust : ca;
+  if (certificate.empty())
     h.crt_bundle_attach = esp_crt_bundle_attach;
   else
-    h.cert_pem = ca.c_str();
+    h.cert_pem = certificate.c_str();
   return esp_http_client_init(&h);
+}
+static esp_http_client_handle_t post_client = nullptr;
+static HttpDiagnostic post_diagnostic;
+static std::string post_server, post_ca;
+static void reset_post_client() {
+  if (post_client) esp_http_client_cleanup(post_client);
+  post_client = nullptr;
+  post_server.clear();
+  post_ca.clear();
 }
 static std::string post_once(const std::string &path, const std::string &body,
                              bool auth, bool replay_safe, bool &retryable, std::string &failure) {
   retryable = false;
-  HttpDiagnostic diagnostic;
-  if (!available())
-    return "";
-  auto h = http(path, &diagnostic);
+  if (!available()) { reset_post_client(); return ""; }
+  if (post_client && (post_server != server || post_ca != ca))
+    reset_post_client();
+  post_diagnostic = {};
+  if (!post_client) {
+    post_server = server;
+    post_ca = ca;
+    post_client = http(path, &post_diagnostic, &post_ca);
+  }
+  auto h = post_client;
   if (!h) { failure = "https_client_init_failed"; return ""; }
-  esp_http_client_set_method(h, HTTP_METHOD_POST);
-  esp_http_client_set_header(h, "Content-Type", "application/json");
-  std::string bearer = "Bearer " + token;
-  if (auth)
-    esp_http_client_set_header(h, "Authorization", bearer.c_str());
+  const std::string url = server + path;
+  const std::string bearer = "Bearer " + token;
+  // Never carry authorization from a previous authenticated request.
+  if (esp_http_client_set_url(h, url.c_str()) != ESP_OK ||
+      esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK ||
+      esp_http_client_set_method(h, HTTP_METHOD_POST) != ESP_OK ||
+      esp_http_client_set_header(h, "Content-Type", "application/json") != ESP_OK ||
+      esp_http_client_set_header(h, "Authorization", auth ? bearer.c_str() : "") != ESP_OK) {
+    reset_post_client();
+    failure = "https_client_setup_failed";
+    return "";
+  }
   std::string result;
   if (path == "/api/sensors/bootstrap")
     printf("TLS: clock epoch=%lld; trust=%s (%u bytes)\n", (long long)time(nullptr),
@@ -502,6 +528,8 @@ static std::string post_once(const std::string &path, const std::string &body,
   esp_err_t err = esp_http_client_open(h, body.size());
   printf("HTTPS: open %s: %s in %lld ms\n", path.c_str(), esp_err_to_name(err),
          (long long)((esp_timer_get_time() - started_us) / 1000));
+  int status = -1;
+  bool complete = false;
   const char *stage = "open";
   if (err == ESP_OK) {
     stage = "request_body";
@@ -520,7 +548,8 @@ static std::string post_once(const std::string &path, const std::string &body,
       esp_http_client_set_timeout_ms(h, timeout_ms());
       headers = esp_http_client_fetch_headers(h);
     }
-    if (headers >= 0 && esp_http_client_get_status_code(h) == 200) {
+    if (headers >= 0) status = esp_http_client_get_status_code(h);
+    if (headers >= 0 && status == 200) {
       stage = "response_body";
       char b[1024];
       while (available()) {
@@ -543,15 +572,17 @@ static std::string post_once(const std::string &path, const std::string &body,
       }
     }
   }
-  int status = esp_http_client_get_status_code(h);
-  // A partial HTTP body must never be interpreted as an ACK.
-  if (!esp_http_client_is_complete_data_received(h)) result.clear();
-  esp_http_client_close(h);
-  esp_http_client_cleanup(h);
+  // Never reuse a partially consumed response or a failed connection.
+  complete = status == 200 && esp_http_client_is_complete_data_received(h);
+  if (!complete) result.clear();
+  const int verify_flags = post_diagnostic.verify_flags;
+  if (!sensor::http_keep_connection(status, complete, !result.empty(),
+                                    available(), verify_flags != 0))
+    reset_post_client();
   if (auth && status == 401) { token.clear(); save_provision(); }
   if (result.empty()) {
-    retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, diagnostic.verify_flags != 0);
-    if (diagnostic.verify_flags) {
+    retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, verify_flags != 0);
+    if (verify_flags) {
       failure = "tls_certificate_failed";
     } else if (status > 0 && status != 200) {
       printf("HTTPS: %s HTTP %d\n", path.c_str(), status);
