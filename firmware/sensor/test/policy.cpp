@@ -29,6 +29,16 @@ static void test_serial_lines() {
 
 int main() {
   {
+    assert(sensor::valid_clock_epoch(1700000000LL));
+    assert(sensor::valid_clock_epoch(4102444800LL));
+    assert(!sensor::valid_clock_epoch(1699999999LL));
+    assert(!sensor::valid_clock_epoch(4102444801LL));
+    assert(!sensor::valid_clock_epoch(INT64_MAX));
+    assert(!sensor::valid_clock_epoch(INT64_MIN));
+    assert(!sensor::retained_clock_valid(false, 1795520000LL));
+    assert(sensor::retained_clock_valid(true, 1795520000LL));
+    assert(!sensor::retained_clock_valid(true, 4102444801LL));
+    assert(!sensor::retained_clock_valid(true, 0));
     assert(sensor::valid_server_epoch(1700000000.0));
     assert(sensor::valid_server_epoch(4102444800.0));
     assert(!sensor::valid_server_epoch(1699999999.0));
