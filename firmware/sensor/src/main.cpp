@@ -59,6 +59,7 @@ static constexpr gpio_num_t BOOT_PIN = GPIO_NUM_9;
 static constexpr uint32_t BOOT_DEBUG_WINDOW_S = 300;
 static uint32_t boot_debug_duration_s = BOOT_DEBUG_WINDOW_S;
 static bool boot_debug_continuous = false;
+static sensor::BootOptions boot_options;
 static int64_t boot_debug_end_us = 0;
 static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
@@ -1097,11 +1098,21 @@ static void usb_arm_boot_debug(cJSON *out, const cJSON *request) {
       add(out, "error", "continuous должен быть логическим значением.");
       return;
     }
+    const auto *send_now = cJSON_GetObjectItemCaseSensitive(request, "send_now");
+    const auto *preserve = cJSON_GetObjectItemCaseSensitive(request, "preserve_schedule");
+    if ((send_now && !cJSON_IsBool(send_now)) ||
+        (preserve && !cJSON_IsBool(preserve))) {
+      add(out, "error", "send_now и preserve_schedule должны быть логическими значениями.");
+      return;
+    }
+    boot_options = {!send_now || cJSON_IsTrue(send_now), !preserve || cJSON_IsTrue(preserve)};
     boot_debug_duration_s = duration ? static_cast<uint32_t>(duration->valuedouble)
                                      : BOOT_DEBUG_WINDOW_S;
     boot_debug_continuous = cJSON_IsTrue(continuous);
     num(out, "duration_s", boot_debug_duration_s);
     cJSON_AddBoolToObject(out, "continuous", boot_debug_continuous);
+    cJSON_AddBoolToObject(out, "send_now", boot_options.send_now);
+    cJSON_AddBoolToObject(out, "preserve_schedule", boot_options.preserve_schedule);
     setup_state = SetupState::boot_debug;
   }
 }
@@ -2084,8 +2095,12 @@ extern "C" void app_main() {
   // The image has passed local storage self-test. External sensor faults
   // are measurement errors, not firmware rollback triggers.
   const bool scheduled_measure = uptime_now() >= rt.next_measure;
+  const bool normal_measure = cfg.enabled && scheduled_measure;
+  const bool pending_measure = first_cycle && pending;
   const bool measurement_due =
-      boot_debug || (cfg.enabled && (requested_sample || (first_cycle && pending) || scheduled_measure));
+      boot_debug || (cfg.enabled && (requested_sample || pending_measure || scheduled_measure));
+  const bool store_requested = !boot_debug ||
+      boot_options.store(normal_measure, pending_measure, requested_sample);
   const uint32_t radio_budget = sensor::radio_budget_s(cfg.wifi_budget_s, boot_debug);
   // Measure before any station connection, even after a cold boot. The
   // setup AP is already stopped by setup_ap() before the BOOT test.
@@ -2114,12 +2129,14 @@ extern "C" void app_main() {
   // rewrite an existing sequence (even if it has unknown time).
   const bool scheduled_send = sensor::radio_due(uptime_now(), rt.next_send_uptime);
   const bool send_due = sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging()) &&
-                        (scheduled_send || boot_debug || requested_sync);
+      (boot_debug ? boot_options.send(scheduled_send, requested_sync)
+                  : scheduled_send || requested_sync);
+  const bool advance_send = boot_debug ? boot_options.advance_send(scheduled_send) : scheduled_send;
   printf("TK PLAN measure_due=%d send_due=%d wifi_allowed=%d config_version=%u measure_s=%u send_s=%u\n",
          measurement_due, send_due, wifi_allowed, (unsigned)cfg.version,
          (unsigned)cfg.measure_s, (unsigned)cfg.send_s);
   const bool bootstrap_after_sample = send_due && sensor::needs_bootstrap_after_sample(
-      measurement.quality != 0, measured, wifi_allowed, usb_without_battery);
+      measurement.quality != 0, measured && store_requested, wifi_allowed, usb_without_battery);
   bool time_prepared = false;
   if (bootstrap_after_sample && !charging()) {
     deadline = sensor::boot_radio_end(esp_timer_get_time(), radio_budget, session_end);
@@ -2138,7 +2155,12 @@ extern "C" void app_main() {
   }
   // An unsupported USB sample would prevent an older panel from accepting
   // subsequent battery-powered readings in the same journal.
-  if (usb_without_battery && (!time_prepared || !server_supports_usb_sync)) {
+  // A local-only USB diagnostic does not need server capability negotiation.
+  // Never journal an unverified zero-voltage sample for a legacy server.
+  const bool store_sample = store_requested &&
+      (!usb_without_battery || (time_prepared && server_supports_usb_sync));
+  if (usb_without_battery && store_requested && boot_options.send_now &&
+      (!time_prepared || !server_supports_usb_sync)) {
     if (session_end > 0 && esp_timer_get_time() >= session_end) {
       boot_debug_result("Время отладки истекло, USB-замер не сохранён.");
       break;
@@ -2148,8 +2170,10 @@ extern "C" void app_main() {
     else boot_debug_result("Обновите панель для отправки замера по USB без аккумулятора.");
     sleep_for(cfg.measure_s);
   }
-  if (measured) {
-    if (scheduled_measure || (first_cycle && pending)) rt.next_measure = measurement.uptime + cfg.measure_s;
+  if (measured && store_sample) {
+    if (boot_debug ? boot_options.advance_measure(normal_measure, pending_measure)
+                   : scheduled_measure || pending_measure)
+      rt.next_measure = measurement.uptime + cfg.measure_s;
     if (state.next >= sensor::sequence_limit) {
       last_error = "sequence_exhausted";
       sleep_for(3600);
@@ -2169,6 +2193,13 @@ extern "C" void app_main() {
     auto *record = measurement_json(measurement);
     printf("TK MEASURE %s\n", stringify(record).c_str());
     cJSON_Delete(record);
+  } else if (measured && boot_debug) {
+    // Diagnostic output has no sequence and must not enter production reports.
+    auto *record = measurement_json(measurement);
+    printf("TK DEBUG_MEASURE %s\n", stringify(record).c_str());
+    cJSON_Delete(record);
+    if (!boot_options.preserve_schedule && !normal_measure && !pending_measure)
+      rt.next_measure = measurement.uptime + cfg.measure_s;
   }
   if (send_due && wifi_allowed &&
       sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging())) {
@@ -2179,10 +2210,10 @@ extern "C" void app_main() {
            (unsigned long long)state.ack, (unsigned long long)state.next);
     bool ok = (!bootstrap_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, scheduled_send && !boot_debug && !requested_sync,
-                   scheduled_send ? 0 : rt.next_send_uptime);
+                   advance_send ? 0 : rt.next_send_uptime);
     stop_network();
     const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
-    const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, scheduled_send, ok,
+    const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, advance_send, ok,
         uptime_now(), cfg.send_s, next_interval, last_error == "authorization_pending" || !factory_ticket.empty(), esp_random());
     rt.next_send_uptime = updated.next;
     rt.failures = updated.failures;
@@ -2197,6 +2228,10 @@ extern "C" void app_main() {
   if (boot_debug) {
     if (!measured) {
       boot_debug_result("Замер не выполнен: отладка завершена или прервана.");
+    } else if (!store_sample) {
+      boot_debug_result("Пробный замер выведен в журнал USB, без сохранения и отправки.");
+    } else if (!send_due) {
+      boot_debug_result("Замер сохранён на плате для штатной отправки.");
     } else if (state.ack > measurement.seq) {
       boot_debug_result(measurement.error ? "Сервер подтвердил получение ошибки датчика."
                                           : "Сервер подтвердил получение замера.");
