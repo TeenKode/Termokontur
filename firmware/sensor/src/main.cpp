@@ -1095,6 +1095,8 @@ static bool ota(cJSON *meta, uint16_t mv) {
     for (int i = 0; i < 32; i++)
       snprintf(hex + 2 * i, 3, "%02x", out[i]);
     if (hash_ok && received == size && sha == hex && available()) {
+      // ESP-IDF verifies the RSA-PSS signature against the key in the running
+      // app before the downloaded partition can become the boot partition.
       auto end = esp_ota_end(handle);
       handle = 0;
       if (end == ESP_OK && available() && esp_ota_set_boot_partition(part) == ESP_OK)

@@ -141,9 +141,24 @@ def _sensor_setup_recovery(conn: sqlite3.Connection, _: str) -> None:
     })
 
 
+def _max_bot_scope(conn: sqlite3.Connection, _: str) -> None:
+    from .max_connection import credential_scope
+
+    _add_columns(conn, "max_inbox", {"bot_scope": "TEXT NOT NULL DEFAULT ''"})
+    conn.execute("CREATE INDEX IF NOT EXISTS max_inbox_bot_scope ON max_inbox(bot_scope)")
+    token = conn.execute("SELECT value FROM settings WHERE key='max_token'").fetchone()
+    if token and token[0]:
+        scope = credential_scope(token[0])
+        conn.execute("UPDATE max_inbox SET bot_scope=? WHERE bot_scope=''", (scope,))
+        conn.execute("""INSERT OR IGNORE INTO app_state(key,value)
+                     SELECT ?,value FROM app_state WHERE key='max_marker' AND value<>''""",
+                     ("max_marker:" + scope,))
+
+
 _MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors,
                _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures,
-               _admin_audit, _sensor_sync_status, _sensor_schedule, _sensor_boot_debug, _sensor_setup_recovery)
+               _admin_audit, _sensor_sync_status, _sensor_schedule, _sensor_boot_debug,
+               _sensor_setup_recovery, _max_bot_scope)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

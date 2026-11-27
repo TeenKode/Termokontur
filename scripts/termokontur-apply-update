@@ -9,6 +9,7 @@ BACKUPS="$DATA/backups"
 STAGE=
 SWAPPED=0
 SERVICES_STOPPED=0
+WRITES_PAUSED=0
 BACKUP_FILE=
 SERVICES_SAVED=0
 METADATA_CHANGED=0
@@ -130,6 +131,12 @@ restore_metadata() {
     runuser -u termokontur -- rm -f -- "$DATA/installed-revision"
   fi
 }
+resume_writes() {
+  if (( WRITES_PAUSED )); then
+    runuser -u termokontur -- rm -f -- "$DATA/termokontur.sqlite3.update-paused" || return 1
+    WRITES_PAUSED=0
+  fi
+}
 cleanup() {
   local result=$?
   local rollback_failed=0
@@ -191,6 +198,9 @@ cleanup() {
     elif (( SERVICES_STOPPED )); then
       systemctl start termokontur.service && health || rollback_failed=1
       systemctl start termokontur-max.service && systemctl is-active --quiet termokontur-max.service || rollback_failed=1
+    fi
+    if (( ! rollback_failed )); then
+      resume_writes || rollback_failed=1
     fi
     if (( rollback_failed )); then
       record failed "Сбой на этапе: $CURRENT_PHASE. Восстановление не подтверждено. Не запускайте новое обновление до проверки журнала termokontur-update.service и резервных копий." failed || true
@@ -283,6 +293,15 @@ record installing "Зависимости готовы. Подготавлива
 
 # Quiesce both SQLite writers before taking the rollback snapshot. If any
 # later preparation fails, cleanup restarts the unchanged installation.
+if ! (
+  cd "$STAGE"
+  runuser -u termokontur -- env TERMOKONTUR_DB="$DATA/termokontur.sqlite3" /usr/bin/python3 \
+    -c 'from termokontur.write_gate import pause_for_update; pause_for_update()'
+); then
+  UPDATE_FAILURE_MESSAGE="Не удалось приостановить запись в базу. Проверьте, не идёт ли восстановление."
+  exit 1
+fi
+WRITES_PAUSED=1
 SERVICES_STOPPED=1
 systemctl stop termokontur-max.service
 systemctl stop termokontur.service
@@ -332,5 +351,6 @@ METADATA_CHANGED=1
 install -o root -g root -m 0755 "$APP/scripts/termokontur-apply-update" /usr/local/sbin/termokontur-apply-update
 write_revision "$REVISION"
 record success "Обновление установлено: сборка ${REVISION:0:12}. Резервная копия сохранена." success
+resume_writes
 SWAPPED=0
 exit 0

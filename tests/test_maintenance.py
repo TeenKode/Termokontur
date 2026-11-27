@@ -1,8 +1,10 @@
 """Online backup/restore, retention and temperature alerts."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event
 
-from termokontur import db, maintenance, max_delivery, migrations, settings
+from termokontur import db, maintenance, max_delivery, migrations, settings, write_gate
 
 
 def room(admin, name):
@@ -35,6 +37,58 @@ def test_backup_restore_invalidates_existing_sessions(admin):
     assert admin.post("/api/login",json={"password":"this-is-a-test-admin-password"}).status_code==200
     assert [r["name"] for r in admin.get("/api/rooms").json()] == ["201"]
     assert len(admin.get("/api/readings").json())==1
+
+
+def test_restore_refuses_new_readings_after_safeguard(admin, monkeypatch):
+    target = room(admin, "101")
+    backup = maintenance.create_backup()
+    safeguarding, resume = Event(), Event()
+    create_backup = maintenance.create_backup
+
+    def pause_after_safeguard(kind):
+        snapshot = create_backup(kind)
+        if kind == "pre-restore":
+            safeguarding.set()
+            assert resume.wait(10)
+        return snapshot
+
+    monkeypatch.setattr(maintenance, "create_backup", pause_after_safeguard)
+    with ThreadPoolExecutor() as pool:
+        restore = pool.submit(admin.post, "/api/backups/restore", json={
+            "name": backup["name"], "password": "this-is-a-test-admin-password",
+        })
+        try:
+            assert safeguarding.wait(10)
+            ingest = admin.post("/api/ingest", json={"room_id": target["id"], "value": 21},
+                                headers={"X-Api-Key": "this-is-a-long-device-ingest-key-1234567890"})
+            assert ingest.status_code == 503 and "Retry-After" in ingest.headers
+            assert admin.get("/health").status_code == 200
+        finally:
+            resume.set()
+        assert restore.result(timeout=10).status_code == 200
+    assert admin.post("/api/ingest", json={"room_id": target["id"], "value": 21},
+                      headers={"X-Api-Key": "this-is-a-long-device-ingest-key-1234567890"}).status_code == 200
+
+
+def test_paused_update_allows_startup_and_refuses_writes(admin):
+    write_gate.pause_for_update()
+    try:
+        with write_gate.startup():
+            db.initialize()
+        assert admin.get("/health").status_code == 200
+        assert admin.post("/api/rooms", json={"building": "Школа", "name": "101"}).status_code == 503
+    finally:
+        db.db_path().with_name(db.db_path().name + ".update-paused").unlink()
+    assert room(admin, "101")
+
+
+def test_first_upgrade_refuses_writes_until_legacy_updater_commits(admin):
+    status = db.db_path().parent / "update-status.json"
+    status.write_text('{"state":"installing","phase":"finishing"}')
+    assert admin.get("/health").status_code == 200
+    assert admin.post("/api/rooms", json={"building": "Школа", "name": "101"}).status_code == 503
+    status.write_text('{"state":"success","phase":"success"}')
+    assert room(admin, "101")
 
 
 def test_backup_upload_validation_and_delete(admin, monkeypatch):

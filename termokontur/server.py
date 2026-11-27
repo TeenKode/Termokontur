@@ -10,7 +10,7 @@ from urllib.request import urlopen
 
 import uvicorn
 
-from . import db, tls
+from . import db, tls, write_gate
 
 HTTP_PORT = 8092
 HTTPS_PORT = 443
@@ -62,7 +62,8 @@ def main() -> None:
         sys.exit(healthcheck())
     os.environ.setdefault("TERMOKONTUR_FETCH_FIRMWARE", "1")
     # The managed launcher needs the settings table before binding TLS sockets.
-    db.initialize()
+    with write_gate.startup():
+        db.initialize()
     options = tls.server_kwargs()
     if options:
         run_https(options)

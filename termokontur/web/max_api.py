@@ -1,6 +1,7 @@
 """MAX integration, staff assignments and notifications."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import hmac
 import io
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .. import db, max_delivery, notifications, settings
+from .. import db, max_connection, max_delivery, notifications, settings
 from .access import require_admin
 from .csv_export import clean_cell
 
@@ -51,28 +52,14 @@ class SecretIn(BaseModel):
 
 @router.put("/settings/max-token")
 def set_max_token(payload: SecretIn):
-    if settings.get("max_mode", "polling") == "webhook":
-        raise HTTPException(409, "Сначала отключите webhook MAX, чтобы изменить токен")
-    old_token = settings.get("max_token", "") or ""
-    if payload.value is not None and payload.value.strip():
-        try:
-            settings.set_secret("max_token", payload.value.strip())
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-    else:
-        settings.set_secret("max_token", None)
-    configured_token = settings.get("max_token", "") or ""
-    if configured_token != old_token:
-        # MAX markers belong to an individual bot. An old bot's marker can
-        # silently skip events or make polling fail after a token replacement.
-        db.set_state("max_marker", "")
-        db.set_state("max_poll_last_success_at", "")
-        db.set_state("max_poll_last_error", "")
-        # The saved menu belongs to a specific bot, not just a MAX user.
-        # A newly configured bot must publish its own first menu message.
-        with db.connect() as conn:
-            conn.execute("DELETE FROM max_menu_messages")
-    return {"configured": bool(configured_token)}
+    token = (payload.value or "").strip() or None
+    try:
+        settings.set_secret("max_token", token)
+    except max_connection.WebhookActive as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"configured": token is not None}
 
 
 def _validate_max_webhook_url(value: str) -> str:
@@ -101,14 +88,19 @@ def _validate_max_webhook_url(value: str) -> str:
 @router.post("/settings/max-webhook")
 def enable_max_webhook(payload: MaxWebhookIn):
     url = _validate_max_webhook_url(payload.url)
-    token = settings.get("max_token", "")
-    if not token:
+    active = max_connection.current()
+    if not active.token:
         raise HTTPException(409, "Сначала сохраните токен MAX")
     secret = secrets.token_urlsafe(32)
+    headers = {"Authorization": active.token}
     try:
+        if not active.bot_id:
+            identity = httpx.get("https://platform-api2.max.ru/me", headers=headers, timeout=8.0)
+            identity.raise_for_status()
+            active = max_connection.identify(active, identity.json())
         response = httpx.post(
             "https://platform-api2.max.ru/subscriptions",
-            headers={"Authorization": token},
+            headers=headers,
             json={"url": url, "update_types": ["message_created", "bot_started", "message_callback"],
                   "secret": secret},
             timeout=20,
@@ -117,16 +109,18 @@ def enable_max_webhook(payload: MaxWebhookIn):
         result = response.json()
         if result.get("success") is not True:
             raise ValueError(result.get("message", "MAX отклонил подписку"))
+        settings.set_max_webhook(url, secret, expected=active)
+    except max_connection.Changed as exc:
+        raise HTTPException(409, "Настройки MAX изменились. Повторите операцию.") from exc
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(502, "Не удалось зарегистрировать webhook в MAX: " + str(exc)[:150]) from exc
-    settings.set_max_webhook(url, secret)
     return {"ok": True, "max_mode": "webhook", "url": url}
 
 
 @router.post("/settings/max-polling")
 def switch_max_to_polling():
-    url = settings.get("max_webhook_url", "")
-    token = settings.get("max_token", "")
+    active = max_connection.current()
+    url, token = active.webhook_url, active.token
     if url:
         if not token:
             raise HTTPException(409, "Отсутствует токен для отмены webhook-подписки")
@@ -142,14 +136,18 @@ def switch_max_to_polling():
                 raise ValueError("MAX не подтвердил отмену подписки")
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, "Не удалось отключить подписку MAX: " + str(exc)[:150]) from exc
-    settings.clear_max_webhook()
+    try:
+        settings.clear_max_webhook(expected=active)
+    except max_connection.Changed as exc:
+        raise HTTPException(409, "Настройки MAX изменились. Повторите операцию.") from exc
     return {"ok": True, "max_mode": "polling"}
 
 
 @webhook_router.post("/max/webhook")
 async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Header(default=None)):
-    secret = settings.get("max_webhook_secret", "")
-    if (settings.get("max_mode", "polling") != "webhook"
+    active = max_connection.current()
+    secret = active.webhook_secret
+    if (active.mode != "webhook"
             or not secret or not x_max_bot_api_secret
             or not hmac.compare_digest(secret, x_max_bot_api_secret)):
         raise HTTPException(403, "Webhook не настроен или неверный секрет")
@@ -166,9 +164,11 @@ async def max_webhook(request: Request, x_max_bot_api_secret: str | None = Heade
             raise ValueError()
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(422, "Некорректное событие MAX") from exc
+    if not active.bot_id:
+        raise HTTPException(503, "Идентификатор бота MAX пока не подтверждён")
     try:
-        max_delivery.enqueue(update)
-    except max_delivery.ProcessingPending as exc:
+        await asyncio.to_thread(max_delivery.enqueue, update, expected=active)
+    except (max_connection.Changed, max_delivery.ProcessingPending) as exc:
         # MAX retries deliveries with non-200 responses. This preserves
         # unacknowledged events after an interrupted processing attempt.
         raise HTTPException(503, "Событие ещё обрабатывается") from exc

@@ -106,6 +106,7 @@ jobs:
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: firmware-release
     needs: [firmware, browser, bundle-browser]
     concurrency: firmware-release-${{ needs.firmware.outputs.version }}
     timeout-minutes: 30
@@ -139,7 +140,8 @@ jobs:
           done
           echo "Server CI did not complete in time" >&2
           exit 1
-      - name: Publish the same archive over Git
+      - name: Stage the immutable archive
+        id: release-archive
         env:
           VERSION: ${{ needs.firmware.outputs.version }}
         run: |
@@ -165,13 +167,33 @@ jobs:
               raise SystemExit("Git bundle version is already used by another revision")
           PY
           if (( snapshot_needed )); then
-            blob=$(git hash-object -w "$asset")
-            tree=$(printf '100644 blob %s\t%s\n' "$blob" "$asset" | git mktree)
-            snapshot=$(git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit-tree "$tree" -m "Firmware $VERSION for $GITHUB_SHA")
-            git push origin "$snapshot:$ref"
+            echo 'verify_only=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'verify_only=true' >> "$GITHUB_OUTPUT"
           fi
+      - name: Install the firmware signing tool
+        run: python -m pip install esptool==4.5.1
+      - name: Sign or verify the OTA image
+        env:
+          TERMOKONTUR_OTA_SIGNING_KEY: ${{ secrets.TERMOKONTUR_OTA_SIGNING_KEY }}
+          VERIFY_ONLY: ${{ steps.release-archive.outputs.verify_only }}
+        run: |
+          args=()
+          if [[ "$VERIFY_ONLY" == true ]]; then args+=(--verify-only); fi
+          python scripts/sign-sensor-release.py termokontur-firmware.zip "${args[@]}"
+      - name: Publish the same archive over Git
+        if: steps.release-archive.outputs.verify_only == 'false'
+        env:
+          VERSION: ${{ needs.firmware.outputs.version }}
+        run: |
+          asset="termokontur-firmware.zip"
+          ref="refs/tags/firmware-bundle-v$VERSION"
+          blob=$(git hash-object -w "$asset")
+          tree=$(printf '100644 blob %s\t%s\n' "$blob" "$asset" | git mktree)
+          snapshot=$(git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit-tree "$tree" -m "Firmware $VERSION for $GITHUB_SHA")
+          git push origin "$snapshot:$ref"
       - name: Publish versioned firmware bundle
         env:
           GH_TOKEN: ${{ github.token }}

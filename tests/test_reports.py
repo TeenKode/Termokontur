@@ -16,6 +16,25 @@ def create_room(name, building="Старшая школа"):
     return room
 
 
+def test_year_report_aggregates_over_half_a_million_readings(admin):
+    settings.update({"timezone": "UTC"})
+    for room_id in range(30):
+        create_room(str(room_id))
+    with db.connect() as conn:
+        conn.execute("""
+            WITH RECURSIVE slots(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM slots WHERE n<17519)
+            INSERT INTO readings(room_id,value,source,observed_at)
+            SELECT id,21,'ha',strftime('%Y-%m-%dT%H:%M:%S+00:00','2025-01-01',printf('+%d minutes', n*30))
+            FROM rooms CROSS JOIN slots
+        """)
+    result = admin.get("/api/reports", params={"start": "2025-01-01", "end": "2025-12-31"})
+    assert result.status_code == 200
+    report = result.json()
+    assert report["summary"]["readings"] == 525_600
+    assert report["summary"]["average"] == 21
+    assert len(report["room_daily"]) == 30 * 365
+
+
 def reading(room_id, value, observed, source="max", reporter="MAX:71"):
     with db.connect() as conn:
         conn.execute(

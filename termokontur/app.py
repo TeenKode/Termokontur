@@ -5,15 +5,15 @@ import asyncio
 import hashlib
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from threading import Lock
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, auth, audit, db, maintenance, sensor_firmware, sensor_mqtt, sensor_onboarding, sensors, settings
+from . import __version__, auth, audit, db, maintenance, sensor_firmware, sensor_mqtt, sensor_onboarding, sensors, settings, write_gate
 from .web import access, max_api, operations, reporting, rooms
 
 ROOT = Path(__file__).resolve().parent
@@ -34,16 +34,19 @@ def bootstrap() -> None:
     secret = os.getenv("TERMOKONTUR_SECRET", "")
     if len(secret) < 32 or secret.startswith("REPLACE_WITH_"):
         raise RuntimeError("Set a unique TERMOKONTUR_SECRET (at least 32 characters)")
-    db.initialize()
-    auth.bootstrap()
-    settings.bootstrap()
+    with write_gate.startup():
+        db.initialize()
+        auth.bootstrap()
+        settings.bootstrap()
 
 
 async def scheduled_maintenance() -> None:
     while True:
         await asyncio.sleep(30)
         try:
-            await asyncio.to_thread(maintenance.schedule)
+            await asyncio.to_thread(write_gate.run, maintenance.schedule)
+        except write_gate.Busy:
+            continue
         except Exception:
             logger.exception("Scheduled maintenance failed")
         await asyncio.sleep(3600)
@@ -69,13 +72,13 @@ async def lifespan(application: FastAPI):
                 firmware_task.cancel()
 
 
-async def security_headers(request: Request, call_next):
+async def _audited_response(request: Request, call_next, mutating: bool, restoring: bool):
     status = 500
     try:
         response = await call_next(request)
         status = response.status_code
     finally:
-        if request.method in ("POST", "PUT", "PATCH", "DELETE") and getattr(request.state, "audit_admin", False):
+        if mutating and getattr(request.state, "audit_admin", False):
             try:
                 route = getattr(request.scope.get("route"), "path", "/api")
                 # Only known object identifiers, not arbitrary form data,
@@ -84,9 +87,26 @@ async def security_headers(request: Request, call_next):
                 target = ", ".join(f"{key}={params[key]}" for key in (
                     "room_id", "reading_id", "device", "firmware_id", "subscription_id", "user_id", "username", "name")
                     if key in params)
-                await asyncio.to_thread(audit.record, request.method, route, target, status)
+                # Restore releases its exclusive lock before this audit write.
+                with write_gate.activity() if restoring else nullcontext():
+                    await asyncio.to_thread(audit.record, request.method, route, target, status)
+            except write_gate.Busy:
+                logger.warning("Restore audit write skipped during maintenance")
             except Exception:
                 logger.exception("Admin audit write failed")
+    return response
+
+
+async def security_headers(request: Request, call_next):
+    mutating = request.method in ("POST", "PUT", "PATCH", "DELETE")
+    route_path = request.scope["path"].removeprefix(request.scope.get("root_path", ""))
+    restoring = request.method == "POST" and route_path == write_gate.RESTORE_PATH
+    try:
+        with write_gate.activity() if mutating and not restoring else nullcontext():
+            response = await _audited_response(request, call_next, mutating, restoring)
+    except write_gate.Busy:
+        response = JSONResponse({"detail": write_gate.BUSY_MESSAGE}, status_code=503,
+                                headers=write_gate.RETRY_HEADERS)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"

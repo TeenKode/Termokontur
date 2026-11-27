@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .. import auth, audit, maintenance, settings, tls, updates
+from .. import auth, audit, maintenance, settings, tls, updates, write_gate
 from .access import require_admin
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
@@ -213,11 +213,19 @@ def remove_backup(name: str):
 
 
 @router.post("/backups/restore")
-def restore_backup(payload: RestoreBackupIn, response: Response):
-    if not auth.check_password(payload.password):
-        raise HTTPException(403, "Неверный пароль администратора")
+def restore_backup(payload: RestoreBackupIn, request: Request, response: Response):
+    def authorize():
+        # Recheck the session after waiting for in-flight writes to finish.
+        require_admin(request)
+        if not auth.check_password(payload.password):
+            raise HTTPException(403, "Неверный пароль администратора")
+
     try:
-        result = maintenance.restore(payload.name)
+        result = maintenance.restore(payload.name, authorize=authorize)
+    except write_gate.Busy as exc:
+        raise HTTPException(503, str(exc), headers=write_gate.RETRY_HEADERS) from exc
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
