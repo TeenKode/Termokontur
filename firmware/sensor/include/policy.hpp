@@ -120,6 +120,15 @@ inline SendSchedule after_send(SendSchedule previous, bool scheduled, bool ok,
 inline bool battery_wifi_allowed(uint16_t mv, uint32_t cutoff, uint32_t wifi_min) {
   return mv >= cutoff && mv <= 5000 && (wifi_min == 0 || mv >= wifi_min);
 }
+inline uint64_t reschedule_measurement(uint64_t next, uint64_t now,
+                                       uint32_t old_interval, uint32_t interval,
+                                       bool was_enabled, bool enabled) {
+  if (!enabled || !next) return next;
+  if (!was_enabled) return now;
+  if (interval == old_interval) return next;
+  const auto last = next >= old_interval ? next - old_interval : now;
+  return last + interval;
+}
 inline uint32_t next_sleep_s(uint32_t interval, int64_t measurement_remaining,
                             bool wifi_allowed, int64_t next_send, int64_t now) {
   uint32_t seconds = measurement_remaining > 0 ?

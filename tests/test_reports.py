@@ -151,6 +151,38 @@ def test_scheduled_digest_once_per_period_and_retention_safe(admin):
     assert report_schedule.remove(week["id"])
 
 
+def test_scheduled_digest_follows_clock_changes(admin):
+    settings.update({"timezone": "Europe/Berlin"})
+    settings.set_secret("max_token", "test-valid-max-token-for-report-123456")
+    db.remember_max_user({"user_id": 71})
+    report_schedule.create("71", "", "daily", "02:15")
+
+    def queued(instant):
+        return report_schedule.queue_due(datetime.fromisoformat(instant))["queued"]
+
+    assert queued("2026-03-29T01:14:59+00:00") == 0
+    assert queued("2026-03-29T01:15:00+00:00") == 1
+    assert queued("2026-10-25T00:14:59+00:00") == 0
+    assert queued("2026-10-25T01:10:00+00:00") == 1  # first 02:15 already passed
+    assert queued("2026-10-25T01:15:00+00:00") == 0
+
+
+def test_waiting_report_survives_timezone_change(admin):
+    settings.update({"timezone": "Etc/GMT+12"})
+    settings.set_secret("max_token", "test-valid-max-token-for-report-123456")
+    db.remember_max_user({"user_id": 71})
+    subscription = report_schedule.create("71", "", "daily", "00:15")
+    with db.connect() as conn:
+        # This completed day in UTC+14 is still in the future in UTC-12.
+        conn.execute("INSERT INTO report_waiting VALUES(?,?,?,?)", (
+            subscription["id"], "daily:2026-11-18:2026-11-18", "2026-11-18", "2026-11-18",
+        ))
+    assert report_schedule.queue_due(datetime(2026, 11, 18, 10, 30, tzinfo=timezone.utc))["queued"] == 1
+    assert report_schedule.subscriptions()[0]["periods_waiting"] == 1
+    assert report_schedule.queue_due(datetime(2026, 11, 19, 12, 20, tzinfo=timezone.utc))["queued"] == 1
+    assert report_schedule.subscriptions()[0]["periods_waiting"] == 0
+
+
 def test_subscription_api_auth_and_validation(client,admin):
     db.remember_max_user({"user_id":71,"first_name":"Ирина","is_bot":False})
     settings.set_secret("max_token","test-valid-max-token-for-report-123456")
@@ -179,6 +211,9 @@ def test_daily_timezone_crosses_utc_midnight(client):
     r=reports.build("2026-11-18","2026-11-18",now=now)
     assert r["summary"]["rooms_measured"]==1
     assert r["daily"][0]["average"]==21
+    assert r["room_daily"][0]["measured_at"] == "2026-11-17T20:00:00+00:00"
+    with ZipFile(BytesIO(report_exports.workbook(r))) as archive:
+        assert b"2026-11-18 06:00:00+10:00" in archive.read("xl/sharedStrings.xml")
 
 
 def test_reassignment_keeps_past_agreement(client, monkeypatch):

@@ -1,6 +1,7 @@
 #include "journal.hpp"
 #include <cassert>
 #include <iostream>
+#include <new>
 struct Memory : sensor::Flash {
   std::vector<uint8_t> data;
   int budget = -1;
@@ -36,6 +37,21 @@ struct Memory : sensor::Flash {
   }
 };
 int main() {
+  {
+    // The RTC payload can start at an address unaligned for uint64_t.
+    Memory flash;
+    sensor::Journal journal(flash);
+    sensor::Record first{};
+    first.seq = 1;
+    assert(journal.append(first));
+    alignas(uint64_t) uint8_t bytes[sizeof(sensor::Record) + 1];
+    auto *pending = new (bytes + 1) sensor::Record{};
+    pending->seq = 2;
+    uint64_t next = 2;
+    assert(sensor::commit_measurement(journal, *pending, 1, next,
+                                     [&](uint64_t saved) { next = saved; return true; }));
+    assert(journal.append(*pending) && journal.entries().size() == 2 && next == 3);
+  }
   // Recovery must not reuse committed, acknowledged or reserved IDs.
   {
     uint64_t next = 2;

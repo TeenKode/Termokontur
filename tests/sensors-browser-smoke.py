@@ -1,4 +1,5 @@
 """Run against an isolated temporary server; requires Playwright + Chromium."""
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from zoneinfo import ZoneInfo
 
 import httpx
 from playwright.sync_api import expect, sync_playwright
@@ -18,7 +20,8 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
         sock.bind(("127.0.0.1",0));port=sock.getsockname()[1]
     env={**os.environ,"TERMOKONTUR_DB":str(Path(tmp)/"smoke.sqlite3"),
          "TERMOKONTUR_SECRET":"browser-smoke-secret-at-least-32-characters",
-         "TERMOKONTUR_ADMIN_PASSWORD":"browser-smoke-password"}
+         "TERMOKONTUR_ADMIN_PASSWORD":"browser-smoke-password",
+         "TERMOKONTUR_TZ":"Asia/Vladivostok"}
     log=open(Path(tmp)/"server.log","w+")
     proc=subprocess.Popen([sys.executable,"-m","uvicorn","termokontur.app:app","--host","127.0.0.1","--port",str(port)],cwd=ROOT,env=env,stdout=log,stderr=log)
     base=f"http://127.0.0.1:{port}"
@@ -35,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
             room=api.post("/api/rooms",json={"building":"Школа","name":"12"}).json()
             with sync_playwright() as pw:
                 browser=pw.chromium.launch(executable_path=os.getenv("CHROMIUM_PATH") or shutil.which("chromium"),headless=True,args=["--no-sandbox"])
-                page=browser.new_page(viewport={"width":1440,"height":1000})
+                page=browser.new_page(viewport={"width":1440,"height":1000},timezone_id="America/Los_Angeles")
                 errors=[];page.on("pageerror",lambda e:errors.append(str(e)))
                 page.goto(base);page.fill("#password","browser-smoke-password");page.click('#login-form button[type="submit"]')
                 page.wait_for_selector("#app-root",state="visible")
@@ -53,6 +56,9 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 assert sync.status_code==200,sync.text
                 page.click("#sensor-refresh");page.locator(".sensor-card button").first.click();page.wait_for_selector("#sensor-detail",state="visible")
                 expect(page.locator("#sensor-records tr")).to_have_count(48)
+                local = datetime.fromtimestamp(records[-1]["measured_at"], ZoneInfo("Asia/Vladivostok"))
+                expect(page.locator("#sensor-records tr").first.locator("td").nth(1)).to_have_text(
+                    local.strftime("%d.%m, %H:%M GMT+10"))
                 assert "Датчик <тест>"==page.text_content("#sensor-title")
                 page.locator('#sensor-detail details summary').nth(0).click()
                 page.fill('#sensor-config-form input[name="measure_s"]','3600')
@@ -133,6 +139,17 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 assert len(labels["points"]) == 1,labels
                 expect(page.locator("#sensor-temperature-key")).to_be_visible()
                 expect(page.locator("#sensor-humidity-key")).to_be_hidden()
+                page.click('[data-tab="settings"]')
+                page.click('[data-settings-target="general"]')
+                expect(page.locator("#setting-timezone")).to_have_value("Asia/Vladivostok")
+                page.fill("#setting-timezone","UTC")
+                page.click('#general-settings-form button[type="submit"]')
+                expect(page.locator("#daily-date")).to_contain_text("UTC")
+                page.click('[data-tab="sensors"]')
+                page.click("#sensor-refresh")
+                local = datetime.fromtimestamp(rec["measured_at"], ZoneInfo("UTC"))
+                expect(page.locator("#sensor-records tr").first.locator("td").nth(1)).to_have_text(
+                    local.strftime("%d.%m, %H:%M UTC"))
                 assert not errors,errors
                 browser.close()
         print("Browser smoke passed: login, create/enroll, 48 records, config delivery, desktop/mobile, light/dark, no JS errors or page overflow")

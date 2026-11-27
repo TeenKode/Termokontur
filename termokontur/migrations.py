@@ -134,9 +134,16 @@ def _sensor_boot_debug(conn: sqlite3.Connection, _: str) -> None:
     )""")
 
 
+def _sensor_setup_recovery(conn: sqlite3.Connection, _: str) -> None:
+    _add_columns(conn, "sensor_devices", {
+        "pending_sensor_type": "TEXT",
+        "config_restore_pending": "INTEGER NOT NULL DEFAULT 0 CHECK(config_restore_pending IN (0,1))",
+    })
+
+
 _MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors,
                _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures,
-               _admin_audit, _sensor_sync_status, _sensor_schedule, _sensor_boot_debug)
+               _admin_audit, _sensor_sync_status, _sensor_schedule, _sensor_boot_debug, _sensor_setup_recovery)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

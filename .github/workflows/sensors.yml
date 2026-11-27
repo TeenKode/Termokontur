@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Journal power-cut and policy tests
         run: |
-          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/journal.cpp -o /tmp/journal-test
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-recover=undefined -I firmware/sensor/include firmware/sensor/test/journal.cpp -o /tmp/journal-test
           /tmp/journal-test
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/sensor/include firmware/sensor/test/policy.cpp -o /tmp/policy-test
           /tmp/policy-test

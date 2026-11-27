@@ -343,6 +343,11 @@ int main() {
   assert(sensor::next_sleep_s(1800, 1500, true, 1010, 1000) == 10);
   assert(sensor::next_sleep_s(1800, 1500, false, 1010, 1000) == 1500);
   assert(sensor::next_sleep_s(1, 0, true, 1000, 1000) == 1);
+  assert(sensor::reschedule_measurement(604900, 120, 604800, 5, true, true) == 105);
+  assert(sensor::reschedule_measurement(150, 120, 50, 1000, true, true) == 1100);
+  assert(sensor::reschedule_measurement(500, 120, 100, 5, false, true) == 120);
+  assert(sensor::reschedule_measurement(500, 120, 100, 5, true, false) == 500);
+  assert(sensor::reschedule_measurement(0, 120, 100, 5, true, true) == 0);
   assert(sensor::radio_budget_s(30, false) == 30);
   assert(sensor::radio_budget_s(30, true) == 120);
   assert(sensor::radio_budget_s(120, true) == 120);

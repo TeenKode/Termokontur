@@ -4,7 +4,7 @@ import json
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -157,6 +157,47 @@ def test_expected_sync_uses_confirmed_version_across_multiple_edits(admin, monke
     assert not final["config_pending"] and final["next_sync_at"] == final["last_seen"] + 7200
 
 
+@pytest.mark.parametrize("reported", [1, 2, 3])
+def test_restored_config_gets_new_version_and_waits_for_confirmation(admin, reported):
+    device, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, device, headers, batch()).json()["ack_seq"] == 2
+    backup = maintenance.create_backup()
+    path = f"/api/sensors/devices/{device['device_id']}/config"
+    for version in range(2, reported + 1):
+        assert admin.put(path, json={"measure_s": 120}).json()["version"] == version
+    heartbeat = batch([], config_version=reported, device_ack=2, device_lost_base=0)
+    assert sync(admin, device, headers, heartbeat).json()["config"]["version"] == reported
+
+    maintenance.restore(backup["name"])
+    login = admin.post("/api/login", json={"password": "this-is-a-test-admin-password"})
+    login.raise_for_status()
+    assert admin.get("/api/sensors/devices").json()[0]["config_pending"]
+    assert admin.put(path, json={"measure_s": 5}).json()["version"] == 2
+    expected = max(2, reported + 1)
+
+    for _ in range(2):
+        received = sync(admin, device, headers, heartbeat)
+        received.raise_for_status()
+        config = received.json()["config"]
+        assert (config["version"], config["measure_s"]) == (expected, 5)
+        shown = admin.get("/api/sensors/devices").json()[0]
+        assert (shown["config_version"], shown["config_pending"]) == (reported, True)
+
+    synced = sync(admin, device, headers, {**heartbeat, "config_version": expected})
+    assert synced.json()["config"]["version"] == expected
+    shown = admin.get("/api/sensors/devices").json()[0]
+    assert (shown["config_version"], shown["config_pending"]) == (expected, False)
+
+
+def test_restored_config_reissues_equal_version_without_an_admin_edit(admin):
+    device, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, device, headers, batch()).json()["config"]["version"] == 1
+    maintenance.restore(maintenance.create_backup()["name"])
+    for _ in range(2):
+        assert sync(admin, device, headers, batch([])).json()["config"]["version"] == 2
+    assert sync(admin, device, headers, batch([], config_version=2)).json()["config"]["version"] == 2
+
+
 def test_out_of_schedule_upload_reports_preserved_deadline(admin):
     device, _, headers, _ = setup_sensor(admin)
     assert sync(admin, device, headers, batch(next_send_in_s=3700)).status_code == 200
@@ -245,6 +286,59 @@ def test_restore_allows_one_legacy_gap(admin):
     assert sync(admin, d, headers, batch([record(5)], next_seq=6)).status_code == 409
 
 
+def test_replay_preserves_confirmed_values_after_sensor_type_change(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    assert sync(admin, d, headers, batch()).json()["ack_seq"] == 2
+    backup = maintenance.create_backup()
+    old = record(2, humidity=58.2)
+    assert sync(admin, d, headers, batch([old], next_seq=3)).json()["ack_seq"] == 3
+    maintenance.restore(backup["name"])
+    with db.connect() as conn:
+        conn.execute("UPDATE sensor_devices SET sensor_type='ds18b20' WHERE id=?", (d["device_id"],))
+    current = record(3, humidity=None)
+    metadata = dict(next_seq=4, device_ack=3, device_lost_base=0, sensor_type="ds18b20")
+    probe = sync(admin, d, headers, batch([current], **metadata))
+    assert probe.json()["replay_from"] == 2
+    payload = batch([old, current], replay=True, **metadata)
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 4
+    assert sync(admin, d, headers, payload).json()["ack_seq"] == 4
+    with db.connect() as conn:
+        rows = conn.execute("SELECT humidity FROM sensor_records WHERE seq>=2 ORDER BY seq")
+        assert [row[0] for row in rows] == [58.2, None]
+
+
+def test_legacy_shape_is_scoped_to_explicit_records(admin):
+    d, _, headers, _ = setup_sensor(admin)
+    with db.connect() as conn:
+        conn.execute("UPDATE sensor_devices SET sensor_type='ds18b20' WHERE id=?", (d["device_id"],))
+    old, current = record(1), record(2, humidity=None)
+    mixed = batch([old, current], next_seq=3, sensor_type="ds18b20")
+    assert sync(admin, d, headers, mixed).status_code == 422
+    assert sync(admin, d, headers, {**mixed, "legacy_shape_seqs": [3]}).status_code == 422
+    assert sync(admin, d, headers, {**mixed, "legacy_shape_seqs": [1, 1]}).status_code == 422
+    assert sync(admin, d, headers, {**mixed, "legacy_shape_seqs": [1]}).json()["ack_seq"] == 3
+
+
+def test_new_registration_cannot_replay_another_devices_acknowledged_archive(admin):
+    old, enrollment, headers, room = setup_sensor(admin)
+    assert sync(admin, old, headers, batch()).json()["ack_seq"] == 2
+    admin.patch(f"/api/sensors/devices/{old['device_id']}",
+                json={"name": "Прежний датчик", "room_id": room["id"], "enabled": False}).raise_for_status()
+    other_room = db.create_room("Школа", "1", "13", "Другой кабинет", 18, 24)
+    created = admin.post("/api/sensors/devices", json={"name": "Новый датчик", "room_id": other_room["id"]})
+    created.raise_for_status()
+    new = created.json()
+    enrolled = admin.post("/api/sensors/enroll", json={**enrollment, "device_id": new["device_id"],
+                                                       "code": new["code"]})
+    enrolled.raise_for_status()
+    new_headers = {"Authorization": "Bearer " + enrolled.json()["token"]}
+    metadata = dict(device_ack=2, device_lost_base=0)
+    assert sync(admin, new, new_headers, batch([], **metadata)).status_code == 409
+    assert sync(admin, new, new_headers, batch(replay=True, **metadata)).status_code == 409
+    with db.connect() as conn:
+        assert [row[0] for row in conn.execute("SELECT device_id FROM sensor_records")] == [old["device_id"]]
+
+
 def test_report_waits_for_complete_sensor_batch_across_midnight(admin):
     from termokontur import report_schedule, reports, settings
     device, _, headers, room = setup_sensor(admin)
@@ -268,6 +362,26 @@ def test_report_waits_for_complete_sensor_batch_across_midnight(admin):
     assert report_schedule.queue_due(wednesday)["queued"] == 1
     assert report_schedule.queue_due(wednesday)["queued"] == 0
     assert report_schedule.subscriptions()[0]["periods_waiting"] == 0
+
+
+def test_sensor_utc_is_stable_when_local_day_changes(admin):
+    from termokontur import daily, settings
+
+    device, _, headers, room = setup_sensor(admin)
+    measured = datetime.fromtimestamp(BASE_TIME, timezone.utc).replace(hour=20, minute=0, second=0)
+    instant = measured + timedelta(hours=1)
+    settings.update({"timezone": "Asia/Vladivostok"})
+    response = sync(admin, device, headers, batch([record(measured_at=int(measured.timestamp()))]))
+    assert response.status_code == 200, response.text
+
+    local = daily.summary(instant)
+    assert local["local_date"] == (measured.date() + timedelta(days=1)).isoformat()
+    assert local["rooms"][0]["measured_at"] == measured.isoformat()
+    settings.update({"timezone": "UTC"})
+    utc = daily.summary(instant)
+    assert utc["local_date"] == measured.date().isoformat()
+    assert utc["rooms"][0]["measured_at"] == measured.isoformat()
+    assert db.recent_readings(room_id=room["id"])[0]["observed_at"] == measured.isoformat()
 
 
 def test_sensor_alerts_use_building_recipient_and_rearm(admin):

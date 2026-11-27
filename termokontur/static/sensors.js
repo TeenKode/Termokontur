@@ -44,6 +44,7 @@ function sensorSyncNotes(device){
   const notes=[];
   if(sensorSampleIssue[device.measurement_issue])notes.push(sensorSampleIssue[device.measurement_issue]);
   if(device.config_pending&&device.enabled)notes.push("Настройки ожидают применения");
+  if(device.pending_sensor_type&&device.enabled)notes.push("Ожидается подтверждение типа "+device.pending_sensor_type.toUpperCase());
   return notes.join(" · ");
 }
 function sensorButton(label,action){const b=el("button","btn secondary",label);b.type="button";onOperation(b,"Загружаем карточку датчика…",action);return b;}

@@ -34,6 +34,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "policy.hpp"
+#include "network_budget.hpp"
 #include "boot_debug.hpp"
 #include "sensor_drivers.hpp"
 #include "serial_console.hpp"
@@ -73,12 +74,14 @@ static EventGroupHandle_t events;
 static esp_netif_t *ap_netif = nullptr, *sta_netif = nullptr;
 static int64_t deadline = 0;
 static std::string last_error;
-static Config cfg;
+static Config cfg{.version = 0};
 static State state;
 static sensor::StateCheckpoint state_checkpoint;
 static bool boot_count_pending = false;
 static std::string ssid, password, server, device, code, token, ca,
     sensor_type = "sht4x", setup_password, factory_ticket, dns_primary, dns_secondary;
+static std::string journal_device, journal_sensor_type;
+static bool journal_binding_corrupt = false;
 struct Runtime {
   uint32_t magic;
   uint64_t boot, uptime, next_measure;
@@ -88,11 +91,13 @@ struct Runtime {
   bool charging;
   bool clock_valid;
   bool pending;
+  bool ota_followup;
   Record record;
   uint32_t crc;
 };
-RTC_DATA_ATTR static Runtime rt;
-static constexpr uint32_t RTC_MAGIC = 0x544b5235;
+// ESP-IDF runs global constructors on every wake, including Deep Sleep.
+RTC_DATA_ATTR static constinit Runtime rt{};
+static constexpr uint32_t RTC_MAGIC = 0x544b5236;
 static const char *rtc_state = "uninitialized";
 static const char *wake_source(esp_sleep_wakeup_cause_t cause) {
   switch (cause) {
@@ -122,6 +127,10 @@ static bool usb_host_for_setup(bool after_reset) {
 }
 static bool available() {
   return !charging() && esp_timer_get_time() < deadline;
+}
+static void radio_pause(uint32_t ms) {
+  const int64_t end = std::min(deadline, esp_timer_get_time() + int64_t(ms) * 1000);
+  while (available() && esp_timer_get_time() < end) vTaskDelay(1);
 }
 static std::string text(cJSON *j, const char *key) {
   auto v = cJSON_GetObjectItemCaseSensitive(j, key);
@@ -170,6 +179,64 @@ static bool save_next_sequence(uint64_t next) {
   state = candidate;
   return true;
 }
+
+struct JournalBinding {
+  char device[20]{};
+  char sensor_type[8]{};
+};
+
+static void load_journal_binding() {
+  JournalBinding binding;
+  const int loaded = load_blob("journal_owner", &binding, sizeof binding);
+  if (loaded == 0) return;
+  if (loaded == 1 && !binding.device[19] && !binding.sensor_type[7] &&
+      sensor::serial::provision_device_id(binding.device) && sensor::supported(binding.sensor_type)) {
+    journal_device = binding.device;
+    journal_sensor_type = binding.sensor_type;
+  } else {
+    journal_binding_corrupt = true;
+    puts("Journal owner is unreadable; verify the existing registration");
+  }
+}
+
+static bool journal_matches(const std::string &id) {
+  return id.empty() || journal_device.empty() || id == journal_device;
+}
+
+static bool journal_needs_existing_device() {
+  return journal_device.empty() && (state.ack > 1 || journal_binding_corrupt);
+}
+
+static bool save_journal_binding(const std::string &id, const std::string &kind,
+                                 bool empty_journal = false) {
+  if ((!journal_matches(id) && !empty_journal) ||
+      !sensor::serial::provision_device_id(id) || !sensor::supported(kind.c_str()))
+    return false;
+  const auto &owner = id.empty() ? journal_device : id;
+  if (!journal_binding_corrupt && owner == journal_device && kind == journal_sensor_type) return true;
+  JournalBinding binding;
+  memcpy(binding.device, owner.data(), owner.size());
+  memcpy(binding.sensor_type, kind.data(), kind.size());
+  if (!save_blob("journal_owner", &binding, sizeof binding)) return false;
+  journal_device = owner;
+  journal_sensor_type = kind;
+  journal_binding_corrupt = false;
+  return true;
+}
+
+static bool setup_journal_is_current() {
+  if (state.next != state.ack || rt.pending) return true;
+  const auto *part = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, static_cast<esp_partition_subtype_t>(0x40), "datalog");
+  if (!part) return false;
+  PartitionFlash flash(part);
+  sensor::Journal journal(flash);
+  if (!journal.scan()) return false;
+  uint64_t next = state.next;
+  const auto newest = journal.entries().empty() ? 0 : journal.entries().back().seq;
+  return sensor::recover_next(state.ack, next, newest) &&
+         (next == state.next || save_next_sequence(next));
+}
 static std::string provision_json() {
   cJSON *j = cJSON_CreateObject();
   add(j, "ssid", ssid);
@@ -201,16 +268,9 @@ static bool verify_saved_configuration() {
   return load_blob("provision", stored.data(), stored.size()) == 1 &&
          memcmp(stored.data(), expected.c_str(), stored.size()) == 0 &&
          load_blob("config", &actual_cfg, sizeof actual_cfg) == 1 &&
-         actual_cfg.version == cfg.version && actual_cfg.measure_s == cfg.measure_s &&
-         actual_cfg.send_s == cfg.send_s && actual_cfg.cool_s == cfg.cool_s &&
-         actual_cfg.wifi_budget_s == cfg.wifi_budget_s && actual_cfg.wifi_min_mv == cfg.wifi_min_mv &&
-         actual_cfg.cutoff_mv == cfg.cutoff_mv && actual_cfg.ota_min_mv == cfg.ota_min_mv &&
-         actual_cfg.tx_qdbm == cfg.tx_qdbm && actual_cfg.adc_scale_ppm == cfg.adc_scale_ppm && actual_cfg.enabled == cfg.enabled &&
+         sensor::same_config(actual_cfg, cfg) &&
          load_blob("state", &actual_state, sizeof actual_state) == 1 &&
-         actual_state.next == state.next && actual_state.ack == state.ack &&
-         actual_state.lost_base == state.lost_base && actual_state.boots == state.boots &&
-         actual_state.ota_failures == state.ota_failures && actual_state.ota_generation == state.ota_generation &&
-         actual_state.saved_time == state.saved_time;
+         sensor::same_state(actual_state, state);
 }
 static bool load_provision() {
   size_t n = 0;
@@ -283,7 +343,7 @@ static void stop_network() {
          (unsigned)seconds, (unsigned long long)rt.uptime,
          (unsigned long long)rt.next_measure, (unsigned long long)rt.next_send_uptime,
          charger_present);
-  sensor::serial::flush_uart();
+  sensor::serial::flush();
   esp_deep_sleep_start();
   __builtin_unreachable();
 }
@@ -431,11 +491,11 @@ static bool wifi_up() {
         return prepare_dns();
       }
       if (bits & 2) break;
-      vTaskDelay(pdMS_TO_TICKS(100));
+      radio_pause(100);
     }
     if (available()) {
       esp_wifi_disconnect();
-      vTaskDelay(pdMS_TO_TICKS(200));
+      radio_pause(200);
     }
   }
   last_error = "wifi_unavailable";
@@ -497,6 +557,7 @@ static std::string post_once(const std::string &path, const std::string &body,
                              bool auth, bool replay_safe, bool &retryable, std::string &failure) {
   retryable = false;
   if (!available()) { reset_post_client(); return ""; }
+  const sensor::network::Budget radio_window(deadline, charging);
   if (post_client && (post_server != server || post_ca != ca))
     reset_post_client();
   post_diagnostic = {};
@@ -581,12 +642,13 @@ static std::string post_once(const std::string &path, const std::string &body,
   complete = status == 200 && esp_http_client_is_complete_data_received(h);
   if (!complete) result.clear();
   const int verify_flags = post_diagnostic.verify_flags;
+  const bool within_budget = available();
   if (!sensor::http_accept_response(status, complete, !result.empty(),
-                                     available(), verify_flags != 0)) {
+                                     within_budget, verify_flags != 0)) {
     result.clear();
     reset_post_client();
   }
-  if (auth && status == 401) { token.clear(); save_provision(); }
+  if (auth && status == 401 && within_budget && !verify_flags) { token.clear(); save_provision(); }
   if (result.empty()) {
     retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, verify_flags != 0);
     if (verify_flags) {
@@ -619,7 +681,7 @@ static std::string post(const std::string &path, const std::string &body,
     if (remaining < 2000000 || charging()) break;
     printf("HTTPS: retry %u/3 for %s, remaining=%lld ms\n", attempt+1,
            path.c_str(), (long long)(remaining/1000));
-    vTaskDelay(pdMS_TO_TICKS(sensor::http_retry_pause_ms(attempt, esp_random())));
+    radio_pause(sensor::http_retry_pause_ms(attempt, esp_random()));
     if (!available()) break;
     // Reconnect after losing the IP or after repeated connection failure,
     // without resetting the shared radio deadline or the journal cursor.
@@ -647,6 +709,7 @@ static cJSON *parse_server_json(const std::string &body) {
 }
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
+static bool server_supports_legacy_shapes = false;
 static bool server_supports_usb_sync = false;
 static bool server_supports_tail_loss = false;
 static bool server_supports_next_send = false;
@@ -666,6 +729,8 @@ static bool apply_server_clock(int64_t epoch) {
 }
 static void restore_tls_clock() {
   if (time_quality || !sensor::valid_clock_epoch(state.saved_time)) return;
+  const auto now = time(nullptr);
+  if (sensor::valid_clock_epoch(now) && now >= state.saved_time) return;
   timeval tv{static_cast<time_t>(state.saved_time), 0};
   if (settimeofday(&tv, nullptr) != 0) last_error = "clock_restore_failed";
 }
@@ -683,7 +748,7 @@ static bool sync_time() {
   bool valid = sensor::valid_server_epoch(epoch) && cJSON_IsString(root) &&
                strlen(root->valuestring) <= 8000;
   for (const auto *key : {"sync_replay", "usb_powered_sync", "sync_tail_loss",
-                          "sync_next_send", "boot_debug"}) {
+                          "sync_next_send", "sync_legacy_shapes", "boot_debug"}) {
     const auto *item = cJSON_GetObjectItemCaseSensitive(j, key);
     if (item && !cJSON_IsBool(item)) valid = false;
   }
@@ -700,6 +765,7 @@ static bool sync_time() {
   // An empty chain means use the built-in public CA bundle (TLS proxy).
   std::string certificate = root->valuestring;
   server_supports_replay = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_replay"));
+  server_supports_legacy_shapes = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_legacy_shapes"));
   server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
   server_supports_tail_loss = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_tail_loss"));
   server_supports_next_send = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_next_send"));
@@ -743,7 +809,7 @@ static const char *sensor_error_name(uint8_t error) {
   if (error == 2) return "sensor_io";
   return "";
 }
-static bool parse_config(cJSON *j, Config &c) {
+static bool parse_config(cJSON *j, Config &c, bool local = false) {
   if (!cJSON_IsObject(j))
     return false;
 #define GET(field) do { const auto *item = cJSON_GetObjectItemCaseSensitive(j, #field); if (item && !cJSON_IsNumber(item)) return false; auto value = number(j, #field, c.field); if (!std::isfinite(value) || value < 0 || value > UINT32_MAX || std::floor(value) != value) return false; c.field = static_cast<uint32_t>(value); } while (0)
@@ -762,12 +828,20 @@ static bool parse_config(cJSON *j, Config &c) {
   if (en && !cJSON_IsBool(en)) return false;
   if (cJSON_IsBool(en))
     c.enabled = cJSON_IsTrue(en);
-  return valid_config(c);
+  return local ? sensor::valid_local_config(c) : valid_config(c);
 }
 static bool config_from(cJSON *j) {
   Config c = cfg;
-  if (parse_config(j, c) && c.version > cfg.version &&
-      save_blob("config", &c, sizeof c)) { cfg = c; return true; }
+  if (parse_config(j, c) && c.version >= cfg.version && !sensor::same_config(c, cfg)) {
+    if (!save_blob("config", &c, sizeof c)) {
+      last_error = "config_save_failed";
+      return false;
+    }
+    rt.next_measure = sensor::reschedule_measurement(rt.next_measure, uptime_now(),
+        cfg.measure_s, c.measure_s, cfg.enabled, c.enabled);
+    cfg = c;
+    return true;
+  }
   return false;
 }
 // A provisioning intent is stored inside the existing CRC-protected
@@ -779,7 +853,7 @@ static bool finish_provision_intent(cJSON *j) {
   Config candidate{};
   const double epoch = number(pending, "epoch");
   if (!cJSON_IsObject(pending) ||
-      !parse_config(cJSON_GetObjectItemCaseSensitive(pending, "config"), candidate) ||
+      !parse_config(cJSON_GetObjectItemCaseSensitive(pending, "config"), candidate, true) ||
       !std::isfinite(epoch) || std::floor(epoch) != epoch ||
       epoch < 1700000000 || epoch > 4102444800) return false;
   State next = state;
@@ -787,10 +861,17 @@ static bool finish_provision_intent(cJSON *j) {
   cJSON_DeleteItemFromObjectCaseSensitive(j, "_pending_setup");
   const auto final_json = stringify(j);
   if (final_json.empty()) return false;
+  const auto id = text(j, "device");
+  auto kind = text(j, "sensor_type");
+  if (kind.empty()) kind = "sht4x";
+  const bool empty_journal = !journal_matches(id) && state.next == 1 && !rt.pending &&
+                             setup_journal_is_current() && state.next == 1;
+  next.next = state.next;
   const bool ok = sensor::finish_setup_transaction(
       [&] { return save_blob("config", &candidate, sizeof candidate); },
       [&] { return persist_state(next); },
-      [&] { return save_blob("provision", final_json.c_str(), final_json.size() + 1); });
+      [&] { return save_journal_binding(id, kind, empty_journal) &&
+                   save_blob("provision", final_json.c_str(), final_json.size() + 1); });
   if (ok) { cfg = candidate; state = next; }
   return ok;
 }
@@ -828,6 +909,10 @@ static cJSON *identity_payload() {
   return j;
 }
 static bool identity_authenticate() {
+  if (journal_needs_existing_device()) {
+    last_error = "journal_owner_requires_usb_recovery";
+    return false;
+  }
   auto *j = identity_payload();
   auto body = stringify(j); cJSON_Delete(j);
   auto response = post("/api/sensors/auth/challenge", body, false);
@@ -853,6 +938,10 @@ static bool identity_authenticate() {
   }
   if (id.empty() || !sensor::serial::provision_device_id(id) ||
       !sensor::serial::lower_hex(credential, 64)) return false;
+  if (!save_journal_binding(id, sensor_type)) {
+    last_error = journal_matches(id) ? "journal_owner_save_failed" : "journal_owner_mismatch";
+    return false;
+  }
   device = id; token = credential;
   auto ticket = factory_ticket; factory_ticket.clear();
   if (save_provision()) return true;
@@ -863,6 +952,10 @@ static bool enroll() {
   if (!token.empty())
     return true;
   if (code.empty()) return identity_authenticate();
+  if (device.empty() || !save_journal_binding(device, sensor_type)) {
+    last_error = "journal_owner_invalid";
+    return false;
+  }
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char hw[13];
@@ -889,9 +982,9 @@ static bool enroll() {
   }
   return true;
 }
-static void ota(cJSON *meta, uint16_t mv) {
-  if (!cJSON_IsObject(meta) || mv < cfg.ota_min_mv || !available())
-    return;
+// Return true when the assignment should get another full radio window.
+static bool ota(cJSON *meta, uint16_t mv) {
+  if (!cJSON_IsObject(meta) || mv < cfg.ota_min_mv) return false;
   const auto *generation_node = cJSON_GetObjectItemCaseSensitive(meta, "generation");
   const auto *id_node = cJSON_GetObjectItemCaseSensitive(meta, "id");
   const auto *size_node = cJSON_GetObjectItemCaseSensitive(meta, "size");
@@ -904,41 +997,60 @@ static void ota(cJSON *meta, uint16_t mv) {
       !sensor::ota_integer(size_node->valuedouble, 256, std::min<uint32_t>(part->size, INT32_MAX)) ||
       !sensor::ota_sha256(sha) || !sensor::ota_upgrade(firmware_version(), ver)) {
     last_error = "ota_invalid_metadata";
-    return;
+    return false;
   }
   const auto generation = static_cast<uint32_t>(generation_node->valuedouble);
   const int id = static_cast<int>(id_node->valuedouble);
   const int size = static_cast<int>(size_node->valuedouble);
-  State attempt = state;
+  const State previous = state;
+  State attempt = previous;
   if (generation != attempt.ota_generation) {
     attempt.ota_generation = generation;
     attempt.ota_failures = 0;
   }
-  if (attempt.ota_failures >= 3) return;
+  if (attempt.ota_failures >= 3) return false;
+  if (!available()) {
+    last_error = "ota_deferred";
+    return true;
+  }
+  const sensor::network::Budget radio_window(deadline, charging);
   ++attempt.ota_failures;
-  if (!persist_state(attempt)) return;
-  state = attempt;
+  bool recorded = false, checkpoint_failed = false;
+  const auto record_attempt = [&] {
+    if (!persist_state(attempt)) {
+      checkpoint_failed = true;
+      last_error = "ota_attempt_save_failed";
+      return false;
+    }
+    state = attempt;
+    recorded = true;
+    return true;
+  };
   std::string path =
       "/api/sensors/devices/" + device + "/firmware/" + std::to_string(id);
+  reset_post_client(); // Release the sync TLS connection before opening OTA.
   auto h = http(path);
-  if (!h)
-    return;
+  if (!h) {
+    last_error = "ota_client_init_failed";
+    return false;
+  }
   std::string bearer = "Bearer " + token;
-  esp_http_client_set_header(h, "Authorization", bearer.c_str());
+  const bool request_ready = esp_http_client_set_header(h, "Authorization", bearer.c_str()) == ESP_OK;
   esp_ota_handle_t handle = 0;
   bool ok = false;
   mbedtls_sha256_context hash;
   mbedtls_sha256_init(&hash);
   const bool hash_ready = mbedtls_sha256_starts(&hash, 0) == 0;
-  if (hash_ready && available() &&
+  int64_t content_length = -1;
+  if (request_ready && hash_ready && available() &&
       esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK &&
       esp_http_client_open(h, 0) == ESP_OK && available() &&
-      esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK &&
-      esp_http_client_fetch_headers(h) == size &&
-      esp_http_client_get_status_code(h) == 200 && available() &&
-      esp_ota_begin(part, size, &handle) == ESP_OK) {
+      esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK)
+    content_length = esp_http_client_fetch_headers(h);
+  const auto status = esp_http_client_get_status_code(h);
+  if (content_length == size && status == 200 && available()) {
     int received = 0;
-    uint8_t b[2048];
+    alignas(esp_app_desc_t) uint8_t b[2048];
     constexpr int header_size = sizeof(esp_image_header_t) +
                                 sizeof(esp_image_segment_header_t) +
                                 sizeof(esp_app_desc_t);
@@ -960,7 +1072,10 @@ static void ota(cJSON *meta, uint16_t mv) {
                   strncmp(desc->project_name, "termokontur-sensor", 32) == 0 &&
                   strncmp(desc->version, ver.c_str(), 32) == 0;
     }
-    if (header_ok && available() &&
+    // Check the image before consuming an attempt or erasing the OTA slot.
+    // Checkpoint an actual attempt before the first Flash write for reset recovery.
+    if (header_ok && available() && record_attempt() && available() &&
+        esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle) == ESP_OK &&
         mbedtls_sha256_update(&hash, b, header_size) == 0 &&
         esp_ota_write(handle, b, header_size) == ESP_OK) {
       received = header_size;
@@ -995,7 +1110,15 @@ static void ota(cJSON *meta, uint16_t mv) {
     stop_network();
     esp_restart();
   }
+  if (!available()) {
+    if (recorded && persist_state(previous)) state = previous;
+    last_error = "ota_deferred";
+    return true;
+  }
+  if (!recorded && status > 0 && !checkpoint_failed) record_attempt();
+  if (checkpoint_failed) return false;
   last_error = "ota_failed";
+  return false;
 }
 static const char *clock_quality(uint8_t quality) {
   static const char *qualities[] = {"unknown", "sntp", "server", "rtc"};
@@ -1057,8 +1180,14 @@ static bool accept_remote_boot(cJSON *command, double server_now) {
   return true;
 }
 
+struct SyncProgress {
+  bool advanced = false;
+  bool ota_deferred = false;
+};
+
 static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
-                 bool allow_ota, uint64_t preserved_send, bool allow_remote_debug) {
+                 bool allow_ota, uint64_t preserved_send, bool allow_remote_debug,
+                 SyncProgress &progress) {
   // Reuse the trusted server time and Wi-Fi connection if already obtained.
   if (!time_prepared) {
     if (!wifi_up())
@@ -1072,6 +1201,10 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
   }
   if (!enroll())
     return false;
+  if (device.empty() || !save_journal_binding(device, sensor_type)) {
+    last_error = "journal_owner_invalid";
+    return false;
+  }
   uint64_t cursor = state.ack;
   bool replaying = false;
   // The journal is scanned before measurement and maintained by its sole
@@ -1080,6 +1213,8 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     uint64_t lost = state.lost_base + journal.missing(state.ack, state.next);
     cJSON *j = cJSON_CreateObject(),
           *array = cJSON_AddArrayToObject(j, "records");
+    cJSON *legacy_shapes = nullptr;
+    const bool has_humidity = sensor_type != "ds18b20" && sensor_type != "bmp280";
     add(j, "model", MODEL);
     add(j, "sensor_type", sensor_type);
     add(j, "firmware", firmware_version());
@@ -1121,6 +1256,13 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
           cJSON_Delete(j);
           last_error = "usb_sync_unsupported";
           return false;
+        }
+        // Older firmware could change the type before recovering a committed
+        // slot from Flash. Preserve those records, including their wire values.
+        if (server_supports_legacy_shapes && r.seq >= state.ack && r.reserved[0] == 0 &&
+            !r.error && (r.humidity != sensor::NO_HUMIDITY) != has_humidity) {
+          if (!legacy_shapes) legacy_shapes = cJSON_AddArrayToObject(j, "legacy_shape_seqs");
+          cJSON_AddItemToArray(legacy_shapes, cJSON_CreateNumber(r.seq));
         }
         cJSON_AddItemToArray(array, measurement_json(r));
         count++;
@@ -1190,6 +1332,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
       cJSON_Delete(j);
       return false;
     }
+    progress.advanced |= ack > cursor;
     // Do not change the active wall clock if the NVS ACK checkpoint failed.
     if (!apply_server_clock(now)) {
       cJSON_Delete(j);
@@ -1207,7 +1350,7 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
           accept_remote_boot(cJSON_GetObjectItemCaseSensitive(j, "boot_debug"),
                              server_time->valuedouble);
       if (allow_ota && !remote_boot_pending)
-        ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
+        progress.ota_deferred = ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
       cJSON_Delete(j);
       // Best-effort immediate empty ACK; persisted ID is sent on later syncs too.
       if (accepted && available() && page < 63) {
@@ -1228,6 +1371,8 @@ static std::string setup_nonce;
 enum class SetupState { waiting, saved, boot_debug, restart, closed };
 static std::atomic<SetupState> setup_state{SetupState::waiting};
 static bool setup_provisioned = false;
+static bool setup_repair_mode = false;
+static bool setup_journal_current = false;
 static esp_err_t setup_page(httpd_req_t *req) {
   std::string html =
       R"HTML(<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Термоконтур: настройка</title><style>body{font:17px system-ui;max-width:540px;margin:30px auto;padding:20px;background:#102132;color:#eee}label{display:block;margin:14px 0}input,textarea,select,button{box-sizing:border-box;width:100%;padding:12px;border-radius:8px;border:1px solid #789}button{background:#48bea5}small{color:#bdd}</style><h1>Подключение датчика</h1><p>Укажите Wi-Fi и адрес панели «Термоконтур».</p><form id="f"><label>Тип датчика<select name="sensor_type"><option value="sht4x">SHT4x (SHT40/41/45)</option><option value="sht3x">SHT3x (SHT30/31/35)</option><option value="aht20">AHT20</option><option value="bme280">BME280</option><option value="bmp280">BMP280 (только температура)</option><option value="dht11">DHT11</option><option value="dht22">DHT22 / AM2302</option><option value="ds18b20">DS18B20 (только температура)</option></select></label><label>Название Wi-Fi<input name="ssid" maxlength="32" required></label><label>Пароль Wi-Fi<input name="password" type="password" maxlength="63"></label><label>HTTPS-адрес панели<input name="server" type="url" placeholder="https://termokontur.school" required></label><label>Основной DNS (необязательно)<input name="dns_primary" placeholder="Из DHCP" maxlength="15"></label><label>Резервный DNS (необязательно)<input name="dns_secondary" placeholder="Из DHCP" maxlength="15"></label><label>ID датчика (для подключения по коду)<input name="device"></label><label>Код подключения (необязательно)<input name="code"></label><p><small>Без кода подключение должен разрешить администратор. При настройке по USB доступ выдаётся сразу.</small></p><p><small>Время и сертификат будут получены с указанного HTTPS-сервера автоматически.</small></p><fieldset><legend>Пароль точки настройки Termokontur-…</legend><p><small>Пароль для следующего входа в настройки: 8–63 латинских символа, цифры или знаки. Оставьте поля пустыми, чтобы сохранить прежний режим.</small></p><label>Ваш пароль (необязательно)<input name="setup_password" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label>Повторите ваш пароль<input name="setup_password_confirm" type="password" minlength="8" maxlength="63" pattern="[ -~]{8,63}" autocomplete="new-password"></label><label><input name="random_setup_password" type="checkbox" style="width:auto"> Использовать новый случайный пароль при каждом входе</label></fieldset><button>Сохранить и подключиться</button></form><p id="result" role="status"></p><script>const f=document.getElementById('f');f.elements.random_setup_password.onchange=()=>{for(const name of ['setup_password','setup_password_confirm'])f.elements[name].disabled=f.elements.random_setup_password.checked;};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.random_setup_password=f.elements.random_setup_password.checked;if(!b.random_setup_password&&(b.setup_password||'')!==(b.setup_password_confirm||'')){document.getElementById('result').textContent='Пароли сети настройки не совпадают.';return;}b.csrf='NONCE';try{const u=new URL(b.server);if(u.protocol!=='https:'||u.username||u.password)throw Error('Укажите HTTPS-адрес сервера');const boot=await fetch(u.href.replace(/\/$/,'')+'/api/sensors/bootstrap',{credentials:'omit',cache:'no-store'});if(!boot.ok)throw Error('Не удалось получить время и сертификат сервера');const meta=await boot.json();b.epoch=meta.time;b.ca=meta.ca;const r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});document.getElementById('result').textContent=r.ok?'Сохранено. Датчик перезапускается.':await r.text();}catch(error){document.getElementById('result').textContent=error.message||'Не удалось получить настройки сервера.';}};</script></html>)HTML";
@@ -1359,7 +1504,14 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   if (factory && (text(j,"hardware_id") != sensor::identity::hardware_id() || !sensor::serial::lower_hex(text(j,"factory_ticket"), 64) || !id.empty() || !key.empty()))
     return "Invalid factory authorization";
   if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
-  if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
+  if (!journal_matches(id) && (!setup_journal_current || state.next > 1 || rt.pending))
+    return "Журнал платы привязан к другой карточке датчика.";
+  if (id.empty() && journal_needs_existing_device())
+    return "Восстановите прежнюю карточку датчика через USB-мастер.";
+  const bool pending_records = state.next != state.ack || rt.pending;
+  if (kind != sensor_type && (!setup_journal_current || pending_records) &&
+      (!setup_repair_mode || !journal_sensor_type.empty()))
+    return "Перед сменой типа передайте накопленные измерения на сервер.";
   auto config = cJSON_GetObjectItemCaseSensitive(j, "config");
   Config candidate = cfg;
   if (config && !parse_config(config, candidate)) return "Проверьте параметры.";
@@ -1439,6 +1591,7 @@ static bool import_factory_setup(bool provisioned) {
   if (!sensor::serial::safe_json_frame(std::string_view(payload.data(), header[1]))) return false;
   auto *j = cJSON_ParseWithLengthOpts(payload.data(), payload.size(), nullptr, true);
   if (!j) return false;
+  setup_journal_current = setup_journal_is_current();
   auto error = provision_apply(j, false, true); cJSON_Delete(j);
   if (!error.empty()) { puts("FACTORY: settings import failed"); return false; }
   if (esp_partition_erase_range(part, 0, part->size) != ESP_OK)
@@ -1614,7 +1767,12 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
     add(out, "hardware_id", sensor::identity::hardware_id());
     add(out, "firmware", firmware_version());
     add(out, "sensor_type", sensor_type);
-    cJSON_AddBoolToObject(out, "pending_records", state.next != state.ack);
+    cJSON_AddBoolToObject(out, "pending_records", state.next != state.ack || rt.pending ||
+                         (session.setup && !setup_journal_current));
+    add(out, "journal_device", state.next > 1 || rt.pending || (session.setup && !setup_journal_current)
+        ? journal_device : "");
+    cJSON_AddBoolToObject(out, "journal_recovery", journal_needs_existing_device());
+    cJSON_AddBoolToObject(out, "journal_type_unknown", setup_repair_mode && journal_sensor_type.empty());
     cJSON_AddBoolToObject(out, "verified_setup", session.setup);
     cJSON_AddBoolToObject(out, "provisioned", session.setup ? setup_provisioned : !ssid.empty());
     cJSON_AddBoolToObject(out, "delivery_test", !session.setup);
@@ -1829,6 +1987,7 @@ static cJSON *parse_serial_json(const char *json) {
 static void serial_request(sensor::serial::Port port, const std::string &line,
                            bool overflow, void *context) {
   auto &session = *static_cast<ConsoleSession *>(context);
+  const auto previous = session;
   auto *out = cJSON_CreateObject();
   if (!out) return;
   cJSON *request = nullptr;
@@ -1870,8 +2029,13 @@ static void serial_request(sensor::serial::Port port, const std::string &line,
   const std::string frame = "\nTKRPC " + stringify(out) + "\n";
   cJSON_Delete(out);
   cJSON_Delete(request);
-  sensor::serial::reply(port, frame);
+  if (!sensor::serial::reply(port, frame)) {
+    if (!session.setup) session = previous;
+    puts("SERIAL: could not queue complete RPC reply");
+  }
 }
+
+static std::atomic<bool> setup_serial_active{false};
 
 static void setup_serial_task(void *) {
   using sensor::serial::Port;
@@ -1882,7 +2046,7 @@ static void setup_serial_task(void *) {
     const int usb = sensor::serial::poll(Port::usb, 10, serial_request, &session);
     const int uart = sensor::serial::poll(Port::uart, 0, serial_request, &session);
     if (session.action == ConsoleAction::reboot) {
-      sensor::serial::flush_uart();
+      sensor::serial::flush();
       vTaskDelay(pdMS_TO_TICKS(100));
       std::lock_guard<std::mutex> lock(provision_mutex);
       if (setup_state == SetupState::waiting) setup_state = SetupState::restart;
@@ -1890,6 +2054,7 @@ static void setup_serial_task(void *) {
     }
     if (uart <= 0 && usb <= 0) vTaskDelay(pdMS_TO_TICKS(10));
   }
+  setup_serial_active = false;
   vTaskDelete(nullptr);
 }
 
@@ -1902,7 +2067,7 @@ static ConsoleSession wake_serial_window(sensor::Journal &journal, uint16_t mv, 
   if (usb) sensor::serial::init_usb();
   constexpr uint32_t window_ms = 350;
   printf("TK READY uart0=%d usb=%d window_ms=%u\n", uart, usb, (unsigned)window_ms);
-  sensor::serial::flush_uart();
+  sensor::serial::flush();
   session.until_us = esp_timer_get_time() + window_ms * 1000;
   while (session.action == ConsoleAction::none && !charging() &&
          esp_timer_get_time() < session.until_us) {
@@ -1913,10 +2078,10 @@ static ConsoleSession wake_serial_window(sensor::Journal &journal, uint16_t mv, 
   }
   return session;
 }
-static bool setup_ap(bool provisioned) {
+static httpd_handle_t start_setup_ap() {
   if (!start_wifi(true)) {
     puts("SETUP: Wi-Fi initialization failed or charging is active.");
-    return false;
+    return nullptr;
   }
   auto rnd = hex64(((uint64_t)esp_random() << 32) | esp_random());
   std::string apname = "Termokontur-" + rnd.substr(12),
@@ -1928,11 +2093,11 @@ static bool setup_ap(bool provisioned) {
   strncpy((char *)w.ap.password, pass.c_str(), sizeof w.ap.password);
   w.ap.authmode = WIFI_AUTH_WPA2_PSK;
   w.ap.max_connection = 1;
-  esp_wifi_set_config(WIFI_IF_AP, &w);
-  const esp_err_t wifi_status = esp_wifi_start();
+  auto wifi_status = esp_wifi_set_config(WIFI_IF_AP, &w);
+  if (wifi_status == ESP_OK) wifi_status = esp_wifi_start();
   if (wifi_status != ESP_OK) {
     printf("SETUP: Wi-Fi start failed: %s\n", esp_err_to_name(wifi_status));
-    return false;
+    return nullptr;
   }
   printf("\nSETUP Wi-Fi: %s\nSETUP password: %s\nOpen http://192.168.4.1\n",
          apname.c_str(), pass.c_str());
@@ -1943,20 +2108,40 @@ static bool setup_ap(bool provisioned) {
   const esp_err_t http_status = httpd_start(&h, &hc);
   if (http_status != ESP_OK) {
     printf("SETUP: HTTP server start failed: %s\n", esp_err_to_name(http_status));
-    return false;
+    return nullptr;
   }
   httpd_uri_t root{};
   root.uri = "/";
   root.method = HTTP_GET;
   root.handler = setup_page;
-  httpd_register_uri_handler(h, &root);
   httpd_uri_t save{};
   save.uri = "/configure";
   save.method = HTTP_POST;
   save.handler = setup_save;
-  httpd_register_uri_handler(h, &save);
+  if (httpd_register_uri_handler(h, &root) != ESP_OK ||
+      httpd_register_uri_handler(h, &save) != ESP_OK) {
+    httpd_stop(h);
+    return nullptr;
+  }
+  return h;
+}
+
+static bool setup_mode(bool provisioned, bool usb_host) {
+  setup_journal_current = setup_journal_is_current();
   setup_provisioned = provisioned;
-  xTaskCreate(setup_serial_task, "setup_serial", 16384, nullptr, 4, nullptr);
+  const auto httpd = setup_repair_mode ? nullptr : start_setup_ap();
+  if (!httpd) {
+    stop_network();
+    if (!usb_host) return false;
+    puts("SETUP: USB configuration available");
+  }
+  setup_serial_active = true;
+  if (xTaskCreate(setup_serial_task, "setup_serial", 16384, nullptr, 4, nullptr) != pdPASS) {
+    setup_serial_active = false;
+    if (httpd) httpd_stop(httpd);
+    stop_network();
+    return false;
+  }
   int64_t end = esp_timer_get_time() + 600000000;
   while (setup_state == SetupState::waiting && esp_timer_get_time() < end) {
     if (charging()) {
@@ -1972,9 +2157,10 @@ static bool setup_ap(bool provisioned) {
     outcome = setup_state.exchange(SetupState::closed);
   }
   if (outcome == SetupState::waiting && !rt.charging) puts("SETUP stopped: timeout.");
+  while (setup_serial_active) vTaskDelay(1);
   if (outcome == SetupState::saved || outcome == SetupState::boot_debug)
     vTaskDelay(pdMS_TO_TICKS(500));
-  httpd_stop(h);
+  if (httpd) httpd_stop(httpd);
   stop_network();
   if (outcome == SetupState::restart) esp_restart();
   if (outcome == SetupState::saved) {
@@ -2125,14 +2311,13 @@ extern "C" void app_main() {
   }
   if (loaded == 1) state_checkpoint.loaded(state);
   int config_loaded = load_blob("config", &cfg, sizeof cfg);
-  if (config_loaded < 0 || !valid_config(cfg)) {
+  if (config_loaded < 0 || !sensor::valid_local_config(cfg)) {
     printf("Config invalid; using defaults\n");
-    cfg = Config{};
+    cfg = Config{.version = 0};
   }
-  if (!recover_provision_intent()) {
-    puts("SETUP: pending transaction recovery failed; preserving NVS");
-    sleep_for(3600);
-  }
+  load_journal_binding();
+  setup_repair_mode = !recover_provision_intent();
+  if (setup_repair_mode) puts("SETUP: configuration unreadable; use USB recovery");
   if (pending) {
     const auto *datalog = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "datalog");
@@ -2178,7 +2363,14 @@ extern "C" void app_main() {
                             std::max<int64_t>(0, rt.cool_until)))
     sleep_for(
         std::min((int64_t)cfg.measure_s, rt.cool_until - (int64_t)rt.uptime));
-  bool provisioned = import_factory_setup(load_provision());
+  bool provisioned = !setup_repair_mode && load_provision();
+  if (provisioned && (!device.empty() || !journal_needs_existing_device())) {
+    if (!save_journal_binding(device, sensor_type)) setup_repair_mode = true;
+  } else if (journal_needs_existing_device()) setup_repair_mode = true;
+  if (setup_repair_mode) {
+    provisioned = false;
+    if (!journal_sensor_type.empty()) sensor_type = journal_sensor_type;
+  } else provisioned = import_factory_setup(provisioned);
   gpio_set_direction(BOOT_PIN, GPIO_MODE_INPUT);
   gpio_set_pull_mode(BOOT_PIN, GPIO_PULLUP_ONLY);
   bool physical = false;
@@ -2186,7 +2378,8 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     physical = gpio_get_level(BOOT_PIN) == 0;
   }
-  const bool usb_host = usb_host_for_setup(after_reset);
+  const bool usb_host = usb_host_for_setup(after_reset || setup_repair_mode);
+  if (setup_repair_mode && !usb_host) sleep_for(3600);
   // USB factory enrollment alone does not sample. On battery, enrollment
   // follows the same radio-off measurement path as ordinary operation.
   if (provisioned && !factory_ticket.empty() && !physical && usb_host) {
@@ -2213,7 +2406,13 @@ extern "C" void app_main() {
   bool boot_debug = false;
   bool boot_session_active = false;
   if (setup_requested) {
-    if (!setup_ap(provisioned)) sleep_for(1800);
+    if (!usb_host) {
+      const auto settle_ms = sensor::battery_settle_remaining_ms(esp_timer_get_time());
+      if (settle_ms) vTaskDelay(pdMS_TO_TICKS(settle_ms) + 1);
+      if (charging()) sleep_for(cfg.measure_s);
+      check_battery_for_operation(battery_mv(), false);
+    }
+    if (!setup_mode(provisioned, usb_host)) sleep_for(1800);
     boot_debug_end_us = sensor::boot_session_end(esp_timer_get_time(), boot_debug_duration_s);
     boot_session_active = boot_debug_continuous;
     // Continuous mode starts normal work immediately, even before the
@@ -2315,7 +2514,7 @@ extern "C" void app_main() {
     stop_network();
     if (boot_count_pending && !save_state())
       puts("NVS: deferred wake counter checkpoint failed");
-    sensor::serial::flush_uart();
+    sensor::serial::flush();
     if (usb_serial_jtag_is_connected()) vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
   }
@@ -2424,6 +2623,7 @@ extern "C" void app_main() {
       sleep_for(3600);
     }
     measurement.seq = state.next;
+    measurement.reserved[0] = 1; // Firmware checked the sensor type against the recovered journal.
     rt.record = measurement;
     rt.pending = true;
     // A complete power cut before the slot commits loses at most this
@@ -2453,18 +2653,28 @@ extern "C" void app_main() {
     // Reuse the time connection; if it failed, retry at the next wake.
     printf("TK SYNC start ack_seq=%llu next_seq=%llu\n",
            (unsigned long long)state.ack, (unsigned long long)state.next);
-    bool ok = (!bootstrap_after_sample || time_prepared) &&
-              sync(journal, mv, time_prepared, scheduled_send && !boot_session_active && !boot_debug && !requested_sync,
+    SyncProgress progress;
+    const bool allow_ota = scheduled_send && !boot_session_active && !boot_debug && !requested_sync;
+    const bool ok = (!bootstrap_after_sample || time_prepared) &&
+              sync(journal, mv, time_prepared, allow_ota,
                    advance_send ? 0 : rt.next_send_uptime,
-                   !boot_session_active && !boot_debug && !usb_without_battery);
+                   !boot_session_active && !boot_debug && !usb_without_battery, progress);
     stop_network();
-    const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
-    const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, advance_send, ok,
+    auto next_interval = state.ack < state.next || (!ok && progress.advanced)
+        ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
+    if (allow_ota && ok) {
+      if (progress.ota_deferred && !rt.ota_followup)
+        next_interval = std::min<uint32_t>(next_interval, 300);
+      rt.ota_followup = progress.ota_deferred;
+    }
+    const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, advance_send,
+        ok || progress.advanced,
         uptime_now(), cfg.send_s, next_interval, last_error == "authorization_pending" || !factory_ticket.empty(), esp_random());
     rt.next_send_uptime = updated.next;
     rt.failures = updated.failures;
     printf("TK SYNC result=%s ack_seq=%llu next_seq=%llu next_send=%llu error=%s\n",
-           ok ? "ok" : "failed", (unsigned long long)state.ack, (unsigned long long)state.next,
+           ok ? "ok" : progress.advanced ? "partial" : "failed",
+           (unsigned long long)state.ack, (unsigned long long)state.next,
            (unsigned long long)rt.next_send_uptime, last_error.empty() ? "-" : last_error.c_str());
   } else if (bootstrap_after_sample) {
     stop_network();
@@ -2542,7 +2752,8 @@ extern "C" void app_main() {
   auto remaining = (int64_t)rt.next_measure - (int64_t)uptime;
   // A send interval shorter than the sampling interval must wake the device
   // for its independent radio deadline, without forcing another sample.
-  const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
+  const auto interval = cfg.enabled && !usb_without_battery && remaining <= 0 ? 1 : cfg.measure_s;
+  const auto sleep_s = sensor::next_sleep_s(interval, cfg.enabled ? remaining : 0,
       wifi_allowed, rt.next_send_uptime, uptime);
   // A session may finish after a normal deadline; catch up promptly.
   const bool overdue = boot_session_active && !rt.charging && !usb_without_battery &&

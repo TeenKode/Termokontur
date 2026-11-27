@@ -66,6 +66,15 @@ def get(key: str, default: str | None = None) -> str | None:
             return default
         return row["value"]
 
+def local_zone(name: str | None = None) -> ZoneInfo:
+    """Resolve the configured zone, including values from older installations."""
+    if name is None:
+        name = get("timezone")
+    try:
+        return ZoneInfo((name or "").strip() or "UTC")
+    except (ValueError, ZoneInfoNotFoundError):
+        return ZoneInfo("UTC")
+
 def update(values: dict[str, str]) -> None:
     allowed = set(ENV_DEFAULTS)
     if not set(values).issubset(allowed):
@@ -106,6 +115,7 @@ def public(conn=None) -> dict:
             return os.environ.get(env, fallback)
         return default
     data = {key: get(key) for key in ENV_DEFAULTS}
+    data["timezone"] = local_zone(data["timezone"]).key
     data["stale_hours"] = int(data["stale_hours"])
     data["reminders_enabled"] = data["reminders_enabled"] == "1"
     data["reminder_days"] = [int(x) for x in data["reminder_days"].split(",") if x.strip()]

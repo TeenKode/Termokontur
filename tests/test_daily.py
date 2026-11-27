@@ -22,6 +22,10 @@ def test_local_day_boundaries_and_dst(client, monkeypatch):
     assert str(day) == "2026-03-29"
     assert start == "2026-03-28T23:00:00+00:00"
     assert end == "2026-03-29T22:00:00+00:00"  # 23-hour DST day
+    day, start, end = daily.daily_bounds(utc("2026-10-25T13:00:00"))
+    assert str(day) == "2026-10-25"
+    assert start == "2026-10-24T22:00:00+00:00"
+    assert end == "2026-10-25T23:00:00+00:00"  # 25-hour DST day
 
 
 def test_daily_coverage_ignores_previous_day(client, monkeypatch):
@@ -67,6 +71,22 @@ def test_one_claim_per_day_and_retry(client):
     daily.mark_reminder("2026-11-12", "123", True)
     assert not daily.claim_reminder("2026-11-12", "123", now + timedelta(hours=1))
     assert daily.claim_reminder("2026-11-13", "123", now + timedelta(days=1))
+
+
+def test_reminder_windows_across_clock_changes(client):
+    settings.update({"timezone": "Europe/Berlin", "reminders_enabled": "1", "reminder_days": "6",
+                     "reminder_time": "02:15", "reminder_window_minutes": "30"})
+    # 02:15 does not exist in spring. Use 03:15 with the full 30 minutes.
+    assert not daily.reminders_due(utc("2026-03-29T01:14:59"))
+    assert daily.reminders_due(utc("2026-03-29T01:15:00"))
+    assert not daily.reminders_due(utc("2026-03-29T01:45:00"))
+
+    # In autumn a short window occurs only once, at the first 02:15.
+    assert daily.reminders_due(utc("2026-10-25T00:15:00"))
+    assert not daily.reminders_due(utc("2026-10-25T01:15:00"))
+    settings.update({"reminder_window_minutes": "75"})
+    assert daily.reminders_due(utc("2026-10-25T01:10:00"))  # 02:10 on the second pass
+    assert not daily.reminders_due(utc("2026-10-25T01:30:00"))
 
 
 def test_pending_groups_and_bot_sends_only_missing(client, monkeypatch):
