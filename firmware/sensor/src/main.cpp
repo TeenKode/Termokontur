@@ -975,7 +975,7 @@ static bool accept_remote_boot(cJSON *command, double server_now) {
         memcpy(remote_receipt, candidate, sizeof remote_receipt);
         return true;
       })) return false;
-  boot_options = {cJSON_IsTrue(send_now), cJSON_IsTrue(preserve)};
+  boot_options = {cJSON_IsTrue(send_now) != 0, cJSON_IsTrue(preserve) != 0};
   boot_debug_duration_s = static_cast<uint32_t>(duration->valuedouble);
   boot_debug_continuous = true;
   remote_boot_pending = true;
