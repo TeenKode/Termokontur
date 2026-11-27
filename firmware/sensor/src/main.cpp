@@ -1753,8 +1753,9 @@ static bool setup_ap(bool provisioned) {
   return outcome == SetupState::boot_debug;
 }
 
-enum class BootWait { pressed, expired, charging, low_battery, invalid_battery };
-static BootWait wait_for_boot_debug(int64_t end) {
+enum class BootWait { pressed, scheduled, expired, charging, low_battery, invalid_battery };
+static BootWait wait_for_boot_debug(int64_t end, bool scheduled_work = false,
+                                   bool wifi_allowed = false) {
   if (charging()) return BootWait::charging;
   // Both wake pins must be configured; a failed sleep setup falls back
   // to short polling and every exit disables the temporary GPIO sources.
@@ -1777,6 +1778,7 @@ static BootWait wait_for_boot_debug(int64_t end) {
       if (charging()) { result = BootWait::charging; break; }
       if (mv < 2000 || mv > 5000) { result = BootWait::invalid_battery; break; }
       if (mv < cfg.cutoff_mv) { result = BootWait::low_battery; break; }
+      wifi_allowed = sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
       next_power_check = esp_timer_get_time() + 60000000LL;
     }
     if (esp_timer_get_time() >= end) break;
@@ -1784,9 +1786,20 @@ static BootWait wait_for_boot_debug(int64_t end) {
       result = BootWait::pressed;
       break;
     }
+    // Respect normal deadlines even if no button is pressed. A connected
+    // USB host is a diagnostic power mode, not a normal battery wake.
+    const auto current = esp_timer_get_time();
+    const auto work_end = scheduled_work && !usb
+        ? sensor::boot_schedule_end(current, end, rt.uptime, rt.next_measure,
+                                    rt.next_send_uptime, cfg.enabled, wifi_allowed)
+        : end;
+    if (work_end < end && work_end <= current) {
+      result = BootWait::scheduled;
+      break;
+    }
     // Do not sleep on a level-low wake source while a button is held.
     // Periodic timer wakes check battery without enabling Wi-Fi.
-    const auto remaining = std::min(end, next_power_check) - esp_timer_get_time();
+    const auto remaining = std::min(work_end, next_power_check) - esp_timer_get_time();
     if (wake_enabled && !usb && button.can_sleep() && remaining > 0 &&
         esp_sleep_enable_timer_wakeup(remaining) == ESP_OK && esp_light_sleep_start() == ESP_OK)
       continue;
@@ -1970,11 +1983,16 @@ extern "C" void app_main() {
   const bool setup_requested = !provisioned || physical || usb_host;
   if (charging()) sleep_for(cfg.measure_s);
   bool boot_debug = false;
+  bool boot_session_active = false;
   if (setup_requested) {
     if (!setup_ap(provisioned)) sleep_for(1800);
     boot_debug_end_us = sensor::boot_session_end(esp_timer_get_time(), boot_debug_duration_s);
-    const auto wait = wait_for_boot_debug(boot_debug_end_us);
-    if (wait != BootWait::pressed) {
+    boot_session_active = boot_debug_continuous;
+    // Continuous mode starts normal work immediately, even before the
+    // first manual press. The old one-shot command still waits for BOOT.
+    const auto wait = boot_session_active ? BootWait::scheduled
+                                         : wait_for_boot_debug(boot_debug_end_us);
+    if (wait != BootWait::pressed && wait != BootWait::scheduled) {
       switch (wait) {
       case BootWait::charging:
         boot_debug_result("Отладка прервана зарядкой.");
@@ -1990,10 +2008,11 @@ extern "C" void app_main() {
         sleep_for(cfg.measure_s);
       }
     }
-    boot_debug = true;
-    debug_radio = true;
+    boot_debug = wait == BootWait::pressed;
+    debug_radio = boot_debug;
     last_error.clear();
-    puts("BOOT: нажатие принято, выполняем пробную отправку.");
+    puts(boot_debug ? "BOOT: нажатие принято, выполняем пробную отправку."
+                    : "BOOT: временная сессия активна.");
   }
   // Stored time is a lower bound for TLS bootstrap, not a recovered measurement
   // time.
@@ -2014,7 +2033,7 @@ extern "C" void app_main() {
   // An explicitly armed BOOT test on a connected USB host is externally
   // powered; ADC readings may be floating or misleading without a battery.
   // Do not report a fabricated battery voltage or attempt OTA in this mode.
-  bool usb_without_battery = boot_debug && usb_serial_jtag_is_connected();
+  bool usb_without_battery = (boot_debug || boot_session_active) && usb_serial_jtag_is_connected();
   if (usb_without_battery) {
     printf("BOOT: USB-powered test, ADC=%u mV (ignored)\n", (unsigned)mv);
     mv = 0;
@@ -2065,7 +2084,7 @@ extern "C" void app_main() {
   }
   bool wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
   // The first boot of a new OTA image has to complete self-test immediately.
-  const auto console = pending ? ConsoleSession{} : wake_serial_window(journal, mv, wifi_allowed);
+  const auto console = pending || boot_session_active ? ConsoleSession{} : wake_serial_window(journal, mv, wifi_allowed);
   if (charging()) sleep_for(cfg.measure_s);
   if (console.action == ConsoleAction::reboot) {
     stop_network();
@@ -2089,14 +2108,15 @@ extern "C" void app_main() {
   // The normal path and legacy one-shot BOOT run this loop exactly once.
   for (;;) {
   if (charging()) sleep_for(cfg.measure_s);
-  const int64_t session_end = boot_debug && boot_debug_continuous ? boot_debug_end_us : 0;
+  const int64_t session_end = boot_session_active ? boot_debug_end_us : 0;
   if (!sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging())) break;
 
   // The image has passed local storage self-test. External sensor faults
   // are measurement errors, not firmware rollback triggers.
-  const bool scheduled_measure = uptime_now() >= rt.next_measure;
+  const bool scheduled_battery_work = !boot_session_active || !usb_without_battery;
+  const bool scheduled_measure = scheduled_battery_work && uptime_now() >= rt.next_measure;
   const bool normal_measure = cfg.enabled && scheduled_measure;
-  const bool pending_measure = first_cycle && pending;
+  const bool pending_measure = scheduled_battery_work && first_cycle && pending;
   const bool measurement_due =
       boot_debug || (cfg.enabled && (requested_sample || pending_measure || scheduled_measure));
   const bool store_requested = !boot_debug ||
@@ -2127,7 +2147,7 @@ extern "C" void app_main() {
   // A newly sampled record with no trusted RTC can receive UTC once, before
   // its first journal commit. Derive it from monotonic elapsed time, never
   // rewrite an existing sequence (even if it has unknown time).
-  const bool scheduled_send = sensor::radio_due(uptime_now(), rt.next_send_uptime);
+  const bool scheduled_send = scheduled_battery_work && sensor::radio_due(uptime_now(), rt.next_send_uptime);
   const bool send_due = sensor::boot_work_allowed(esp_timer_get_time(), session_end, charging()) &&
       (boot_debug ? boot_options.send(scheduled_send, requested_sync)
                   : scheduled_send || requested_sync);
@@ -2159,7 +2179,7 @@ extern "C" void app_main() {
   // Never journal an unverified zero-voltage sample for a legacy server.
   const bool store_sample = store_requested &&
       (!usb_without_battery || (time_prepared && server_supports_usb_sync));
-  if (usb_without_battery && store_requested && boot_options.send_now &&
+  if (measured && usb_without_battery && store_requested && boot_options.send_now &&
       (!time_prepared || !server_supports_usb_sync)) {
     if (session_end > 0 && esp_timer_get_time() >= session_end) {
       boot_debug_result("Время отладки истекло, USB-замер не сохранён.");
@@ -2209,7 +2229,7 @@ extern "C" void app_main() {
     printf("TK SYNC start ack_seq=%llu next_seq=%llu\n",
            (unsigned long long)state.ack, (unsigned long long)state.next);
     bool ok = (!bootstrap_after_sample || time_prepared) &&
-              sync(journal, mv, time_prepared, scheduled_send && !boot_debug && !requested_sync,
+              sync(journal, mv, time_prepared, scheduled_send && !boot_session_active && !boot_debug && !requested_sync,
                    advance_send ? 0 : rt.next_send_uptime);
     stop_network();
     const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
@@ -2243,12 +2263,12 @@ extern "C" void app_main() {
       boot_debug_result("Замер сохранён на плате. Ошибка отправки — " + last_error + ".");
     }
   }
-  if (!boot_debug || !boot_debug_continuous || charging() ||
-      esp_timer_get_time() >= boot_debug_end_us) break;
+  if (!boot_session_active || charging() || esp_timer_get_time() >= boot_debug_end_us) break;
   stop_network();
   const auto radio_off_us = esp_timer_get_time();
-  const auto wait = wait_for_boot_debug(boot_debug_end_us);
-  if (wait != BootWait::pressed) {
+  const auto wait = wait_for_boot_debug(boot_debug_end_us, true,
+                                        wifi_allowed && !usb_without_battery);
+  if (wait != BootWait::pressed && wait != BootWait::scheduled) {
     if (wait == BootWait::charging) {
       boot_debug_result("Отладка прервана зарядкой.");
       sleep_for(cfg.measure_s);
@@ -2277,6 +2297,8 @@ extern "C" void app_main() {
   if (usb_without_battery) mv = 0;
   else check_battery_for_operation(mv, true);
   wifi_allowed = usb_without_battery || sensor::battery_wifi_allowed(mv, cfg.cutoff_mv, cfg.wifi_min_mv);
+  boot_debug = wait == BootWait::pressed;
+  debug_radio = boot_debug;
   requested_sample = false;
   requested_sync = false;
   first_cycle = false;
@@ -2291,7 +2313,7 @@ extern "C" void app_main() {
   const auto sleep_s = sensor::next_sleep_s(cfg.measure_s, remaining,
       wifi_allowed, rt.next_send_uptime, uptime);
   // A session may finish after a normal deadline; catch up promptly.
-  const bool overdue = boot_debug_continuous && !rt.charging &&
+  const bool overdue = boot_session_active && !rt.charging && !usb_without_battery &&
       ((cfg.enabled && uptime >= rt.next_measure) ||
        (wifi_allowed && uptime >= rt.next_send_uptime));
   sleep_for(overdue ? 1 : console.repeat_delivery && !rt.charging ? std::min<uint32_t>(sleep_s, 10) : sleep_s);

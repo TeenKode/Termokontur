@@ -29,6 +29,18 @@ static void test_serial_lines() {
 
 int main() {
   {
+    constexpr int64_t now = 2250000, end = 302250000;
+    // Uptime base 100: next sample at 105 and send at 103.
+    assert(sensor::boot_schedule_end(now, end, 100, 105, 103, true, true) == 3000000);
+    assert(sensor::boot_schedule_end(now, end, 100, 105, 103, true, false) == 5000000);
+    assert(sensor::boot_schedule_end(now, end, 100, 105, 103, false, true) == 3000000);
+    assert(sensor::boot_schedule_end(now, end, 100, 105, 103, false, false) == end);
+    assert(sensor::boot_schedule_end(now, end, 100, 102, 103, true, true) == now);
+    assert(sensor::boot_schedule_end(now, end, 100, UINT64_MAX, UINT64_MAX, true, true) == end);
+    assert(sensor::boot_schedule_end(end, end, 100, 105, 103, true, true) == end);
+  }
+
+  {
     const sensor::BootOptions legacy{};
     assert(legacy.store(false, false, false) && legacy.send(false, false));
     assert(!legacy.advance_measure(false, false) && !legacy.advance_send(false));

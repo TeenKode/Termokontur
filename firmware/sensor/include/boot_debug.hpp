@@ -18,6 +18,29 @@ inline int64_t boot_radio_end(int64_t now, uint32_t budget_s, int64_t session_en
 inline bool boot_work_allowed(int64_t now, int64_t session_end, bool charging) {
   return !charging && (session_end == 0 || now < session_end);
 }
+// Convert the next RTC-uptime deadline to this boot's monotonic clock.
+// Clamp to the session end before multiplying so corrupt/large deadlines
+// cannot overflow. The next measurement and radio deadline are independent.
+inline int64_t boot_schedule_end(int64_t now_us, int64_t session_end,
+                                 uint64_t uptime_base, uint64_t next_measure,
+                                 uint64_t next_send, bool measure_enabled,
+                                 bool wifi_allowed) {
+  if (now_us >= session_end) return session_end;
+  const uint64_t elapsed = static_cast<uint64_t>(now_us / 1000000);
+  const uint64_t uptime = uptime_base + elapsed;
+  auto result = session_end;
+  auto consider = [&](uint64_t target) {
+    if (target <= uptime) { result = now_us; return; }
+    const uint64_t delta = target - uptime;
+    const auto remainder = now_us % 1000000;
+    const uint64_t span = static_cast<uint64_t>(session_end - now_us);
+    if (delta <= (span + static_cast<uint64_t>(remainder)) / 1000000)
+      result = std::min(result, now_us + static_cast<int64_t>(delta * 1000000) - remainder);
+  };
+  if (measure_enabled) consider(next_measure);
+  if (wifi_allowed) consider(next_send);
+  return result;
+}
 // An off-schedule local diagnostic is not a production journal record.
 // Scheduled work is independent of the manual diagnostic preference.
 struct BootOptions {
