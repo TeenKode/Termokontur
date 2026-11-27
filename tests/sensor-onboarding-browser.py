@@ -50,7 +50,7 @@ SIMULATED_USB=r'''(() => {
    window.simSerialCommands.push(req.cmd);
    const publicBytes=new Uint8Array(await crypto.subtle.exportKey('raw',pair.publicKey));const fp=hex(new Uint8Array(await crypto.subtle.digest('SHA-256',publicBytes)));
    if(req.cmd==='hello'){
-    Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:'0.1.5',pending_records:false,verified_setup:true});
+    Object.assign(response,{protocol:1,public_key:hex(publicBytes),fingerprint:window.simWrongFingerprint?'0'.repeat(64):fp,hardware_id:'0123456789ab',sensor_type:'sht4x',firmware:window.simDebugFirmware||'0.1.5',pending_records:false,verified_setup:true});
     if(!window.simOmitProvisioned)response.provisioned=Boolean(window.savedUSB);
     if(window.simDelivery)Object.assign(response,{hardware_id:'4423456789ab',delivery_test:true,provisioned:true});
    }
@@ -65,15 +65,21 @@ SIMULATED_USB=r'''(() => {
    else if(req.cmd==='finish_setup'){response.finished=true;window.simFinished=true;}
    else if(req.cmd==='test_measurement')Object.assign(response,{temperature:21.5,humidity:44.2,battery_mv:3950,sensor_error:''});
    else if(req.cmd==='setup_wifi')Object.assign(response,{ssid:'Termokontur-1234',password:' Wi-Fi <demo> & pass  '});
-   else if(req.cmd==='arm_boot_debug'){response.duration_s=300;window.simBootArmed=true;}
+   else if(req.cmd==='arm_boot_debug'){
+      window.simBootRequest=req;
+      response.duration_s=req.duration_s||300;
+      if(window.simDebugFirmware)Object.assign(response,{continuous:req.continuous,send_now:req.send_now,preserve_schedule:req.preserve_schedule});
+      window.simBootArmed=true;
+    }
    else if(req.cmd==='status')Object.assign(response,{wake_source:'timer',rtc_state:'retained'});
    const bytes=new TextEncoder().encode('startup log\nSETUP password: masked-test-password\nTKRPC '+JSON.stringify(response)+'\n');self.rx.enqueue(bytes.slice(0,19));self.rx.enqueue(bytes.slice(19));
   } });},async setSignals(){},async close(){}};return port;
  }}});
  window.simPressBoot=()=>{
   if(!window.simBootArmed)throw Error('BOOT debug is inactive');
-  window.simBootArmed=false;
-  port.rx.enqueue(new TextEncoder().encode('BOOT: Сервер подтвердил получение замера.\n'));
+  if(!window.simBootRequest?.continuous)window.simBootArmed=false;
+  const local=window.simBootRequest?.send_now===false;
+  port.rx.enqueue(new TextEncoder().encode(local?'TK DEBUG_MEASURE {"temperature":22.1,"humidity":43.2,"battery_mv":3950,"error":""}\nBOOT: Пробный замер выведен в журнал USB, без сохранения и отправки.\n':'BOOT: Сервер подтвердил получение замера.\n'));
  };
  window.emitSensorLog=lines=>port.rx.enqueue(new TextEncoder().encode(lines.join('\n')+'\n'));
  window.radioConnect=async()=>{
@@ -586,6 +592,8 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-wifi-password')).to_be_empty()
                 page.click('#debug-wifi')
                 expect(page.locator('#debug-wifi-details')).to_be_visible()
+                page.locator('#debug-boot-options summary').click()
+                expect(page.locator('#debug-boot-duration')).to_be_disabled()
                 page.click('#debug-boot')
                 expect(page.locator('#debug-result')).to_contain_text('коротко нажмите BOOT в течение 5 мин.')
                 expect(page.locator('#debug-measure')).to_be_disabled()
@@ -598,6 +606,28 @@ with tempfile.TemporaryDirectory(prefix='sensor-onboard-ui-') as tmp:
                 expect(page.locator('#debug-connect')).to_be_enabled()
                 expect(page.locator('#debug-wifi-details')).to_be_hidden()
                 expect(page.locator('#debug-wifi-password')).to_be_empty()
+                page.evaluate("window.simDebugFirmware='1.5.34'")
+                page.click('#debug-connect')
+                expect(page.locator('#debug-firmware')).to_have_text('1.5.34')
+                expect(page.locator('#debug-boot-duration')).to_be_enabled()
+                page.select_option('#debug-boot-duration','900')
+                page.check('#debug-boot-continuous')
+                page.uncheck('#debug-boot-send')
+                page.uncheck('#debug-boot-preserve')
+                page.click('#debug-boot')
+                expect(page.locator('#debug-result')).to_contain_text('15 мин.')
+                expect(page.locator('#debug-result')).to_contain_text('повторять нажатия')
+                assert page.evaluate('window.simBootRequest.duration_s')==900
+                assert page.evaluate('window.simBootRequest.continuous') is True
+                assert page.evaluate('window.simBootRequest.send_now') is False
+                assert page.evaluate('window.simBootRequest.preserve_schedule') is False
+                page.evaluate('window.simPressBoot()')
+                expect(page.locator('#debug-temperature')).to_have_text('22,1 °C')
+                expect(page.locator('#debug-result')).to_contain_text('без сохранения и отправки')
+                page.evaluate('window.simPressBoot()')
+                page.click('#debug-disconnect')
+                expect(page.locator('#debug-connect')).to_be_enabled()
+                page.evaluate('window.simDebugFirmware=null')
                 page.click('#debug-connect-uart')
                 expect(page.locator('#debug-connection')).to_contain_text('UART0 подключён')
                 expect(page.locator('#debug-connection')).to_have_attribute('data-state','uart')

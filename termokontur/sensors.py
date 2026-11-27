@@ -412,12 +412,18 @@ def router(require_admin):
             return boot_debug_status(conn, device, now)
 
     @r.delete("/devices/{device}/boot-debug", dependencies=admin)
-    def cancel_boot_debug(device: str):
+    def cancel_boot_debug(device: str, command_id: str | None = Query(default=None, pattern=r"^[0-9a-f]{32}$")):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             get_supported_device(conn, device)
-            conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
-            event(conn, device, "boot_debug", "Команда отладки удалена")
+            current = boot_debug_status(conn, device, int(time.time()))
+            if current:
+                if command_id is not None and command_id != current["command_id"]:
+                    raise HTTPException(409, "Команда изменилась. Обновите состояние датчика.")
+                if current["accepted_at"] is not None:
+                    raise HTTPException(409, "Датчик уже подтвердил команду; отменить сессию таким способом нельзя.")
+                conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
+                event(conn, device, "boot_debug", "Ожидающая команда отладки удалена")
         return {"ok": True}
 
     @r.post("/enroll")

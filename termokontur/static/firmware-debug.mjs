@@ -29,6 +29,13 @@ let connecting = false;
 let connectionError = false;
 let checking = false;
 let bootArmed = false;
+let bootOptionsSupported = false;
+function supportsBootOptions(version) {
+  const parts = String(version || "").split(".");
+  if (parts.length !== 3 || parts.some(x => !/^\d{1,3}$/.test(x))) return false;
+  const [major, minor, patch] = parts.map(Number);
+  return major > 1 || major === 1 && (minor > 5 || minor === 5 && patch >= 30);
+}
 let testing = false, testCancelled = false, testReport = null;
 let delivery = null;
 let auto = false, timer = null, successes = 0, failures = 0;
@@ -57,6 +64,11 @@ function controls() {
   const commandsDisabled = !serial || checking || bootArmed || testing || auto || Boolean(delivery);
   const queriesDisabled = !serial || uartMode || checking || bootArmed || testing;
   for (const name of ["identify", "boot"]) field(name).disabled = queriesDisabled || auto;
+  for (const name of ["boot-duration", "boot-continuous", "boot-send", "boot-preserve"])
+    field(name).disabled = queriesDisabled || auto || !bootOptionsSupported;
+  field("boot-hint").textContent = bootOptionsSupported
+    ? "Короткое нажатие BOOT выполняет замер. Без отправки внеплановый замер остаётся в журнале COM."
+    : "Старые прошивки: одиночный замер, стандартное окно 5 минут. Расширенные настройки — с 1.5.30.";
   field("wifi").disabled = field("wifi-details").hidden && (queriesDisabled || auto);
   field("measure").disabled = queriesDisabled || auto;
   field("auto").disabled = !serial || uartMode || bootArmed || testing || (checking && !auto);
@@ -86,6 +98,12 @@ function serialLog(line) {
   if (delivery) serialLines.dispatchEvent(new CustomEvent("line", {detail:clean.trimStart()}));
   appendLog(clean.replace(/^\s*SETUP password:.*$/i, "SETUP password: [скрыт]"));
   if (bootArmed && clean.startsWith("BOOT: ")) field("result").textContent = clean.slice(6);
+  if (bootArmed && /^TK (?:DEBUG_)?MEASURE /.test(clean.trimStart())) {
+    try {
+      const sample = JSON.parse(clean.trimStart().replace(/^TK (?:DEBUG_)?MEASURE /, ""));
+      showMeasurement({...sample, sensor_error: sample.error || ""});
+    } catch { /* Keep the raw diagnostic line in the log. */ }
+  }
   if (queuedCommand && serial && !checking && clean.trimStart().startsWith("TK READY ")) {
     const command = queuedCommand;
     queuedCommand = null;
@@ -126,6 +144,7 @@ async function sendSerialCommand(command) {
 
 function showIdentity(hello) {
   field("firmware").textContent = hello.firmware || "—";
+  bootOptionsSupported = supportsBootOptions(hello.firmware);
   field("hardware").textContent = hello.hardware_id;
   field("sensor-type").textContent = (hello.sensor_type || "—").toUpperCase();
   field("pending").textContent = hello.pending_records ? "Есть неотправленные замеры" : "Всё отправлено";
@@ -168,7 +187,13 @@ async function checkBoard(command) {
   }
   let message;
   try {
-    const reply = await connection.request(command);
+    const options = command === "arm_boot_debug" && bootOptionsSupported ? {
+      duration_s: Number(field("boot-duration").value),
+      continuous: field("boot-continuous").checked,
+      send_now: field("boot-send").checked,
+      preserve_schedule: field("boot-preserve").checked
+    } : undefined;
+    const reply = await connection.request(command, options);
     if (command === "hello") await verifyIdentity(reply);
     if (serial !== connection) return;
     if (command === "hello") {
@@ -183,6 +208,12 @@ async function checkBoard(command) {
       bootArmed = true;
       setSetupWifi(null);
       message = "Дождитесь приглашения в журнале и коротко нажмите BOOT в течение " + number.format(seconds / 60) + " мин.";
+      if (options) {
+        if (reply.duration_s !== options.duration_s || reply.continuous !== options.continuous ||
+            reply.send_now !== options.send_now || reply.preserve_schedule !== options.preserve_schedule)
+          message += " Плата не подтвердила все выбранные параметры; проверьте версию.";
+        else if (options.continuous) message += " Можно повторять нажатия до окончания сессии.";
+      }
     } else {
       message = showMeasurement(reply);
       if (reply.sensor_error || !Number.isFinite(reply.temperature)) failures++; else successes++;
@@ -216,6 +247,7 @@ async function closePort(connection, message) {
   connecting = true;
   field("connection").textContent = "Освобождаем COM-порт…";
   bootArmed = false;
+  bootOptionsSupported = false;
   setSetupWifi(null);
   controls();
   await connection.close();
@@ -238,6 +270,11 @@ async function connectBoard(external) {
     uartMode = external;
     field("command-on-wake").checked = external;
     successes = failures = 0; stats();
+    bootOptionsSupported = false;
+    field("boot-duration").value = "300";
+    field("boot-continuous").checked = false;
+    field("boot-send").checked = true;
+    field("boot-preserve").checked = true;
     for (const name of diagnostics) field(name).textContent = "—";
     field("connection").textContent = external ? "Адаптер UART0 подключён · 115200 бод." : "Плата подключена · 115200 бод.";
     appendLog(field("connection").textContent);

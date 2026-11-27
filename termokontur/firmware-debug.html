@@ -63,8 +63,18 @@
         <button type="button" id="debug-identify" class="btn secondary" disabled>Прочитать данные платы</button>
         <button type="button" id="debug-measure" class="btn primary" disabled>Пробный замер</button>
         <button type="button" id="debug-wifi" class="btn secondary" aria-expanded="false" aria-controls="debug-wifi-details" disabled>Показать пароль точки Wi-Fi</button>
-        <button type="button" id="debug-boot" class="btn secondary" disabled>Отправить замер по BOOT</button>
       </div>
+      <details id="debug-boot-options">
+        <summary>Временная отладка BOOT</summary>
+        <div class="sensor-form">
+          <label>Длительность<select id="debug-boot-duration" disabled><option value="300">5 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option><option value="3600">60 минут</option></select></label>
+          <label class="inline-check"><input id="debug-boot-continuous" type="checkbox" disabled> Повторные замеры</label>
+          <label class="inline-check"><input id="debug-boot-send" type="checkbox" checked disabled> Отправлять внеплановые замеры</label>
+          <label class="inline-check"><input id="debug-boot-preserve" type="checkbox" checked disabled> Сохранять штатное расписание</label>
+          <button type="button" id="debug-boot" class="btn secondary" disabled>Активировать BOOT</button>
+        </div>
+        <p id="debug-boot-hint" class="hint">Для расширенных настроек требуется прошивка 1.5.30 или новее.</p>
+      </details>
       <div class="heading-actions">
         <label class="debug-interval">Интервал <select id="debug-interval"><option value="5">5 с</option><option value="10" selected>10 с</option><option value="30">30 с</option></select></label>
         <button type="button" id="debug-auto" class="btn secondary" disabled>Запустить автозамер</button>
