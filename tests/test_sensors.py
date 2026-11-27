@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from types import SimpleNamespace
 from zipfile import ZipFile
+from zoneinfo import ZoneInfo
 
 import pytest
 from termokontur import db, maintenance, sensors, sensor_mqtt
@@ -290,18 +291,37 @@ def test_sensor_alerts_use_building_recipient_and_rearm(admin):
         assert notice["user_id"] == "77" and "пропущен сеанс связи" in notice["text"]
 
 
-def test_humidity_report_and_workbook_use_dated_records(admin):
-    from termokontur import reports
+@pytest.mark.parametrize("hour,minute,expected", [
+    (12, 0, (45, 35, 55, 2)),
+    (23, 59, (35, 35, 35, 1)),
+])
+def test_humidity_report_and_workbook_use_dated_records(admin, hour, minute, expected):
+    from termokontur import reports, settings
     d, _, headers, room = setup_sensor(admin)
-    observed = BASE_TIME
+    zone = ZoneInfo(settings.get("timezone", "UTC") or "UTC")
+    # Use a fixed wall-clock time on a recent completed local day. The
+    # fixture's real start time may otherwise put the samples across midnight.
+    anchor = datetime.fromtimestamp(BASE_TIME, zone).replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
+    observed = int(anchor.timestamp())
     values = [record(1, measured_at=observed, humidity=35.0),
               record(2, measured_at=observed + 60, humidity=55.0),
               record(3, measured_at=None, time_quality="unknown", humidity=99.0)]
     assert sync(admin, d, headers, batch(values, next_seq=4)).status_code == 200
-    day = datetime.fromtimestamp(observed, timezone.utc).date().isoformat()
-    row = reports.build(day, day, room["building"])["building_daily"][0]
-    assert (row["humidity_average"], row["humidity_minimum"], row["humidity_maximum"], row["humidity_readings"]) == (45, 35, 55, 2)
+    day = anchor.date().isoformat()
+
+    def humidity_for(day):
+        row = reports.build(day, day, room["building"])["building_daily"][0]
+        return (row["humidity_average"], row["humidity_minimum"],
+                row["humidity_maximum"], row["humidity_readings"])
+
+    assert humidity_for(day) == expected
+    if hour == 23:
+        next_day = datetime.fromtimestamp(observed + 60, zone).date().isoformat()
+        assert next_day != day
+        assert humidity_for(next_day) == (55, 55, 55, 1)
     excel = admin.get("/api/reports/export.xlsx", params={"start": day, "end": day, "building": room["building"]})
+    assert excel.status_code == 200
     with ZipFile(BytesIO(excel.content)) as workbook:
         assert "Влажность" in workbook.read("xl/workbook.xml").decode()
 
