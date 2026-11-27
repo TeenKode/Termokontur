@@ -1663,6 +1663,46 @@ static void serial_command(const CommandSpec &spec, cJSON *request, cJSON *out,
   }
 }
 
+// Reject duplicate object keys before lookup or side effects.
+static bool unique_json_keys(const cJSON *node) {
+  if (!node) return false;
+  if (!cJSON_IsObject(node) && !cJSON_IsArray(node)) return true;
+  unsigned count = 0;
+  for (const auto *a = node->child; a; a = a->next) {
+    if (++count > 64) return false;
+    if (cJSON_IsObject(node)) {
+      if (!a->string) return false;
+      for (const auto *b = node->child; b != a; b = b->next)
+        if (b->string && strcmp(a->string, b->string) == 0) return false;
+    }
+    if (!unique_json_keys(a)) return false;
+  }
+  return true;
+}
+static bool serial_arguments(const cJSON *request, std::initializer_list<std::string_view> allowed) {
+  for (const auto *item = request->child; item; item = item->next)
+    if (!sensor::serial::allowed_argument(item->string, allowed)) return false;
+  return true;
+}
+static bool serial_arguments_valid(const CommandSpec &spec, const cJSON *request) {
+  switch (spec.command) {
+  case Command::configure:
+    // Provisioning has a separate schema; preserve legacy payloads for now.
+    return true;
+  case Command::journal: return serial_arguments(request, {"from_seq", "limit"});
+  case Command::hold:
+  case Command::sleep: return serial_arguments(request, {"seconds"});
+  case Command::sample_now: return serial_arguments(request, {"sync"});
+  case Command::delivery_test: return serial_arguments(request, {"repeat"});
+  case Command::arm_boot_debug:
+    return serial_arguments(request, {"duration_s", "continuous", "send_now", "preserve_schedule"});
+  case Command::sign: return serial_arguments(request, {"message"});
+  default: return serial_arguments(request, {});
+  }
+}
+static cJSON *parse_serial_json(const char *json) {
+  return sensor::serial::safe_json_frame(json) ? cJSON_ParseWithOpts(json, nullptr, true) : nullptr;
+}
 static void serial_request(sensor::serial::Port port, const std::string &line,
                            bool overflow, void *context) {
   auto &session = *static_cast<ConsoleSession *>(context);
@@ -1676,20 +1716,27 @@ static void serial_request(sensor::serial::Port port, const std::string &line,
     if (start == std::string::npos) { cJSON_Delete(out); return; }
     std::string name;
     if (line.compare(start, 6, "TKRPC ") == 0) {
-      request = cJSON_ParseWithOpts(line.c_str() + start + 6, nullptr, true);
+      request = parse_serial_json(line.c_str() + start + 6);
       name = text(request, "cmd");
     } else {
       const auto end = line.find_first_of(" \t", start);
       name = line.substr(start, end == std::string::npos ? end : end - start);
       const auto args = end == std::string::npos ? end : line.find_first_not_of(" \t", end);
       request = args == std::string::npos ? cJSON_CreateObject()
-                                        : cJSON_ParseWithOpts(line.c_str() + args, nullptr, true);
+                                        : parse_serial_json(line.c_str() + args);
     }
-    add(out, "id", text(request, "id"));
+    const auto *id_node = cJSON_GetObjectItemCaseSensitive(request, "id");
+    const auto *cmd_node = cJSON_GetObjectItemCaseSensitive(request, "cmd");
+    const bool id_valid = !id_node || (cJSON_IsString(id_node) &&
+        sensor::serial::valid_id(id_node->valuestring));
+    const bool cmd_valid = !cmd_node || (cJSON_IsString(cmd_node) && name == cmd_node->valuestring);
+    add(out, "id", id_valid ? text(request, "id") : "");
     const auto spec = std::find_if(std::begin(commands), std::end(commands),
                                   [&](const auto &item) { return name == item.name; });
-    if (!cJSON_IsObject(request) || name.empty()) add(out, "error", "invalid_serial_command");
+    if (!cJSON_IsObject(request) || name.empty() || !id_valid || !cmd_valid ||
+        !unique_json_keys(request)) add(out, "error", "invalid_serial_command");
     else if (spec == std::end(commands)) add(out, "error", "Команда не поддерживается. Используйте help.");
+    else if (!serial_arguments_valid(*spec, request)) add(out, "error", "unknown_serial_argument");
     else if (!command_available(*spec, session)) add(out, "error", "Команда недоступна в текущем режиме. Используйте help.");
     else if (session.action != ConsoleAction::none ||
              (session.setup && setup_state != SetupState::waiting)) add(out, "error", "console_closing");
