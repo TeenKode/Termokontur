@@ -525,6 +525,11 @@ static std::string post_once(const std::string &path, const std::string &body,
            ca.empty() ? "public CA bundle" : "provisioned CA", (unsigned)ca.size());
   const int64_t started_us = esp_timer_get_time();
   printf("HTTPS: opening %s, timeout=%d ms\n", path.c_str(), timeout_ms());
+  if (!available() || esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK) {
+    reset_post_client();
+    failure = "https_deadline_or_timeout";
+    return "";
+  }
   esp_err_t err = esp_http_client_open(h, body.size());
   printf("HTTPS: open %s: %s in %lld ms\n", path.c_str(), esp_err_to_name(err),
          (long long)((esp_timer_get_time() - started_us) / 1000));
@@ -535,7 +540,7 @@ static std::string post_once(const std::string &path, const std::string &body,
     stage = "request_body";
     size_t sent = 0;
     while (sent < body.size() && available()) {
-      esp_http_client_set_timeout_ms(h, timeout_ms());
+      if (esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK) break;
       int n = esp_http_client_write(h, body.data() + sent,
                                     std::min((size_t)2048, body.size() - sent));
       if (n <= 0)
@@ -545,15 +550,15 @@ static std::string post_once(const std::string &path, const std::string &body,
     int64_t headers = -1;
     if (sent == body.size() && available()) {
       stage = "response_headers";
-      esp_http_client_set_timeout_ms(h, timeout_ms());
-      headers = esp_http_client_fetch_headers(h);
+      if (esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK)
+        headers = esp_http_client_fetch_headers(h);
     }
     if (headers >= 0) status = esp_http_client_get_status_code(h);
     if (headers >= 0 && status == 200) {
       stage = "response_body";
       char b[1024];
       while (available()) {
-        esp_http_client_set_timeout_ms(h, timeout_ms());
+        if (esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK) break;
         int n = esp_http_client_read(h, b, sizeof b);
         if (n < 0) {
           result.clear();
@@ -576,9 +581,11 @@ static std::string post_once(const std::string &path, const std::string &body,
   complete = status == 200 && esp_http_client_is_complete_data_received(h);
   if (!complete) result.clear();
   const int verify_flags = post_diagnostic.verify_flags;
-  if (!sensor::http_keep_connection(status, complete, !result.empty(),
-                                    available(), verify_flags != 0))
+  if (!sensor::http_accept_response(status, complete, !result.empty(),
+                                     available(), verify_flags != 0)) {
+    result.clear();
     reset_post_client();
+  }
   if (auth && status == 401) { token.clear(); save_provision(); }
   if (result.empty()) {
     retryable = sensor::http_retryable(status, err != ESP_OK, replay_safe, verify_flags != 0);
@@ -923,7 +930,9 @@ static void ota(cJSON *meta, uint16_t mv) {
   mbedtls_sha256_context hash;
   mbedtls_sha256_init(&hash);
   const bool hash_ready = mbedtls_sha256_starts(&hash, 0) == 0;
-  if (hash_ready && esp_http_client_open(h, 0) == ESP_OK && available() &&
+  if (hash_ready && available() &&
+      esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK &&
+      esp_http_client_open(h, 0) == ESP_OK && available() &&
       esp_http_client_set_timeout_ms(h, timeout_ms()) == ESP_OK &&
       esp_http_client_fetch_headers(h) == size &&
       esp_http_client_get_status_code(h) == 200 && available() &&
@@ -935,7 +944,7 @@ static void ota(cJSON *meta, uint16_t mv) {
                                 sizeof(esp_app_desc_t);
     int header_bytes = 0;
     while (header_bytes < header_size && available()) {
-      esp_http_client_set_timeout_ms(h, timeout_ms());
+      if (esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK) break;
       int n = esp_http_client_read(h, (char *)b + header_bytes,
                                    header_size - header_bytes);
       if (n <= 0)
@@ -956,7 +965,7 @@ static void ota(cJSON *meta, uint16_t mv) {
         esp_ota_write(handle, b, header_size) == ESP_OK) {
       received = header_size;
       while (received < size && available()) {
-        esp_http_client_set_timeout_ms(h, timeout_ms());
+        if (esp_http_client_set_timeout_ms(h, timeout_ms()) != ESP_OK) break;
         int n = esp_http_client_read(h, (char *)b,
                                      std::min((int)sizeof b, size - received));
         if (n <= 0 || !available() || mbedtls_sha256_update(&hash, b, n) != 0 ||
