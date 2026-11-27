@@ -29,6 +29,28 @@ static void test_serial_lines() {
 
 int main() {
   {
+    using sensor::serial::safe_json_frame;
+    assert(safe_json_frame(R"({"cmd":"hello","id":"123"})"));
+    assert(safe_json_frame(R"({"password":"literal\\u0000","ca":"line\nline"})"));
+    assert(!safe_json_frame(R"({"cmd":"reboot\u0000ignored"})"));
+    assert(!safe_json_frame(R"({"id\u0000other":"x"})"));
+    assert(!safe_json_frame(std::string(9, '[') + std::string(9, ']')));
+    assert(safe_json_frame(std::string(8, '[') + std::string(8, ']')));
+    assert(!safe_json_frame(R"({"cmd":"hello")"));
+    assert(!safe_json_frame("}"));
+    assert(!safe_json_frame("\"unterminated\\"));
+    assert(!safe_json_frame(std::string("{\"x\":\"") + char(1) + "\"}"));
+    assert(sensor::serial::valid_id("123-abc"));
+    assert(!sensor::serial::valid_id(std::string(129, 'a')));
+    assert(!sensor::serial::valid_id("abc\n"));
+    assert(sensor::serial::allowed_argument("id", {}));
+    assert(sensor::serial::allowed_argument("cmd", {}));
+    assert(sensor::serial::allowed_argument("seconds", {"seconds"}));
+    assert(!sensor::serial::allowed_argument("second", {"seconds"}));
+    assert(!sensor::serial::allowed_argument("Seconds", {"seconds"}));
+  }
+
+  {
     const std::string first(32, 'a'), second(32, 'b');
     assert(sensor::boot_command_id(first));
     assert(!sensor::boot_command_id(std::string(32, 'A')));
