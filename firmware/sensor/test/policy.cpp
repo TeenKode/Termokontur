@@ -29,6 +29,42 @@ static void test_serial_lines() {
 
 int main() {
   {
+    using namespace sensor::serial;
+    assert(provision_field("ssid", true, false) == ProvisionField::string);
+    assert(provision_field("epoch", false, false) == ProvisionField::number);
+    assert(provision_field("config", false, true) == ProvisionField::object);
+    assert(provision_field("random_setup_password", true, false) == ProvisionField::boolean);
+    assert(provision_field("csrf", true, false) == ProvisionField::string);
+    assert(provision_field("csrf", false, false) == ProvisionField::invalid);
+    assert(provision_field("defer_finish", false, false) == ProvisionField::boolean);
+    assert(provision_field("defer_finish", false, true) == ProvisionField::invalid);
+    assert(provision_field("factory_ticket", false, true) == ProvisionField::string);
+    assert(provision_field("factory_ticket", false, false) == ProvisionField::invalid);
+    assert(provision_field("password_confirm", false, false) == ProvisionField::invalid);
+    assert(provision_config_field("wifi_min_mv"));
+    assert(!provision_config_field("wifi_min"));
+    assert(provision_device_id(""));
+    assert(provision_device_id("tk-0123456789abcdef"));
+    assert(!provision_device_id("tk-0123456789abcdeg"));
+    assert(lower_hex(std::string(64, 'a'), 64));
+    assert(!lower_hex(std::string(64, 'G'), 64));
+    assert(provision_url("https://termokontur.local"));
+    assert(provision_url("https://10.0.0.1:8092/panel/"));
+    assert(provision_url("https://[::1]:443"));
+    assert(!provision_url("https:///panel"));
+    assert(!provision_url("https://:443"));
+    assert(!provision_url("https://host:65536"));
+    assert(!provision_url("https://host:0"));
+    assert(!provision_url("https://host:"));
+    assert(!provision_url("https://host:bad"));
+    assert(!provision_url("https://host\\path"));
+    assert(!provision_url("https://host name"));
+    assert(!provision_url("https://user@host"));
+    assert(!provision_url("http://host"));
+    assert(!provision_url("https://[::1"));
+  }
+
+  {
     using sensor::serial::safe_json_frame;
     assert(safe_json_frame(R"({"cmd":"hello","id":"123"})"));
     assert(safe_json_frame(R"({"password":"literal\\u0000","ca":"line\nline"})"));
