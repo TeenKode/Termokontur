@@ -60,6 +60,10 @@ inline uint32_t radio_budget_s(uint32_t configured, bool diagnostic) {
 inline int http_timeout_ms(int64_t remaining_us) {
   return static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(15000, remaining_us / 1000)));
 }
+inline bool http_keep_connection(int status, bool complete, bool nonempty,
+                                 bool radio_available, bool certificate_error) {
+  return status == 200 && complete && nonempty && radio_available && !certificate_error;
+}
 inline bool http_retryable(int status, bool open_failed, bool replay_safe, bool certificate_error) {
   if (certificate_error) return false;
   return (status <= 0 && (open_failed || replay_safe)) ||
