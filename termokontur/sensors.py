@@ -134,6 +134,35 @@ class Record(Strict):
         return self
 
 
+class BootDebugRequest(Strict):
+    duration_s: int = 300
+    send_now: bool = True
+    preserve_schedule: bool = True
+
+    @field_validator("duration_s")
+    @classmethod
+    def allowed_duration(cls, value):
+        if value not in (300, 900, 1800, 3600):
+            raise ValueError("Выберите 5, 15, 30 или 60 минут")
+        return value
+
+
+BOOT_DEBUG_TTL = 7 * 86400
+
+
+def boot_debug_status(conn, device, now):
+    row = conn.execute("SELECT command_id,duration_s,send_now,preserve_schedule,expires_at,accepted_at "
+                       "FROM sensor_boot_debug WHERE device_id=?", (device,)).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["send_now"] = bool(data["send_now"])
+    data["preserve_schedule"] = bool(data["preserve_schedule"])
+    data["status"] = ("accepted" if data["accepted_at"] is not None
+                      else "expired" if data["expires_at"] <= now else "pending")
+    return data
+
+
 class Sync(Strict):
     model: SensorModel
     sensor_type: SensorType = "sht4x"
@@ -153,9 +182,13 @@ class Sync(Strict):
     replay: bool = False
     journal_end: bool = False
     next_send_in_s: int | None = Field(default=None, ge=0, le=604800)
+    boot_debug_supported: bool = False
+    boot_debug_ack: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
     @model_validator(mode="after")
     def sequence(self):
+        if self.boot_debug_ack is not None and not self.boot_debug_supported:
+            raise ValueError("Подтверждение отладки без поддержки протокола")
         if self.device_ack is None:
             if self.replay or self.device_lost_base is not None:
                 raise ValueError("Не указан подтверждённый номер журнала")
@@ -315,6 +348,8 @@ def router(require_admin):
                 conn.execute("""INSERT INTO sensor_room_history VALUES(?,?,?)
                     ON CONFLICT(device_id,starts_at) DO UPDATE SET room_id=excluded.room_id""",
                     (device, int(time.time()), payload.room_id))
+            if not payload.enabled or current["room_id"] != payload.room_id:
+                conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
             conn.execute("UPDATE sensor_devices SET name=?,room_id=?,enabled=? WHERE id=?",
                          (payload.name.strip(), payload.room_id, payload.enabled, device))
             event(conn, device, "updated", "Изменены имя, помещение или доступ")
@@ -325,6 +360,7 @@ def router(require_admin):
         code = secrets.token_urlsafe(32)
         with db.connect() as conn:
             get_supported_device(conn, device)
+            conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
             identity = conn.execute("SELECT fingerprint FROM sensor_identities WHERE device_id=?", (device,)).fetchone()
             if identity:
                 conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
@@ -346,6 +382,43 @@ def router(require_admin):
             conn.execute("UPDATE sensor_devices SET config=? WHERE id=?", (payload.model_dump_json(), device))
             event(conn, device, "config", f"Ожидает доставки: версия {payload.version}")
         return payload.model_dump()
+
+    @r.get("/devices/{device}/boot-debug", dependencies=admin)
+    def get_boot_debug(device: str):
+        with db.connect() as conn:
+            get_supported_device(conn, device)
+            return boot_debug_status(conn, device, int(time.time()))
+
+    @r.put("/devices/{device}/boot-debug", dependencies=admin)
+    def queue_boot_debug(device: str, payload: BootDebugRequest):
+        now = int(time.time())
+        with db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            d = get_supported_device(conn, device)
+            check_room(conn, d["room_id"])
+            if not d["enabled"] or not d["hardware_id"] or not d["token_hash"]:
+                raise HTTPException(409, "Сначала подключите и разрешите датчик")
+            command_id = secrets.token_hex(16)
+            conn.execute("""INSERT INTO sensor_boot_debug
+                (device_id,command_id,duration_s,send_now,preserve_schedule,expires_at,accepted_at)
+                VALUES(?,?,?,?,?,?,NULL)
+                ON CONFLICT(device_id) DO UPDATE SET command_id=excluded.command_id,
+                    duration_s=excluded.duration_s,send_now=excluded.send_now,
+                    preserve_schedule=excluded.preserve_schedule,expires_at=excluded.expires_at,
+                    accepted_at=NULL""",
+                (device, command_id, payload.duration_s, payload.send_now,
+                 payload.preserve_schedule, now + BOOT_DEBUG_TTL))
+            event(conn, device, "boot_debug", "Отладка ожидает доставки при синхронизации")
+            return boot_debug_status(conn, device, now)
+
+    @r.delete("/devices/{device}/boot-debug", dependencies=admin)
+    def cancel_boot_debug(device: str):
+        with db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            get_supported_device(conn, device)
+            conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
+            event(conn, device, "boot_debug", "Команда отладки удалена")
+        return {"ok": True}
 
     @r.post("/enroll")
     def enroll(payload: Enrollment):
@@ -482,8 +555,25 @@ def router(require_admin):
             if ota:
                 ota["generation"] = d["ota_generation"]
             config = json.loads(d["config"])
+            command = None
+            if payload.boot_debug_supported:
+                if payload.boot_debug_ack:
+                    changed = conn.execute("""UPDATE sensor_boot_debug SET accepted_at=?
+                        WHERE device_id=? AND command_id=? AND accepted_at IS NULL AND expires_at>?""",
+                        (now, device, payload.boot_debug_ack, now)).rowcount
+                    if changed:
+                        event(conn, device, "boot_debug", "Датчик подтвердил команду отладки")
+                pending_debug = boot_debug_status(conn, device, now)
+                if complete and pending_debug and pending_debug["status"] == "pending":
+                    command = {key: pending_debug[key] for key in
+                               ("command_id", "duration_s", "send_now", "preserve_schedule", "expires_at")}
+                    # Do not request OTA at the same time as remote debugging.
+                    ota = None
         # The context manager has committed before an ACK leaves the server.
-        return {"ack_seq": ack, "time": now, "config": config, "ota": ota}
+        result = {"ack_seq": ack, "time": now, "config": config, "ota": ota}
+        if command is not None:
+            result["boot_debug"] = command
+        return result
 
     @r.get("/devices/{device}/records", dependencies=admin)
     def records(device: str, limit: int = Query(500, ge=1, le=5000),
