@@ -1211,9 +1211,36 @@ static void serial_test_measurement(cJSON *out, bool setup_mode) {
     sensor::scan_i2c([] { return charging(); });
 }
 
+static bool unique_json_keys(const cJSON *node);
+static bool provision_shape(const cJSON *j, bool web, bool factory) {
+  using sensor::serial::ProvisionField;
+  if (!cJSON_IsObject(j) || !unique_json_keys(j)) return false;
+  for (const auto *item = j->child; item; item = item->next) {
+    switch (sensor::serial::provision_field(item->string, web, factory)) {
+    case ProvisionField::string:
+      if (!cJSON_IsString(item)) return false;
+      break;
+    case ProvisionField::boolean:
+      if (!cJSON_IsBool(item)) return false;
+      break;
+    case ProvisionField::number:
+      if (!cJSON_IsNumber(item)) return false;
+      break;
+    case ProvisionField::object:
+      if (!cJSON_IsObject(item)) return false;
+      for (const auto *field = item->child; field; field = field->next)
+        if (!sensor::serial::provision_config_field(field->string)) return false;
+      break;
+    default: return false;
+    }
+  }
+  return true;
+}
 static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = false) {
   std::lock_guard<std::mutex> lock(provision_mutex);
   if (setup_state != SetupState::waiting || charging()) return "Настройка завершена или подключена зарядка. Отключите зарядку и войдите в настройки заново.";
+  if (!provision_shape(j, require_nonce, factory))
+    return "Неизвестные, повторяющиеся или некорректные поля настройки.";
   std::string s = text(j, "ssid"), p = text(j, "password"),
               url = text(j, "server"), id = text(j, "device"),
               key = text(j, "code"), root = text(j, "ca");
@@ -1229,13 +1256,11 @@ static std::string provision_apply(cJSON *j, bool require_nonce, bool factory = 
   const double epoch = number(j, "epoch");
   bool valid = std::isfinite(epoch) && std::floor(epoch) == epoch && sensor::supported(kind.c_str()) && (!require_nonce || text(j, "csrf") == setup_nonce) && !s.empty() && s.size() <= 32 &&
                (p.empty() || (p.size() >= 8 && p.size() <= 63)) &&
-               url.rfind("https://", 0) == 0 && url.size() > 8 &&
-               url.size() <= 240 && url.find('@') == std::string::npos &&
-               url.find_first_of("?#\r\n") == std::string::npos &&
-               ((id.empty() && key.empty()) || (id.size() == 19 && id.rfind("tk-", 0) == 0 &&
+               sensor::serial::provision_url(url) &&
+               ((id.empty() && key.empty()) || (!id.empty() && sensor::serial::provision_device_id(id) &&
                  (key.empty() || (key.size() >= 32 && key.size() <= 100)))) && root.size() <= 8000 && epoch >= 1700000000 && epoch <= 4102444800;
   if (!valid) return "Проверьте поля и получение времени сервера.";
-  if (factory && (text(j,"hardware_id") != sensor::identity::hardware_id() || text(j,"factory_ticket").size() != 64 || !id.empty() || !key.empty()))
+  if (factory && (text(j,"hardware_id") != sensor::identity::hardware_id() || !sensor::serial::lower_hex(text(j,"factory_ticket"), 64) || !id.empty() || !key.empty()))
     return "Invalid factory authorization";
   if (!setup_password_valid) return "Пароль сети настройки: 8–63 латинских символа, цифры или знаки. Повтор должен совпадать.";
   if (kind != sensor_type && state.next != state.ack) return "Перед сменой типа передайте накопленные измерения на сервер.";
@@ -1315,7 +1340,8 @@ static bool import_factory_setup(bool provisioned) {
       sensor::crc32(payload.data(), header[1]) != header[2]) {
     puts("FACTORY: invalid seed CRC"); return false;
   }
-  auto *j = cJSON_Parse(payload.data());
+  if (!sensor::serial::safe_json_frame(std::string_view(payload.data(), header[1]))) return false;
+  auto *j = cJSON_ParseWithLengthOpts(payload.data(), payload.size(), nullptr, true);
   if (!j) return false;
   auto error = provision_apply(j, false, true); cJSON_Delete(j);
   if (!error.empty()) { puts("FACTORY: settings import failed"); return false; }
@@ -1334,7 +1360,8 @@ static esp_err_t setup_save(httpd_req_t *req) {
     if (got <= 0) return ESP_FAIL;
     n += got;
   }
-  auto j = cJSON_Parse(body.c_str());
+  auto j = sensor::serial::safe_json_frame(body)
+      ? cJSON_ParseWithOpts(body.c_str(), nullptr, true) : nullptr;
   if (!j) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Не удалось прочитать запрос. Повторите настройку.");
   auto error = provision_apply(j, true); cJSON_Delete(j);
   if (!error.empty()) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, error.c_str());
@@ -1687,8 +1714,8 @@ static bool serial_arguments(const cJSON *request, std::initializer_list<std::st
 static bool serial_arguments_valid(const CommandSpec &spec, const cJSON *request) {
   switch (spec.command) {
   case Command::configure:
-    // Provisioning has a separate schema; preserve legacy payloads for now.
-    return true;
+    // The shared provisioning validator checks the complete schema.
+    return provision_shape(request, false, false);
   case Command::journal: return serial_arguments(request, {"from_seq", "limit"});
   case Command::hold:
   case Command::sleep: return serial_arguments(request, {"seconds"});
