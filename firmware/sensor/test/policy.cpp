@@ -351,6 +351,12 @@ int main() {
   assert(sensor::http_timeout_ms(20000000) == 15000);
   assert(sensor::http_timeout_ms(3250000) == 3250);
   assert(sensor::http_timeout_ms(-1) == 1);
+  assert(sensor::http_accept_response(200, true, true, true, false));
+  assert(!sensor::http_accept_response(200, true, true, false, false));
+  assert(!sensor::http_accept_response(200, true, true, true, true));
+  assert(!sensor::http_accept_response(200, false, true, true, false));
+  assert(!sensor::http_accept_response(200, true, false, true, false));
+  assert(!sensor::http_accept_response(401, true, true, true, false));
   assert(sensor::http_keep_connection(200, true, true, true, false));
   assert(!sensor::http_keep_connection(401, true, true, true, false));
   assert(!sensor::http_keep_connection(200, false, true, true, false));
