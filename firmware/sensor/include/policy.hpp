@@ -30,6 +30,13 @@ inline bool valid_server_epoch(double value) {
   return std::isfinite(value) && value >= 1700000000.0 &&
          value <= 4102444800.0 && std::floor(value) == value;
 }
+// A persisted epoch is only a TLS bootstrap hint, never a measurement clock.
+inline bool valid_clock_epoch(int64_t epoch) {
+  return epoch >= 1700000000LL && epoch <= 4102444800LL;
+}
+inline bool retained_clock_valid(bool retained, int64_t epoch) {
+  return retained && valid_clock_epoch(epoch);
+}
 inline bool valid_replay(double rewind, double ack, uint64_t device_ack, bool supported, bool replaying) {
   return supported && !replaying && device_ack > 1 &&
          std::isfinite(rewind) && std::floor(rewind) == rewind &&
