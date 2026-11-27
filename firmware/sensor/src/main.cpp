@@ -596,6 +596,17 @@ static std::string post(const std::string &path, const std::string &body,
   if (!failure.empty()) last_error = failure;
   return "";
 }
+static bool unique_json_keys(const cJSON *node);
+static cJSON *parse_server_json(const std::string &body) {
+  if (body.empty() || body.size() > 12000 || !sensor::serial::safe_json_frame(body))
+    return nullptr;
+  auto *j = cJSON_ParseWithOpts(body.c_str(), nullptr, true);
+  if (!cJSON_IsObject(j) || !unique_json_keys(j)) {
+    cJSON_Delete(j);
+    return nullptr;
+  }
+  return j;
+}
 static uint8_t time_quality = 0;
 static bool server_supports_replay = false;
 static bool server_supports_usb_sync = false;
@@ -609,13 +620,17 @@ static bool sync_time() {
     last_error = "tls_clock_invalid"; puts("TLS: invalid clock; configure the board again"); return false;
   }
   auto response = post("/api/sensors/bootstrap", "{}", false);
-  auto j = cJSON_Parse(response.c_str());
+  auto j = parse_server_json(response);
   if (!j) return false;
   double epoch = number(j, "time");
   auto root = cJSON_GetObjectItemCaseSensitive(j, "ca");
-  bool valid = epoch >= 1700000000 && epoch <= 4102444800 &&
-               std::floor(epoch) == epoch && cJSON_IsString(root) &&
+  bool valid = sensor::valid_server_epoch(epoch) && cJSON_IsString(root) &&
                strlen(root->valuestring) <= 8000;
+  for (const auto *key : {"sync_replay", "usb_powered_sync", "sync_tail_loss",
+                          "sync_next_send", "boot_debug"}) {
+    const auto *item = cJSON_GetObjectItemCaseSensitive(j, key);
+    if (item && !cJSON_IsBool(item)) valid = false;
+  }
   if (!valid) {
     cJSON_Delete(j);
     last_error = "invalid_server_bootstrap";
@@ -760,12 +775,12 @@ static bool identity_authenticate() {
   auto *j = identity_payload();
   auto body = stringify(j); cJSON_Delete(j);
   auto response = post("/api/sensors/auth/challenge", body, false);
-  j = cJSON_Parse(response.c_str());
+  j = parse_server_json(response);
   auto challenge = text(j, "challenge"), message = text(j, "message");
   cJSON_Delete(j);
   auto expected = "TK-AUTH-1\n" + challenge + "\n" + sensor::identity::fingerprint() + "\n" +
                   sensor::identity::hardware_id() + "\n" + sensor_type + "\n" + firmware_version();
-  if (challenge.size() != 64 || message != expected) return false;
+  if (!sensor::serial::lower_hex(challenge, 64) || message != expected) return false;
   auto signature = sensor::identity::sign(message, true);
   if (signature.empty()) return false;
   j = identity_payload(); add(j, "challenge", challenge); add(j, "signature", signature);
@@ -773,14 +788,15 @@ static bool identity_authenticate() {
   body = stringify(j); cJSON_Delete(j);
   response = post("/api/sensors/auth/prove", body, false);
   if (response.empty()) return false;
-  j = cJSON_Parse(response.c_str());
+  j = parse_server_json(response);
   auto status = text(j, "status"), id = text(j, "device_id"), credential = text(j, "token");
   cJSON_Delete(j);
   if (status != "approved") {
     last_error = status == "pending" ? "authorization_pending" : "authorization_required";
     return false;
   }
-  if (id.size() != 19 || id.rfind("tk-", 0) || credential.size() != 64) return false;
+  if (id.empty() || !sensor::serial::provision_device_id(id) ||
+      !sensor::serial::lower_hex(credential, 64)) return false;
   device = id; token = credential;
   auto ticket = factory_ticket; factory_ticket.clear();
   if (save_provision()) return true;
@@ -805,10 +821,10 @@ static bool enroll() {
   auto b = stringify(j);
   cJSON_Delete(j);
   auto response = post("/api/sensors/enroll", b, false);
-  j = cJSON_Parse(response.c_str());
+  j = parse_server_json(response);
   auto t = text(j, "token");
   cJSON_Delete(j);
-  if (t.size() != 64)
+  if (!sensor::serial::lower_hex(t, 64))
     return false;
   token = t;
   if (!save_provision()) {
@@ -1059,12 +1075,26 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     auto body = stringify(j);
     cJSON_Delete(j);
     auto response = post("/api/sensors/devices/" + device + "/sync", body);
-    j = cJSON_Parse(response.c_str());
-    if (!j)
+    j = parse_server_json(response);
+    if (!j) {
+      if (!response.empty()) last_error = "invalid_sync_response";
       return false;
+    }
+    const double epoch = number(j, "time");
+    if (!sensor::valid_server_epoch(epoch)) {
+      cJSON_Delete(j);
+      last_error = "invalid_sync_time";
+      return false;
+    }
     auto rewind = cJSON_GetObjectItemCaseSensitive(j, "replay_from");
-    if (server_supports_replay && !replaying && cJSON_IsNumber(rewind) &&
-        sensor::valid_ack(rewind->valuedouble, 1, state.ack - 1)) {
+    if (rewind && (!cJSON_IsNumber(rewind) ||
+        !sensor::valid_replay(rewind->valuedouble, number(j, "ack_seq"), state.ack,
+                              server_supports_replay, replaying))) {
+      cJSON_Delete(j);
+      last_error = "invalid_replay_cursor";
+      return false;
+    }
+    if (rewind) {
       cursor = rewind->valuedouble;
       replaying = true;
       cJSON_Delete(j);
@@ -1078,6 +1108,16 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
       last_error = "invalid_ack";
       return false;
     }
+    auto *config_node = cJSON_GetObjectItemCaseSensitive(j, "config");
+    Config candidate = cfg;
+    // Missing config remains valid for older servers. A malformed supplied
+    // configuration is rejected before moving the durable journal cursor.
+    if (config_node && !cJSON_IsNull(config_node) &&
+        !parse_config(config_node, candidate)) {
+      cJSON_Delete(j);
+      last_error = "invalid_server_config";
+      return false;
+    }
     uint64_t ack = ack_num;
     State old = state;
     if (ack > state.ack) {
@@ -1085,20 +1125,19 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
       state.ack = ack;
     }
     replaying = ack < state.ack;
-    int64_t now = number(j, "time");
-    if (now >= 1700000000 && now <= 4102444800) {
-      timeval tv{(time_t)now, 0};
-      settimeofday(&tv, nullptr);
-      time_quality = 2;
-      rt.clock_valid = true;
-      state.saved_time = now;
-    }
+    const auto now = static_cast<int64_t>(epoch);
+    state.saved_time = now;
     if (!save_state()) {
       state = old;
       cJSON_Delete(j);
       return false;
     }
-    config_from(cJSON_GetObjectItemCaseSensitive(j, "config"));
+    // Do not change the active wall clock if the NVS ACK checkpoint failed.
+    timeval tv{static_cast<time_t>(now), 0};
+    settimeofday(&tv, nullptr);
+    time_quality = 2;
+    rt.clock_valid = true;
+    config_from(config_node);
     if (!code.empty()) {
       code.clear();
       save_provision();
@@ -1211,7 +1250,6 @@ static void serial_test_measurement(cJSON *out, bool setup_mode) {
     sensor::scan_i2c([] { return charging(); });
 }
 
-static bool unique_json_keys(const cJSON *node);
 static bool provision_shape(const cJSON *j, bool web, bool factory) {
   using sensor::serial::ProvisionField;
   if (!cJSON_IsObject(j) || !unique_json_keys(j)) return false;

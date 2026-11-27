@@ -26,6 +26,15 @@ inline uint32_t battery_settle_remaining_ms(int64_t elapsed_us) {
 inline uint64_t sleep_elapsed_s(int64_t started_us, int64_t woke_us) {
   return woke_us > started_us ? (woke_us - started_us) / 1000000 : 0;
 }
+inline bool valid_server_epoch(double value) {
+  return std::isfinite(value) && value >= 1700000000.0 &&
+         value <= 4102444800.0 && std::floor(value) == value;
+}
+inline bool valid_replay(double rewind, double ack, uint64_t device_ack, bool supported, bool replaying) {
+  return supported && !replaying && device_ack > 1 &&
+         std::isfinite(rewind) && std::floor(rewind) == rewind &&
+         rewind >= 1 && rewind < static_cast<double>(device_ack) && rewind == ack;
+}
 inline bool valid_ack(double value, uint64_t first, uint64_t sent_end) {
   return value >= static_cast<double>(first) &&
          value <= static_cast<double>(sent_end) &&
