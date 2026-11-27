@@ -326,6 +326,41 @@ def test_humidity_report_and_workbook_use_dated_records(admin, hour, minute, exp
         assert "Влажность" in workbook.read("xl/workbook.xml").decode()
 
 
+def test_remote_boot_debug_queue(admin):
+    device, _, headers, _ = setup_sensor(admin)
+    path = f'/api/sensors/devices/{device["device_id"]}/boot-debug'
+    assert admin.get(path).json() is None
+    for invalid in (299, 300.0, "300", True, 3601):
+        assert admin.put(path, json={"duration_s": invalid}).status_code == 422
+    assert admin.put(path, json={"send_now": 1}).status_code == 422
+    queued = admin.put(path, json={"duration_s": 900, "send_now": False}).json()
+    command_id = queued["command_id"]
+    assert queued["status"] == "pending" and queued["preserve_schedule"] is True
+    legacy = sync(admin, device, headers, batch()).json()
+    assert "boot_debug" not in legacy
+    partial = sync(admin, device, headers, batch(next_seq=3, boot_debug_supported=True)).json()
+    assert "boot_debug" not in partial
+    complete = batch([record(2)], next_seq=3, boot_debug_supported=True)
+    offered = sync(admin, device, headers, complete).json()
+    assert offered["boot_debug"]["command_id"] == command_id
+    assert offered["boot_debug"]["duration_s"] == 900
+    assert offered["boot_debug"]["send_now"] is False
+    assert offered["ota"] is None
+    assert sync(admin, device, headers, complete).json()["boot_debug"] == offered["boot_debug"]
+    assert sync(admin, device, headers, {**complete, "boot_debug_ack": "0"*32}).json()["boot_debug"]["command_id"] == command_id
+    confirmed = sync(admin, device, headers, {**complete, "boot_debug_ack": command_id}).json()
+    assert "boot_debug" not in confirmed
+    assert admin.get(path).json()["status"] == "accepted"
+    replacement = admin.put(path, json={}).json()
+    assert replacement["command_id"] != command_id
+    with db.connect() as conn:
+        conn.execute("UPDATE sensor_boot_debug SET expires_at=0")
+    assert admin.get(path).json()["status"] == "expired"
+    assert "boot_debug" not in sync(admin, device, headers, complete).json()
+    assert admin.delete(path).status_code == 200
+    assert admin.get(path).json() is None
+
+
 def test_keys_disable_configuration_and_migration(admin):
     d,_,headers,room=setup_sensor(admin)
     assert sync(admin,d,{"Authorization":"Bearer wrong"},batch()).status_code==401
