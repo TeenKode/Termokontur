@@ -29,6 +29,25 @@ static void test_serial_lines() {
 
 int main() {
   {
+    assert(sensor::valid_server_epoch(1700000000.0));
+    assert(sensor::valid_server_epoch(4102444800.0));
+    assert(!sensor::valid_server_epoch(1699999999.0));
+    assert(!sensor::valid_server_epoch(4102444801.0));
+    assert(!sensor::valid_server_epoch(1700000000.5));
+    assert(!sensor::valid_server_epoch(NAN));
+    assert(!sensor::valid_server_epoch(INFINITY));
+    assert(!sensor::valid_server_epoch(1e100));
+    assert(sensor::valid_replay(3, 3, 5, true, false));
+    assert(!sensor::valid_replay(3, 4, 5, true, false));
+    assert(!sensor::valid_replay(3.5, 3.5, 5, true, false));
+    assert(!sensor::valid_replay(5, 5, 5, true, false));
+    assert(!sensor::valid_replay(1, 1, 1, true, false));
+    assert(!sensor::valid_replay(3, 3, 5, false, false));
+    assert(!sensor::valid_replay(3, 3, 5, true, true));
+    assert(!sensor::valid_replay(NAN, NAN, 5, true, false));
+  }
+
+  {
     using namespace sensor::serial;
     assert(provision_field("ssid", true, false) == ProvisionField::string);
     assert(provision_field("epoch", false, false) == ProvisionField::number);
