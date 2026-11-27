@@ -32,7 +32,12 @@ public:
   template<class Write>
   bool save(const State &value, Write write) {
     if (known && same_state(persisted, value)) return true;
-    if (!write(value)) return false;
+    if (!write(value)) {
+      // nvs_set_blob may have succeeded before nvs_commit failed. The
+      // previous cached state is no longer known to match the storage.
+      known = false;
+      return false;
+    }
     loaded(value);
     return true;
   }
