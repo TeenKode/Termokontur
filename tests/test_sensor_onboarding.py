@@ -133,6 +133,81 @@ def test_usb_approval_requires_admin_and_proof(client):
     assert client.get("/sensors/firmware-debug").status_code == 401
 
 
+def test_usb_archive_recovery_keeps_the_previous_board_registration(admin):
+    private, ident = identity()
+    target_room = room()
+    settings = {'name': 'Датчик', 'room_id': target_room['id']}
+    endpoint = '/api/sensors/onboard'
+    unknown = admin.post(endpoint, json={**proof(admin, private, ident), **settings, 'archive_recovery': True})
+    assert unknown.status_code == 409
+    assert admin.get('/api/sensors/devices').json() == []
+    created = admin.post('/api/sensors/devices', json=settings)
+    created.raise_for_status()
+    device = created.json()['device_id']
+    enrolled = admin.post('/api/sensors/enroll', json={'device_id': device, 'code': created.json()['code'],
+        'hardware_id': ident['hardware_id'], 'model': 'c3-sht40-v1'})
+    enrolled.raise_for_status()
+    invalid = admin.post(endpoint, json={**proof(admin, private, ident), **settings,
+                                         'archive_device': 'tk-0000000000000000'})
+    assert invalid.status_code == 409
+    recovered = admin.post(endpoint, json={**proof(admin, private, ident), **settings, 'archive_device': device})
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()['device_id'] == device
+    again = admin.post(endpoint, json={**proof(admin, private, ident), **settings, 'archive_recovery': True})
+    assert again.json()['device_id'] == device
+    assert [d['id'] for d in admin.get('/api/sensors/devices').json()] == [device]
+
+
+def test_usb_type_change_waits_for_proof_from_the_reconfigured_board(admin):
+    private, board = identity()
+    setup = {"name": "Датчик", "room_id": room()["id"]}
+    onboard = "/api/sensors/onboard"
+    prove = "/api/sensors/auth/prove"
+    initial = admin.post(onboard, json={**proof(admin, private, board), **setup})
+    initial.raise_for_status()
+    device = initial.json()["device_id"]
+    first_auth = admin.post(prove, json=proof(admin, private, board))
+    first_auth.raise_for_status()
+    old_headers = {"Authorization": "Bearer " + first_auth.json()["token"]}
+    sync = f"/api/sensors/devices/{device}/sync"
+
+    def reading(seq, kind, humidity):
+        return {
+            "model": "c3-sht40-v1", "sensor_type": kind, "firmware": board["firmware"],
+            "records": [{"seq": seq, "boot_id": "0123456789abcdef", "uptime_s": 1800 * seq,
+                         "time_quality": "unknown", "temperature": 21.5, "humidity": humidity,
+                         "battery_mv": 3900, "interval_s": 1800}],
+            "next_seq": seq + 1, "lost": 0, "rssi": -65, "battery_mv": 3900,
+            "config_version": 1, "boots": 3,
+        }
+
+    assert admin.post(sync, headers=old_headers, json=reading(1, "sht4x", 45)).json()["ack_seq"] == 2
+    changed = {**board, "sensor_type": "ds18b20"}
+    for _ in range(2):
+        staged = admin.post(onboard, json={**proof(admin, private, changed), **setup, "archive_device": device})
+        staged.raise_for_status()
+        assert staged.json()["pending_sensor_type"] == "ds18b20"
+    # USB disconnects before writing. The old token still uploads old samples.
+    assert admin.post(sync, headers=old_headers, json=reading(2, "sht4x", 46)).json()["ack_seq"] == 3
+    current = admin.get("/api/sensors/devices").json()[0]
+    assert (current["sensor_type"], current["pending_sensor_type"]) == ("sht4x", "ds18b20")
+    still_old = admin.post(prove, json=proof(admin, private, board))
+    still_old.raise_for_status()
+    wrong = admin.post(prove, json=proof(admin, private, {**board, "sensor_type": "dht22"}))
+    assert wrong.status_code == 409
+
+    # Retrying the setup and starting with the new type finishes the transition.
+    new_auth = admin.post(prove, json=proof(admin, private, changed))
+    new_auth.raise_for_status()
+    new_auth = admin.post(prove, json=proof(admin, private, changed))
+    new_auth.raise_for_status()
+    new_headers = {"Authorization": "Bearer " + new_auth.json()["token"]}
+    assert admin.post(sync, headers=new_headers, json=reading(3, "ds18b20", None)).json()["ack_seq"] == 4
+    current = admin.get("/api/sensors/devices").json()[0]
+    assert (current["sensor_type"], current["pending_sensor_type"]) == ("ds18b20", None)
+    assert [row["humidity"] for row in admin.get(f"/api/sensors/devices/{device}/records").json()] == [None, 46, 45]
+
+
 def test_firmware_debug_uses_panel_version(admin):
     page = admin.get("/sensors/firmware-debug")
     assert page.status_code == 200
@@ -393,7 +468,8 @@ def test_bootstrap_uses_server_time_and_active_public_certificate(client, monkey
                      client.post('/api/sensors/bootstrap', json={})):
         assert response.status_code == 200
         assert response.json() == {'time':1794700100, 'ca':'active-public-chain', 'sync_replay':True,
-                                   'usb_powered_sync':True, 'sync_tail_loss':True, 'sync_next_send':True, 'boot_debug':True}
+                                   'usb_powered_sync':True, 'sync_tail_loss':True, 'sync_next_send':True,
+                                   'sync_legacy_shapes':True, 'boot_debug':True}
         assert response.headers['cache-control'] == 'no-store'
         assert response.headers['access-control-allow-origin'] == '*'
         assert 'access-control-allow-credentials' not in response.headers

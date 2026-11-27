@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, time, timedelta, timezone
 
 from . import db, reports, settings
 
@@ -77,9 +76,11 @@ def remove(subscription_id: int) -> bool:
 
 
 def _scope(s: dict, local: datetime):
-    if local.strftime("%H:%M") < s["send_time"] or (
-        s["frequency"] == "weekly" and local.weekday() != s["weekday"]
-    ):
+    hour, minute = map(int, s["send_time"].split(":"))
+    deadline = datetime.combine(local.date(), time(hour, minute),
+                                tzinfo=local.tzinfo).astimezone(timezone.utc)
+    if local.astimezone(timezone.utc) < deadline or (
+            s["frequency"] == "weekly" and local.weekday() != s["weekday"]):
         return None
     last_day = local.date() - timedelta(days=1)
     start_day = last_day - timedelta(days=6 if s["frequency"] == "weekly" else 0)
@@ -95,7 +96,8 @@ def queue_due(now: datetime | None = None) -> dict:
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    local = instant.astimezone(ZoneInfo(settings.get("timezone", "UTC") or "UTC"))
+    zone = settings.local_zone()
+    local = instant.astimezone(zone)
     queued = 0
     cached = {}
     for s in subscriptions():
@@ -104,17 +106,17 @@ def queue_due(now: datetime | None = None) -> dict:
         with db.connect() as conn:
             scopes = {row["period_key"]: (row["first_day"], row["last_day"], row["period_key"])
                       for row in conn.execute("""
-                          SELECT * FROM report_waiting WHERE subscription_id=?
-                      """, (s["id"],))}
+                          SELECT * FROM report_waiting WHERE subscription_id=? AND last_day<?
+                      """, (s["id"], local.date().isoformat()))}
         scope = _scope(s, local)
         if scope:
             scopes[scope[2]] = scope
         for start, end, period_key in sorted(scopes.values()):
-            queued += _queue_period(s, start, end, period_key, instant, cached)
+            queued += _queue_period(s, start, end, period_key, instant, zone, cached)
     return {"queued": queued}
 
 
-def _queue_period(subscription, start, end, period_key, instant, cached) -> int:
+def _queue_period(subscription, start, end, period_key, instant, zone, cached) -> int:
     sid = subscription["id"]
     with db.connect() as conn:
         if conn.execute("SELECT 1 FROM report_dispatches WHERE subscription_id=? AND period_key=?",
@@ -122,7 +124,7 @@ def _queue_period(subscription, start, end, period_key, instant, cached) -> int:
             return 0
     key = (start, end, subscription["building"])
     if key not in cached:
-        cached[key] = reports.build(*key, now=instant)
+        cached[key] = reports.build(*key, now=instant, zone=zone)
     report = cached[key]
     if report["summary"]["sync_pending"]:
         with db.connect() as conn:

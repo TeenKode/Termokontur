@@ -23,6 +23,7 @@ from . import __version__, db, sensor_firmware, sensor_monitor, settings
 MODEL = "c3-sht40-v1"
 SensorModel = Literal["c3-sht40-v1"]
 SensorType = Literal["sht4x", "sht3x", "aht20", "bme280", "bmp280", "dht11", "dht22", "ds18b20"]
+MAX_CONFIG_VERSION = 2147483647
 # Zero denotes a missing battery reading during USB diagnostics.
 BatteryMV = Annotated[int, Field(ge=0, le=0)] | Annotated[int, Field(ge=2000, le=5000)]
 
@@ -32,7 +33,7 @@ class Strict(BaseModel):
 
 
 class Config(Strict):
-    version: int = Field(default=1, ge=1, le=2147483647)
+    version: int = Field(default=1, ge=1, le=MAX_CONFIG_VERSION)
     measure_s: int = Field(default=1800, ge=1, le=604800)
     send_s: int = Field(default=86400, ge=1, le=604800)
     cool_s: int = Field(default=1800, ge=0, le=86400)
@@ -172,7 +173,7 @@ class Sync(Strict):
     lost: int = Field(ge=0, le=9007199254740991)
     rssi: int = Field(ge=-127, le=0)
     battery_mv: BatteryMV
-    config_version: int = Field(ge=0)
+    config_version: int = Field(ge=0, le=MAX_CONFIG_VERSION)
     boots: int = Field(ge=0)
     ota_failures: int = Field(default=0, ge=0)
     ota_generation: int = Field(default=0, ge=0)
@@ -184,6 +185,8 @@ class Sync(Strict):
     next_send_in_s: int | None = Field(default=None, ge=0, le=604800)
     boot_debug_supported: bool = False
     boot_debug_ack: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    legacy_shape_seqs: list[Annotated[int, Field(ge=1, le=9007199254740991)]] = Field(
+        default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def sequence(self):
@@ -197,13 +200,21 @@ class Sync(Strict):
         seqs = [r.seq for r in self.records]
         if seqs != sorted(set(seqs)) or any(s >= self.next_seq for s in seqs):
             raise ValueError("Неверная последовательность записей")
+        legacy = set(self.legacy_shape_seqs)
+        if len(legacy) != len(self.legacy_shape_seqs) or not legacy.issubset(seqs):
+            raise ValueError("Неверные номера старых записей журнала")
         for record in self.records:
-            if not record.error:
-                if self.sensor_type in ("ds18b20", "bmp280"):
-                    if record.humidity is not None:
-                        raise ValueError("Этот датчик не измеряет влажность")
-                elif record.humidity is None:
-                    raise ValueError("Нет показания влажности")
+            if record.error or record.seq in legacy:
+                continue
+            # A confirmed record may predate the current sensor type. Keep its
+            # original values and fingerprint when restoring server history.
+            if self.replay and self.device_ack is not None and record.seq < self.device_ack:
+                continue
+            if self.sensor_type in ("ds18b20", "bmp280"):
+                if record.humidity is not None:
+                    raise ValueError("Этот датчик не измеряет влажность")
+            elif record.humidity is None:
+                raise ValueError("Нет показания влажности")
         return self
 
 
@@ -262,11 +273,30 @@ def version_tuple(v):
 MIN_REPORT_TEMP, MAX_REPORT_TEMP = -40, 60
 
 
-def remember_config(conn, device):
-    config = json.loads(device["config"])
+def next_config_version(conn, device, reported=0):
+    current = json.loads(device["config"])["version"]
+    latest = max(current, device["config_version"], reported)
+    if latest >= MAX_CONFIG_VERSION:
+        raise HTTPException(409, "Исчерпан диапазон версий настроек датчика")
     conn.execute("INSERT OR IGNORE INTO sensor_config_history(device_id,version,config) VALUES(?,?,?)",
-                 (device["id"], config["version"], device["config"]))
-    return config["version"]
+                 (device["id"], current, device["config"]))
+    return latest + 1
+
+
+def config_for_sync(conn, device, reported):
+    config = json.loads(device["config"])
+    latest = max(device["config_version"], reported)
+    # A restored database can issue the same number for different settings.
+    needs_version = config["version"] < latest or (
+        device["config_restore_pending"] and config["version"] == reported)
+    if needs_version and latest < MAX_CONFIG_VERSION:
+        config["version"] = next_config_version(conn, device, reported)
+        conn.execute("UPDATE sensor_devices SET config=?,config_restore_pending=0 WHERE id=?",
+                     (json.dumps(config), device["id"]))
+        event(conn, device["id"], "config", f"Настройки повторно назначены в версии {config['version']}")
+    elif device["config_restore_pending"] and not needs_version:
+        conn.execute("UPDATE sensor_devices SET config_restore_pending=0 WHERE id=?", (device["id"],))
+    return config
 
 
 def public_device(d):
@@ -275,7 +305,9 @@ def public_device(d):
         d.pop(key, None)
     d["config"] = json.loads(d["config"])
     d["sync_incomplete"] = bool(d["sync_incomplete"])
-    d["config_pending"] = bool(d["hardware_id"] and d["config_version"] < d["config"]["version"])
+    config_restore_pending = d.pop("config_restore_pending")
+    d["config_pending"] = bool(d["hardware_id"] and (
+        config_restore_pending or d["config_version"] != d["config"]["version"]))
     times = sensor_monitor.upload_times(d)
     low_battery = sensor_monitor.battery_warning(d)
     d.pop("previous_config", None)
@@ -363,11 +395,13 @@ def router(require_admin):
             conn.execute("DELETE FROM sensor_boot_debug WHERE device_id=?", (device,))
             identity = conn.execute("SELECT fingerprint FROM sensor_identities WHERE device_id=?", (device,)).fetchone()
             if identity:
-                conn.execute("UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,enrollment_until=0 WHERE id=?", (device,))
+                conn.execute("""UPDATE sensor_devices SET token_hash=NULL,enrollment_hash=NULL,
+                             enrollment_until=0,pending_sensor_type=NULL WHERE id=?""", (device,))
                 conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
                 event(conn, device, "rekey", "Доступ отозван. Требуется новое разрешение.")
                 return {"device_id":device,"requires_authorization":True}
-            conn.execute("UPDATE sensor_devices SET enrollment_hash=?,enrollment_until=?,token_hash=NULL WHERE id=?",
+            conn.execute("""UPDATE sensor_devices SET enrollment_hash=?,enrollment_until=?,
+                         token_hash=NULL,pending_sensor_type=NULL WHERE id=?""",
                          (digest(code), int(time.time())+7*86400, device))
             conn.execute("UPDATE sensor_identities SET state='pending' WHERE device_id=?", (device,))
             event(conn, device, "rekey", "Ключ отозван. Настройте датчик заново.")
@@ -378,7 +412,7 @@ def router(require_admin):
         with db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             d = get_supported_device(conn, device)
-            payload.version = remember_config(conn, d) + 1
+            payload.version = next_config_version(conn, d)
             conn.execute("UPDATE sensor_devices SET config=? WHERE id=?", (payload.model_dump_json(), device))
             event(conn, device, "config", f"Ожидает доставки: версия {payload.version}")
         return payload.model_dump()
@@ -443,11 +477,13 @@ def router(require_admin):
             previous = conn.execute("SELECT id,enabled FROM sensor_devices WHERE hardware_id=? AND id<>?",
                                     (payload.hardware_id, payload.device_id)).fetchone()
             if previous and not previous["enabled"]:
-                conn.execute("UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,enrollment_hash=NULL WHERE id=?",
+                conn.execute("""UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,
+                             enrollment_hash=NULL,pending_sensor_type=NULL WHERE id=?""",
                              (previous["id"],))
                 event(conn, previous["id"], "retired", "Плата перенесена в новую регистрацию; архив сохранён")
             try:
-                conn.execute("UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=? WHERE id=?",
+                conn.execute("""UPDATE sensor_devices SET hardware_id=?,token_hash=?,sensor_type=?,
+                             pending_sensor_type=NULL WHERE id=?""",
                              (payload.hardware_id, digest(token), payload.sensor_type, payload.device_id))
             except sqlite3.IntegrityError:
                 raise HTTPException(409, "Плата уже зарегистрирована") from None
@@ -466,6 +502,9 @@ def router(require_admin):
                 raise HTTPException(409, "Модель или тип датчика изменился. Зарегистрируйте его заново.")
             if payload.next_seq < d["ack_seq"] or payload.lost < d["lost"]:
                 raise HTTPException(409, "Счётчики устройства уменьшились; восстановите журнал")
+            if (payload.device_ack is not None and payload.device_ack > 1 and
+                    d["last_seen"] is None and not d["restore_pending"]):
+                raise HTTPException(409, "Подтверждённые замеры принадлежат прежней регистрации датчика")
             ack = d["ack_seq"]
             if payload.device_ack is not None and ack < payload.device_ack and not payload.replay:
                 return {"ack_seq": ack, "replay_from": ack, "time": now}
@@ -560,7 +599,7 @@ def router(require_admin):
                    and version_tuple(firmware["version"]) > version_tuple(payload.firmware) else None)
             if ota:
                 ota["generation"] = d["ota_generation"]
-            config = json.loads(d["config"])
+            config = config_for_sync(conn, d, payload.config_version)
             command = None
             if payload.boot_debug_supported:
                 if payload.boot_debug_ack:

@@ -120,11 +120,12 @@ public:
     return end - first >= count ? end - first - count : 0;
   }
   bool append(const Record &r) {
-    if (!r.seq || (!scanned && !scan()))
+    const uint64_t seq = r.seq;
+    if (!seq || (!scanned && !scan()))
       return false;
-    const auto existing = std::lower_bound(entries_.begin(), entries_.end(), r.seq,
+    const auto existing = std::lower_bound(entries_.begin(), entries_.end(), seq,
         [](const Entry &entry, uint64_t seq) { return entry.seq < seq; });
-    if (existing != entries_.end() && existing->seq == r.seq) {
+    if (existing != entries_.end() && existing->seq == seq) {
       Record old;
       return read(*existing, old) && !memcmp(&old, &r, sizeof r);
     }
@@ -137,7 +138,8 @@ public:
       std::vector<uint64_t> newest(sectors, 0);
       for (const auto &e : entries_) {
         const size_t index = e.offset / 4096;
-        newest[index] = std::max(newest[index], e.seq);
+        const uint64_t entry_seq = e.seq;
+        newest[index] = std::max(newest[index], entry_seq);
       }
       const size_t sector = static_cast<size_t>(
           std::min_element(newest.begin(), newest.end()) - newest.begin()) * 4096;
@@ -163,9 +165,9 @@ public:
         verify.crc != crc32(&verify.record, sizeof verify.record) ||
         memcmp(&verify.record, &r, sizeof r))
       return false;
-    auto pos = std::lower_bound(entries_.begin(), entries_.end(), r.seq,
+    auto pos = std::lower_bound(entries_.begin(), entries_.end(), seq,
         [](const Entry &entry, uint64_t seq) { return entry.seq < seq; });
-    entries_.insert(pos, {r.seq, static_cast<uint32_t>(off)});
+    entries_.insert(pos, {seq, static_cast<uint32_t>(off)});
     free_offset = SIZE_MAX;
     // The previous scan found the first empty slot. Only inspect later slots.
     for (size_t next = off + sizeof(Slot); next + sizeof(Slot) <= flash.size(); next += sizeof(Slot)) {

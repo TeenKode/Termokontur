@@ -38,7 +38,7 @@ def dashboard_history(days: int = Query(14, ge=7, le=90),
     if days not in (7, 14, 30, 90):
         raise HTTPException(422, "Выберите период: 7, 14, 30 или 90 дней")
     return db.dashboard_history(
-        days=days, building=scope_building(building, scope), timezone_name=settings.get("timezone", "UTC")
+        days=days, building=scope_building(building, scope), timezone_name=settings.local_zone().key
     )
 
 

@@ -11,7 +11,8 @@ MAX_DAYS = 366
 MAX_READINGS = 500_000
 
 
-def period(start: str, end: str, now: datetime | None = None) -> tuple[date, date, list[str], str, str, ZoneInfo]:
+def period(start: str, end: str, now: datetime | None = None, *,
+           zone: ZoneInfo | None = None) -> tuple[date, date, list[str], str, str, ZoneInfo]:
     try:
         a, b = date.fromisoformat(start), date.fromisoformat(end)
     except (TypeError, ValueError) as exc:
@@ -19,7 +20,7 @@ def period(start: str, end: str, now: datetime | None = None) -> tuple[date, dat
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    zone = ZoneInfo(settings.get("timezone", "UTC") or "UTC")
+    zone = zone or settings.local_zone()
     today = instant.astimezone(zone).date()
     if a > b or (b - a).days >= MAX_DAYS or b > today:
         raise ValueError("Выберите период до сегодняшнего дня, не более 366 дней")
@@ -38,9 +39,10 @@ def _display(first: str | None, last: str | None, username: str | None, uid: str
             or ("@" + username if username else "MAX ID " + uid))
 
 
-def build(start: str, end: str, building: str = "", now: datetime | None = None) -> dict:
+def build(start: str, end: str, building: str = "", now: datetime | None = None, *,
+          zone: ZoneInfo | None = None) -> dict:
     """A stable report snapshot with no per-room N+1 database queries."""
-    first, _, days, start_utc, end_utc, zone = period(start, end, now)
+    first, _, days, start_utc, end_utc, zone = period(start, end, now, zone=zone)
     dates = [first + timedelta(days=offset) for offset in range(len(days) + 1)]
     boundaries = [datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
                   .isoformat(timespec="seconds") for day in dates]

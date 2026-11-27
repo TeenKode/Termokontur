@@ -1,9 +1,11 @@
 """Excel and PDF reports, generated on demand without persistent public files."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import xlsxwriter
 from reportlab.lib import colors
@@ -25,6 +27,7 @@ def _cell(value):
 
 def workbook(report: dict) -> bytes:
     """Multi-sheet workbook: compact summary and full inspectable raw rows."""
+    zone = ZoneInfo(report["timezone"])
     output = BytesIO()
     wb = xlsxwriter.Workbook(output, {
         "in_memory": True, "strings_to_formulas": False, "strings_to_urls": False,
@@ -58,6 +61,11 @@ def workbook(report: dict) -> bytes:
                 elif isinstance(value, (float,int)):
                     ws.write_number(i, j, value, percent if key == "coverage" else
                                     measure if isinstance(value, float) else fmt)
+                elif key == "measured_at":
+                    instant = datetime.fromisoformat(value)
+                    if instant.tzinfo is None:
+                        instant = instant.replace(tzinfo=timezone.utc)
+                    ws.write_string(i, j, instant.astimezone(zone).isoformat(sep=" "), fmt)
                 else:
                     ws.write_string(i, j, str(value), fmt)
         ws.autofilter(0, 0, max(1, len(rows)), len(columns)-1)
@@ -109,7 +117,7 @@ def workbook(report: dict) -> bytes:
         ("Мин., °C","minimum",16), ("Макс., °C","maximum",16),
         ("Измерений","readings",16), ("Отклонений","deviations",17),
         ("Вне нормы по среднему","out_of_range",25),
-        ("Последнее измерение","measured_at",26),
+        ("Последнее измерение","measured_at",30),
         ("Кто передал","reporter_name",34),
         ("Средняя влажность, %","humidity_average",23),
         ("Мин. влажность, %","humidity_minimum",21),

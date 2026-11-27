@@ -71,7 +71,7 @@ function renderReport(){
   $("report-submitted-count").textContent=submitted.length;
   reportTable("report-submitted-body",submitted.slice(0,300),(tr,d)=>{
     for(const item of [d.date,d.building,d.room,reportNumber(d.average," °C"),
-      d.reporter_name||"—",d.measured_at?when(d.measured_at):"—"])cell(tr,item);
+      d.reporter_name||"—",when(d.measured_at,r.timezone)])cell(tr,item);
   });
   $("report-missing-count").textContent=r.missing.length;
   reportTable("report-missing-body",r.missing.slice(0,300),(tr,d)=>{

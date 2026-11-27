@@ -13,16 +13,11 @@ from zoneinfo import ZoneInfo
 from . import db, school_calendar, sensor_monitor, settings
 
 
-def local_zone() -> ZoneInfo:
-    name = settings.get("timezone", "UTC")
-    return ZoneInfo(name)
-
-
-def daily_bounds(now: datetime | None = None) -> tuple[date, str, str]:
+def daily_bounds(now: datetime | None = None, *, zone: ZoneInfo | None = None) -> tuple[date, str, str]:
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    zone = local_zone()
+    zone = zone or settings.local_zone()
     day = instant.astimezone(zone).date()
     start = datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
     end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone).astimezone(timezone.utc)
@@ -31,7 +26,8 @@ def daily_bounds(now: datetime | None = None) -> tuple[date, str, str]:
 
 def summary(now: datetime | None = None, building: str = "") -> dict:
     instant = now or datetime.now(timezone.utc)
-    day, start, end = daily_bounds(instant)
+    zone = settings.local_zone()
+    day, start, end = daily_bounds(instant, zone=zone)
     calendar, weekdays = school_calendar.load()
     with db.connect() as conn:
         db.begin(conn)
@@ -75,7 +71,7 @@ def summary(now: datetime | None = None, building: str = "") -> dict:
                 room["daily_status"] = "normal"
     return {
         "local_date": day.isoformat(),
-        "timezone": settings.get("timezone", "UTC"),
+        "timezone": zone.key,
         "counts": counts,
         "rooms": rooms,
     }
@@ -101,7 +97,7 @@ def pending_users(snapshot: dict) -> dict[str, list[dict]]:
 def reminders_due(now: datetime | None = None) -> bool:
     if settings.get("reminders_enabled", "0") != "1":
         return False
-    zone = local_zone()
+    zone = settings.local_zone()
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must be timezone-aware")
@@ -113,8 +109,10 @@ def reminders_due(now: datetime | None = None) -> bool:
         raise ValueError("Invalid reminder settings") from exc
     if not (0 <= hour <= 23 and 0 <= minute <= 59) or not (1 <= window <= 240):
         raise ValueError("Invalid reminder settings")
-    begin = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if not begin <= local < begin + timedelta(minutes=window):
+    # fold=0 chooses the first occurrence in autumn and moves a skipped
+    # spring time forward by the clock change. The window is elapsed time.
+    begin = datetime.combine(local.date(), time(hour, minute), tzinfo=zone).astimezone(timezone.utc)
+    if not begin <= instant.astimezone(timezone.utc) < begin + timedelta(minutes=window):
         return False
     calendar, weekdays = school_calendar.load()
     with db.connect() as conn:

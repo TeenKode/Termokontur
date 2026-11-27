@@ -18,6 +18,14 @@ struct State {
   int64_t saved_time = 0;
 };
 
+inline bool same_config(const Config &a, const Config &b) {
+  return a.version == b.version && a.measure_s == b.measure_s && a.send_s == b.send_s &&
+         a.cool_s == b.cool_s && a.wifi_budget_s == b.wifi_budget_s &&
+         a.wifi_min_mv == b.wifi_min_mv && a.cutoff_mv == b.cutoff_mv &&
+         a.ota_min_mv == b.ota_min_mv && a.tx_qdbm == b.tx_qdbm &&
+         a.adc_scale_ppm == b.adc_scale_ppm && a.enabled == b.enabled;
+}
+
 // Compare logical fields, not padding bytes in the legacy native envelope.
 inline bool same_state(const State &a, const State &b) {
   return a.next == b.next && a.ack == b.ack && a.lost_base == b.lost_base &&
@@ -51,6 +59,11 @@ inline bool valid_config(const Config &c) {
          c.ota_min_mv >= std::max<uint32_t>(3300, c.cutoff_mv) &&
          c.ota_min_mv <= 4200 && c.tx_qdbm >= 8 && c.tx_qdbm <= 78 &&
          c.adc_scale_ppm >= 1600000 && c.adc_scale_ppm <= 2400000;
+}
+inline bool valid_local_config(Config c) {
+  // Version zero is the factory configuration before server confirmation.
+  if (!c.version) c.version = 1;
+  return valid_config(c);
 }
 // Only a genuinely absent record may bypass recovery. A present but
 // unreadable record could contain a partially applied setup transaction.

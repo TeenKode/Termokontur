@@ -136,6 +136,6 @@ using Handler = void (*)(Port, const std::string &, bool, void *);
 bool init_uart();
 void init_usb();
 int poll(Port port, uint32_t wait_ms, Handler handler, void *context);
-void reply(Port port, const std::string &frame);
-void flush_uart();
+bool reply(Port port, const std::string &frame);
+void flush();
 } // namespace sensor::serial

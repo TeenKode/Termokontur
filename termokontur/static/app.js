@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 let rooms = [], allRooms = [], overview = [], readings = [], daily = null, settingsCache = null, selectedTab = "overview", toastTimer, refreshBusy = false;
 let historyData = null, historyRequestId = 0, readingRequestId = 0;
 let buildingScope = "";
+let panelTimezone = "UTC";
 let panelOpened = false;
 const sources = {manual:"Вручную",max:"MAX",ha:"Датчик"};
 const statuses = {normal:"В норме",below:"Ниже нормы",above:"Выше нормы",missing:"Нет данных"};
@@ -195,6 +196,7 @@ function enterLogin(message="") {
 function enterApp(session) {
   panelOpened=true;
   buildingScope=session.building||"";
+  panelTimezone=session.timezone||"UTC";
   for(const element of document.querySelectorAll("[data-admin-only]"))element.hidden=Boolean(buildingScope);
   $("panel-scope").textContent=buildingScope;
   show("panel-scope",Boolean(buildingScope));
@@ -225,10 +227,22 @@ function setTab(name) {
   return true;
 }
 function cell(row, text, className = "") { const td=el("td",className); td.textContent=text; row.append(td); return td; }
-function when(iso) {
-  if(!iso) return "—";
-  const date=new Date(iso);
-  return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+function parseTimestamp(iso) {
+  // Some older readings have UTC timestamps without the explicit suffix.
+  const naive=/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(iso);
+  return Date.parse(naive?iso.replace(" ","T")+"Z":iso);
+}
+function when(iso, timeZone=panelTimezone, includeYear=false) {
+  if(!iso)return "—";
+  const date=new Date(parseTimestamp(iso));
+  if(Number.isNaN(date.valueOf()))return "—";
+  const fields={day:"2-digit",month:"2-digit",year:includeYear?"numeric":undefined,
+    hour:"2-digit",minute:"2-digit",timeZoneName:"short"};
+  try{return date.toLocaleString("ru-RU",{...fields,timeZone});}
+  catch(error){
+    if(!(error instanceof RangeError))throw error;
+    return date.toLocaleString("ru-RU",{...fields,timeZone:"UTC"});
+  }
 }
 function temperature(value) {return value === null || value === undefined ? "—" : Number(value).toLocaleString("ru-RU",{maximumFractionDigits:1})+" °C";}
 function option(select,value,label) {const o=el("option","",label);o.value=value;select.append(o);}
@@ -678,7 +692,10 @@ function drawChart(){
   const data=readings.filter(r=>String(r.room_id)===filter).slice(0,40).reverse();
   const dark=document.documentElement.dataset.theme==="dark";
   renderTrend($("reading-chart"),{
-    points:data.map(r=>({label:when(r.observed_at),title:when(r.observed_at),time:Date.parse(r.observed_at)})),
+    points:data.map(r=>{
+      const label=when(r.observed_at);
+      return {label,title:label,time:parseTimestamp(r.observed_at)};
+    }),
     series:[{name:"Температура",unit:"°C",color:dark?"#5bdac1":"#087b65",values:data.map(r=>r.value==null?null:Number(r.value))}]
   });
 }
@@ -690,20 +707,24 @@ async function refresh({background=false}={}) {
     const adminData=buildingScope?[]:[api("/api/rooms"),
       api("/api/rooms?include_inactive=true"),api("/api/max/users")];
     const [dash,day,activeRooms,all,staff]=await Promise.all([api("/api/dashboard"),api("/api/daily"),...adminData]);
+    const timezoneChanged=panelTimezone!==day.timezone;
+    panelTimezone=day.timezone;
     const changed=(oldValue,newValue)=>!background||JSON.stringify(oldValue)!==JSON.stringify(newValue);
     const nextRooms=activeRooms||dash.rooms;
     const roomChange=changed(rooms,nextRooms),overviewChange=changed(overview,dash.rooms),dailyChange=changed(daily,day);
     overview=dash.rooms;rooms=nextRooms;daily=day;
     if(roomChange)renderFilters();
-    if(roomChange||overviewChange)renderOverview();
-    if(roomChange||dailyChange)renderDaily();
+    if(roomChange||overviewChange||timezoneChanged)renderOverview();
+    if(roomChange||dailyChange||timezoneChanged)renderDaily();
     if(!buildingScope){
       const allChange=changed(allRooms,all),staffChange=changed(maxStaff,staff);
       allRooms=all;maxStaff=staff;
       if(allChange)renderRooms();
-      if(allChange||staffChange)renderMaxStaff();
+      if(allChange||staffChange||timezoneChanged)renderMaxStaff();
     }
-    await Promise.all([refreshHistory({background}),buildingScope?undefined:refreshReadings({background})]);
+    await Promise.all([refreshHistory({background}),
+      buildingScope?undefined:refreshReadings({background,timezoneChanged}),
+      timezoneChanged&&selectedTab==="sensors"?refreshSensors():undefined]);
     const updated=$("updated-at");
     updated.dateTime=dash.generated_at;
     updated.textContent="Обновлено "+when(dash.generated_at);
@@ -711,12 +732,12 @@ async function refresh({background=false}={}) {
   } catch(error) {if(!background)toast(error.message,true);}
   finally {refreshBusy=false;}
 }
-async function refreshReadings({background=false}={}){
+async function refreshReadings({background=false,timezoneChanged=false}={}){
   const request=++readingRequestId,room=$("reading-filter").value;
   try{
     const result=await api("/api/readings?limit=200"+(room?"&room_id="+encodeURIComponent(room):""));
     if(request!==readingRequestId)return;
-    if(background&&JSON.stringify(readings)===JSON.stringify(result))return;
+    if(background&&!timezoneChanged&&JSON.stringify(readings)===JSON.stringify(result))return;
     readings=result;
     renderReadings();
   }catch(error){if(request===readingRequestId&&!background)toast(error.message,true);}

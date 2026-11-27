@@ -158,6 +158,7 @@ def restore(name: str) -> dict:
             previous = live.execute("SELECT session_epoch FROM admin_account WHERE id=1").fetchone()[0]
             target.execute("UPDATE admin_account SET session_epoch=MAX(session_epoch,?)+1 WHERE id=1", (previous,))
             target.execute("UPDATE sensor_devices SET restore_pending=1 WHERE token_hash IS NOT NULL")
+            target.execute("UPDATE sensor_devices SET config_restore_pending=1 WHERE hardware_id IS NOT NULL")
             # A restored backup must not replay transient remote debug commands.
             target.execute("DELETE FROM sensor_boot_debug")
         safeguard = create_backup("pre-restore")

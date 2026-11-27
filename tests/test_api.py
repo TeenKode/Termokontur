@@ -134,6 +134,20 @@ def test_manage_runtime_settings_and_secrets(admin, monkeypatch):
     assert not admin.get("/api/settings").json()["max_token_configured"]
 
 
+def test_invalid_restored_timezone_can_be_repaired_in_the_panel(admin):
+    from termokontur import settings
+
+    settings.update({"timezone": "Invalid/FromBackup"})
+    paths = ("/api/session", "/api/settings", "/api/daily", "/api/dashboard/history")
+    for path in paths:
+        assert admin.get(path).json()["timezone"] == "UTC"
+    reply = admin.patch("/api/settings", json={"changes": {"timezone": "Asia/Vladivostok"},
+                                               "expected": {"timezone": "UTC"}})
+    assert reply.status_code == 200, reply.text
+    for path in paths:
+        assert admin.get(path).json()["timezone"] == "Asia/Vladivostok"
+
+
 def test_bulk_add_rooms(admin):
     payload={"building":"Старшая школа","floor":"2","kind":"Кабинет",
              "min_temp":18,"max_temp":24,"names":["Кабинет 201","Кабинет 202","Кабинет 203"]}

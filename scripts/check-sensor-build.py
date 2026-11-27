@@ -8,6 +8,7 @@ folder=root/'firmware/sensor'
 config=(folder/'sdkconfig.esp32-c3-supermini').read_text()
 assert 'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' in config
 assert 'CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT=y' in config
+assert 'CONFIG_MBEDTLS_HAVE_TIME_DATE=y' in config
 assert 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y' in config
 assert 'CONFIG_ESP_CONSOLE_UART_DEFAULT=y' in config
 assert 'CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200' in config
@@ -39,4 +40,4 @@ for line in (folder/'partitions.csv').read_text().splitlines():
     previous=start+length
     expected[name]=(start,length)
 assert actual==expected,(actual,expected)
-print(f'ESP32-C3 {version}, {len(image)} bytes; app descriptor, partition bounds and rollback bootloader config verified')
+print(f'ESP32-C3 {version}, {len(image)} bytes; app descriptor, partitions, TLS dates and rollback config verified')

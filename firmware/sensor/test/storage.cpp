@@ -8,6 +8,13 @@ int main() {
   sensor::Config config{};
   assert(sensor::valid_config(config));
   assert(config.measure_s == 1800 && config.send_s == 86400);
+  sensor::Config unconfirmed;
+  unconfirmed.version = 0;
+  assert(!sensor::valid_config(unconfirmed) && sensor::valid_local_config(unconfirmed));
+  assert(!sensor::same_config(unconfirmed, config));
+  auto server_v1 = config;
+  server_v1.enabled = false;
+  assert(!sensor::same_config(config, server_v1));
   config.cutoff_mv = 3000;
   config.wifi_min_mv = 0;
   assert(sensor::valid_config(config));

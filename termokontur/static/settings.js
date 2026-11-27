@@ -133,7 +133,7 @@ async function loadSensorCa(){
     $("sensor-ca-status").textContent=state.error?"Ошибка: "+state.error:
       label[state.source]+(state.chain_matches===true?" · Подпись цепочки HTTPS подтверждена":
       state.chain_matches===false?" · CA не соответствует активному HTTPS: проверьте цепочку":" · Проверка активной цепочки недоступна");
-    const lines=state.certificates.flatMap(c=>[c.subject+" · действует до "+new Date(c.expires_at).toLocaleDateString("ru-RU"),"Издатель: "+c.issuer,"SHA-256: "+c.sha256]);
+    const lines=state.certificates.flatMap(c=>[c.subject+" · действует до "+when(c.expires_at,panelTimezone,true),"Издатель: "+c.issuer,"SHA-256: "+c.sha256]);
     if(state.server_hosts.length)lines.push("Имена активного HTTPS: "+state.server_hosts.join(", "));
     $("sensor-ca-details").replaceChildren(...lines.map(line=>el("p","",line)));
     $("sensor-ca-remove").disabled=state.source!=="upload";
@@ -156,7 +156,7 @@ async function loadTlsStatus(){
       details.push("Кому выдан: "+d.subject);
       details.push("Кем выдан: "+d.issuer);
       details.push("Домены/IP: "+(d.hosts.length?d.hosts.join(", "):"не указаны"));
-      details.push("Действует до: "+new Date(d.expires_at).toLocaleDateString("ru-RU")+
+      details.push("Действует до: "+when(d.expires_at,panelTimezone,true)+
         " ("+d.days_left+" дн.)");
       details.push("Источник: "+(state.source==="upload"?"файлы из панели":"путь из окружения"));
     }

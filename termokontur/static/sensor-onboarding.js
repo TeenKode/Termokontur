@@ -258,7 +258,7 @@ async function usbRun(flash){
     const connection=await usb.connectSensor(port,{expectedHardware:usbExpectedHardware,getPorts:()=>navigator.serial.getPorts(),onAttempt:(n,total)=>usbStatus("Ожидаем режим настройки: попытка "+n+" из "+total+"…")});
     serial=connection.serial;const {hello,fingerprint:fp}=connection;
     if(!usbServerBootstrapVersion(hello.firmware))throw Error("Для времени и сертификата от сервера обновите прошивку датчика до 0.1.5 или новее");
-    if(hello.pending_records&&hello.sensor_type!==data.sensor_type)throw Error("Перед сменой типа передайте накопленные измерения на сервер");
+    if(hello.pending_records&&!hello.journal_type_unknown&&hello.sensor_type!==data.sensor_type)throw Error("Перед сменой типа передайте накопленные измерения на сервер");
     $("usb-identity").textContent="Плата "+hello.hardware_id+" · ключ "+fp.slice(0,16).match(/.{4}/g).join("–");
     const identity={public_key:hello.public_key,hardware_id:hello.hardware_id,sensor_type:data.sensor_type,firmware:hello.firmware};
     const deferred=hello.verified_setup===true;
@@ -273,7 +273,9 @@ async function usbRun(flash){
     const base={...data.settings,code:"",sensor_type:data.sensor_type};
     // Only a confirmed unconfigured board may be written before approval.
     // Older firmware does not report whether it already has settings.
-    if(deferred&&hello.provisioned===false){
+    const archive=hello.journal_device?{archive_device:hello.journal_device}:
+      hello.journal_recovery?{archive_recovery:true}:{};
+    if(deferred&&hello.provisioned===false&&!hello.journal_device&&!hello.journal_recovery){
       usbStatus("Сохраняем параметры и проверяем память платы…");
       await verifySaved({...base,device:"",config:data.config});
       savedLocally=true;
@@ -281,7 +283,7 @@ async function usbRun(flash){
     usbStatus("Проверяем подпись платы и разрешаем подключение…");
     const challenge=await api("/api/sensors/auth/challenge","POST",identity);
     const signed=await serial.request("sign",{message:challenge.message});
-    const approval=await api("/api/sensors/onboard","POST",{...identity,challenge:challenge.challenge,signature:signed.signature,name:data.name,room_id:data.room_id,config:data.config});
+    const approval=await api("/api/sensors/onboard","POST",{...identity,...archive,challenge:challenge.challenge,signature:signed.signature,name:data.name,room_id:data.room_id,config:data.config});
     approved=true;
     usbStatus("Доступ выдан. Сохраняем окончательные настройки…");
     const final={...base,device:approval.device_id,config:approval.config};
@@ -295,7 +297,8 @@ async function usbRun(flash){
       if(!saved.saved)throw Error("Датчик не подтвердил сохранение настроек");
     }
     usbClearSecrets();await refreshSensors();
-    usbStatus("Готово. Для отладки закройте мастер, оставьте USB платы подключённым и коротко нажмите RESET. Для автономной работы отсоедините USB платы и зарядки, включите питание от аккумулятора и проверьте первые данные в карточке.","saved");
+    const typeStatus=approval.pending_sensor_type?" Панель подтвердит смену типа при следующем подключении датчика.":"";
+    usbStatus("Готово."+typeStatus+" Для отладки закройте мастер, оставьте USB платы подключённым и коротко нажмите RESET. Для автономной работы отсоедините USB платы и зарядки, включите питание от аккумулятора и проверьте первые данные в карточке.","saved");
   }catch(error){usbStatus(error.name==="NotFoundError"?"Порт не выбран.":error.message+(savedLocally&&!approved?" Параметры записаны, доступ ещё не выдан.":"")+(approved?" Доступ выдан, завершение не подтверждено.":"")+(flashed||approved||savedLocally?" Продолжите кнопкой «Настроить без прошивки»; повторно стирать память не нужно.":""),error.name==="NotFoundError"?"warning":"error");}
   finally{
     try{if(serial)await serial.close();}

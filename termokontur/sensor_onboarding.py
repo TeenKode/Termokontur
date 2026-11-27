@@ -53,6 +53,8 @@ class Onboard(Proof):
     name: str = Field(min_length=1, max_length=100)
     room_id: int = Field(gt=0)
     config: sensors.Config | None = None
+    archive_device: str | None = Field(default=None, pattern=r"^tk-[a-f0-9]{16}$")
+    archive_recovery: bool = False
 
 
 class Approval(sensors.Strict):
@@ -115,7 +117,7 @@ def remember(conn, identity, usb=False):
     return fp
 
 
-def approve(conn, fp, name, room_id, config=None, sensor_type=None):
+def approve(conn, fp, name, room_id, config=None, sensor_type=None, *, defer_type=False):
     sensors.check_room(conn, room_id)
     identity = conn.execute("SELECT * FROM sensor_identities WHERE fingerprint=?", (fp,)).fetchone()
     if not identity:
@@ -127,27 +129,57 @@ def approve(conn, fp, name, room_id, config=None, sensor_type=None):
     if old:
         if old['enabled']:
             raise HTTPException(409, "Плата уже подключена. Обновите её через карточку. Для замены сначала отключите старую запись.")
-        conn.execute("UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,enrollment_hash=NULL WHERE id=?", (old['id'],))
+        conn.execute("""UPDATE sensor_devices SET hardware_id=NULL,token_hash=NULL,
+                     enrollment_hash=NULL,pending_sensor_type=NULL WHERE id=?""", (old['id'],))
+    active_type = sensor_type or identity['sensor_type']
+    pending_type = None
     if not d:
         device = "tk-" + secrets.token_hex(8)
         conf = (config or sensors.setup_defaults(conn).config).model_copy(update={"version": 1})
         conn.execute("""INSERT INTO sensor_devices(id,name,room_id,hardware_id,enrollment_until,config,created_at,sensor_type)
                      VALUES(?,?,?,?,0,?,?,?)""", (device, name.strip(), room_id, identity['hardware_id'],
-                     conf.model_dump_json(), db.utc_now(), sensor_type or identity['sensor_type']))
+                     conf.model_dump_json(), db.utc_now(), active_type))
     else:
         device = d['id']
         conf = sensors.Config(**json.loads(d['config']))
         if config:
             wanted = config.model_dump(exclude={'version'})
             if wanted != conf.model_dump(exclude={'version'}):
-                config.version = sensors.remember_config(conn, d) + 1
+                config.version = sensors.next_config_version(conn, d)
                 conf = config
-        conn.execute("UPDATE sensor_devices SET enabled=1,name=?,config=?,sensor_type=?,hardware_id=? WHERE id=?",
-                     (name.strip(), conf.model_dump_json(), sensor_type or d['sensor_type'], identity['hardware_id'], device))
+        active_type = d['sensor_type']
+        pending_type = d['pending_sensor_type']
+        if sensor_type is not None:
+            if defer_type and sensor_type != active_type:
+                pending_type = sensor_type
+            else:
+                active_type = sensor_type
+                pending_type = None
+        conn.execute("""UPDATE sensor_devices SET enabled=1,name=?,config=?,sensor_type=?,
+                     pending_sensor_type=?,hardware_id=? WHERE id=?""",
+                     (name.strip(), conf.model_dump_json(), active_type, pending_type, identity['hardware_id'], device))
     conn.execute("UPDATE sensor_identities SET state='approved',device_id=?,sensor_type=? WHERE fingerprint=?",
-                 (device, sensor_type or identity['sensor_type'], fp))
+                 (device, active_type, fp))
     sensors.event(conn, device, "approved", "Авторизован администратором по открытому ключу " + fp[:16])
-    return {'device_id': device, 'fingerprint': fp, 'config': conf.model_dump(), 'status': 'approved'}
+    return {'device_id': device, 'fingerprint': fp, 'config': conf.model_dump(),
+            'status': 'approved', 'pending_sensor_type': pending_type}
+
+
+def attach_existing_archive(conn, fp, payload):
+    if not payload.archive_device and not payload.archive_recovery:
+        return
+    linked = conn.execute("SELECT device_id FROM sensor_identities WHERE fingerprint=?", (fp,)).fetchone()[0]
+    if linked and (not payload.archive_device or payload.archive_device == linked):
+        return
+    current = conn.execute("SELECT id,ack_seq FROM sensor_devices WHERE hardware_id=?", (payload.hardware_id,)).fetchone()
+    if (linked or not current or
+            (payload.archive_device and payload.archive_device != current["id"]) or
+            (not payload.archive_device and current["ack_seq"] <= 1) or
+            conn.execute("SELECT 1 FROM sensor_identities WHERE device_id=?", (current["id"],)).fetchone()):
+        raise HTTPException(409, "Откройте панель с прежней карточкой датчика. Журнал привязан к ней.")
+    # A previous code-based registration has a hardware ID and no signing key.
+    # The signed USB proof and explicit archive request let it adopt this key.
+    conn.execute("UPDATE sensor_identities SET device_id=? WHERE fingerprint=?", (current["id"], fp))
 
 
 def router(require_admin):
@@ -166,7 +198,8 @@ def router(require_admin):
         if len(certificate.encode("utf-8")) > 8000:
             raise HTTPException(503, "Цепочка сертификатов превышает 8000 байт")
         return JSONResponse({'time': int(time.time()), 'ca': certificate, 'sync_replay': True,
-                             'usb_powered_sync': True, 'sync_tail_loss': True, 'sync_next_send': True, 'boot_debug': True}, headers={
+                             'usb_powered_sync': True, 'sync_tail_loss': True, 'sync_next_send': True,
+                             'sync_legacy_shapes': True, 'boot_debug': True}, headers={
             'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
         })
 
@@ -218,10 +251,17 @@ def router(require_admin):
             d = sensors.get_supported_device(conn, identity['device_id'])
             if not d['enabled'] or not conn.execute('SELECT 1 FROM rooms WHERE id=? AND active=1',(d['room_id'],)).fetchone():
                 raise HTTPException(403, 'Датчик или помещение отключены')
+            pending_type = d['pending_sensor_type']
             if payload.sensor_type != d['sensor_type']:
-                raise HTTPException(409, 'Тип датчика изменился. Повторите настройку по USB.')
+                if payload.sensor_type != pending_type:
+                    raise HTTPException(409, 'Тип датчика изменился. Повторите настройку по USB.')
+                pending_type = None
+                conn.execute("UPDATE sensor_identities SET sensor_type=? WHERE fingerprint=?",
+                             (payload.sensor_type, fp))
+                sensors.event(conn, d['id'], "sensor_type", f"Плата подтвердила тип {payload.sensor_type.upper()}")
             token = secrets.token_hex(32)
-            conn.execute('UPDATE sensor_devices SET token_hash=? WHERE id=?', (sensors.digest(token), d['id']))
+            conn.execute("""UPDATE sensor_devices SET token_hash=?,sensor_type=?,pending_sensor_type=? WHERE id=?""",
+                         (sensors.digest(token), payload.sensor_type, pending_type, d['id']))
         return {'status':'approved', 'device_id':d['id'], 'token':token, 'fingerprint':fp}
 
     @r.post('/onboard', dependencies=admin)
@@ -230,7 +270,8 @@ def router(require_admin):
             conn.execute('BEGIN IMMEDIATE')
             verify(conn, payload)
             fp = remember(conn, payload, usb=True)
-            return approve(conn, fp, payload.name, payload.room_id, payload.config, payload.sensor_type)
+            attach_existing_archive(conn, fp, payload)
+            return approve(conn, fp, payload.name, payload.room_id, payload.config, payload.sensor_type, defer_type=True)
 
     @r.get('/claims', dependencies=admin)
     def claims():

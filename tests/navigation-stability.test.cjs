@@ -290,6 +290,17 @@ test("initial session probe completes before login controls become enabled",asyn
   assert.equal(submit.disabled,false);
 });
 
+test("panel timestamps use the organization or report timezone and distinguish a repeated hour",()=>{
+  const context=vm.createContext({panelTimezone:"Asia/Vladivostok"});
+  vm.runInContext(["parseTimestamp","when"].map(extractFunction).join("\n"),context);
+  assert.match(vm.runInContext('when("2026-11-17T20:00:00+00:00")',context),/18\.11.*06:00.*GMT\+10/);
+  assert.equal(vm.runInContext('parseTimestamp("2026-11-17 20:00:00")',context),Date.UTC(2026,10,17,20));
+  const autumn=iso=>vm.runInContext(`when(${JSON.stringify(iso)},"Europe/Berlin")`,context);
+  assert.match(autumn("2026-10-25T00:30:00Z"),/02:30.*GMT\+2/);
+  assert.match(autumn("2026-10-25T01:30:00Z"),/02:30.*GMT\+1/);
+  assert.match(vm.runInContext('when("2026-11-17T20:00:00Z","Unknown/Zone")',context),/17\.11.*20:00.*UTC/);
+});
+
 
 test("update controls prevent duplicate or unavailable installations",()=>{
   const fields={"check-update":{},"install-update":{}};

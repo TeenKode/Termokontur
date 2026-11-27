@@ -11,7 +11,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from .. import auth, db, school_calendar
+from .. import auth, db, school_calendar, settings
 
 router = APIRouter(prefix="/api")
 
@@ -134,10 +134,11 @@ class PasswordIn(BaseModel):
 @router.get("/session")
 def session(request: Request):
     if authenticated(request):
-        return {"authenticated": True}
+        return {"authenticated": True, "timezone": settings.local_zone().key}
     account = _building_session(request)
     if account:
-        return {"authenticated": True, "building": account["building"]}
+        return {"authenticated": True, "building": account["building"],
+                "timezone": settings.local_zone().key}
     return {"authenticated": False}
 
 
@@ -174,7 +175,10 @@ def login(payload: Login, request: Request, response: Response):
     response.set_cookie("tk_session", cookie, httponly=True, samesite="strict",
                         secure=(os.getenv("TERMOKONTUR_SECURE_COOKIE") == "1" or request.url.scheme == "https"),
                         max_age=8 * 3600, path="/")
-    return {"ok": True, "building": viewer["building"]} if viewer else {"ok": True}
+    result = {"ok": True, "timezone": settings.local_zone().key}
+    if viewer:
+        result["building"] = viewer["building"]
+    return result
 
 
 @router.post("/logout", dependencies=[Depends(scoped_access)])
