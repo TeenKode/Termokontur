@@ -114,5 +114,33 @@ int main() {
     sensor::StateCheckpoint absent;
     assert(absent.save(sensor::State{}, write) && writes == 9);
   }
+  {
+    // A commit error is ambiguous: the new bytes may already be visible.
+    // Retrying the old value must write it, rather than trusting the cache.
+    sensor::StateCheckpoint checkpoint;
+    sensor::State previous{}, stored = previous;
+    checkpoint.loaded(previous);
+    auto candidate = previous;
+    ++candidate.next;
+    unsigned writes = 0;
+    assert(!checkpoint.save(candidate, [&](const sensor::State &value) {
+      ++writes;
+      stored = value;
+      return false;
+    }));
+    assert(stored.next == 2 && writes == 1);
+    auto write = [&](const sensor::State &value) {
+      ++writes;
+      stored = value;
+      return true;
+    };
+    assert(checkpoint.save(previous, write));
+    assert(stored.next == 1 && writes == 2);
+    assert(checkpoint.save(previous, write) && writes == 2);
+    // Even a second failed write leaves the cache unknown.
+    assert(!checkpoint.save(candidate, [](const sensor::State &) { return false; }));
+    assert(!checkpoint.save(previous, [](const sensor::State &) { return false; }));
+    assert(checkpoint.save(previous, write) && writes == 3);
+  }
   std::cout << "Persistent config, setup transaction recovery, state checkpoints and legacy NVS envelope checks passed\n";
 }
