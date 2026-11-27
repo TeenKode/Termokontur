@@ -259,6 +259,19 @@
             <p class="chart-note">Измерения без точной даты есть в таблице.</p>
           </div>
           <details id="sensor-config-details"><summary>Измерения и питание</summary><p>Настройки применятся при следующем подключении. Минимумы для Wi-Fi и OTA учитывают порог отключения. Для OTA требуется минимум 3300 мВ.</p><form id="sensor-config-form" class="sensor-form"></form></details>
+          <details id="sensor-boot-debug-details">
+            <summary>Временная отладка BOOT</summary>
+            <p id="sensor-boot-debug-state" role="status" aria-live="polite"></p>
+            <p class="muted">Команда поступит при следующей связи. После её получения короткое нажатие BOOT выполнит пробный замер. Зарядка и низкое напряжение прекращают сессию.</p>
+            <form id="sensor-boot-debug-form" class="sensor-form">
+              <label>Длительность<select id="sensor-boot-debug-duration"><option value="300">5 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option><option value="3600">60 минут</option></select></label>
+              <label class="archive-toggle"><input id="sensor-boot-debug-send" type="checkbox" checked> Отправлять внеплановые замеры</label>
+              <label class="archive-toggle"><input id="sensor-boot-debug-preserve" type="checkbox" checked> Сохранять штатное расписание</label>
+              <button id="sensor-boot-debug-queue" class="btn secondary" disabled>Назначить отладку</button>
+              <button id="sensor-boot-debug-cancel" type="button" class="btn secondary" disabled>Отменить ожидание</button>
+            </form>
+            <p class="muted">Отмена удаляет только ожидающую команду, не останавливает уже запущенную сессию. Команда действует до 7 суток.</p>
+          </details>
           <details id="sensor-ota-details"><summary>Обновление прошивки</summary><p id="sensor-ota-state"></p><form id="sensor-ota-form" class="sensor-form"><label>Новая версия<select id="sensor-firmware" required></select></label><button class="btn secondary" id="sensor-ota-assign" disabled>Назначить обновление</button><button type="button" id="sensor-ota-cancel" class="btn secondary" disabled>Отменить обновление</button></form><form id="sensor-upload-form" class="sensor-form"><label>Образ прошивки .bin<input type="file" id="sensor-image" name="file" accept=".bin" required></label><button class="btn secondary">Загрузить образ</button></form></details>
           <details open><summary>Последние измерения</summary><div class="table-scroll sensor-record-scroll" tabindex="0" role="region" aria-label="Измерения датчика"><table><thead><tr><th>№</th><th>Измерено</th><th>°C</th><th>%</th><th>Аккумулятор</th><th>Источник времени / ошибка</th></tr></thead><tbody id="sensor-records"></tbody></table></div><button type="button" id="sensor-records-more" class="btn secondary" hidden>Показать ещё 100 измерений</button></details>
           <details><summary>Журнал устройства</summary><ul id="sensor-events"></ul></details>
