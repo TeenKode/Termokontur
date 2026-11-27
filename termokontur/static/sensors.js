@@ -127,6 +127,7 @@ function renderRemoteBoot(d,status){
   $("sensor-boot-debug-send").checked=status?.send_now??true;
   $("sensor-boot-debug-preserve").checked=status?.preserve_schedule??true;
   for(const id of ["sensor-boot-debug-duration","sensor-boot-debug-send","sensor-boot-debug-preserve","sensor-boot-debug-queue"])$(id).disabled=!eligible;
+  $("sensor-boot-debug-cancel").dataset.commandId=status?.command_id||"";
   $("sensor-boot-debug-cancel").disabled=!pending;
 }
 let tkSensorTrigger=null;
@@ -242,9 +243,20 @@ onOperation($("sensor-boot-debug-form"),"Назначаем отладку BOOT�
 onOperation($("sensor-boot-debug-cancel"),"Отменяем ожидание BOOT…",async()=>{
   const id=sensorSelected,d=sensorDevices.find(x=>x.id===id);
   if(!d)return;
-  await api("/api/sensors/devices/"+id+"/boot-debug","DELETE");
-  if(sensorSelected===id)renderRemoteBoot(d,null);
-  toast("Ожидающая команда удалена");
+  const commandId=$("sensor-boot-debug-cancel").dataset.commandId;
+  if(!commandId)return;
+  const path="/api/sensors/devices/"+id+"/boot-debug";
+  try{
+    await api(path+"?"+new URLSearchParams({command_id:commandId}),"DELETE");
+    if(sensorSelected===id)renderRemoteBoot(d,null);
+    toast("Ожидающая команда удалена");
+  }catch(error){
+    if(error.status===409){
+      const current=await api(path);
+      if(sensorSelected===id)renderRemoteBoot(d,current);
+    }
+    throw error;
+  }
 });
 $("sensor-firmware").addEventListener("change",()=>{
   $("sensor-ota-assign").disabled=!$("sensor-firmware").value;
