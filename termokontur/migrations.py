@@ -122,9 +122,21 @@ def _sensor_schedule(conn: sqlite3.Connection, _: str) -> None:
         PRIMARY KEY(device_id, version))""")
 
 
+def _sensor_boot_debug(conn: sqlite3.Connection, _: str) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS sensor_boot_debug (
+        device_id TEXT PRIMARY KEY REFERENCES sensor_devices(id) ON DELETE CASCADE,
+        command_id TEXT NOT NULL UNIQUE,
+        duration_s INTEGER NOT NULL CHECK(duration_s IN (300,900,1800,3600)),
+        send_now INTEGER NOT NULL CHECK(send_now IN (0,1)),
+        preserve_schedule INTEGER NOT NULL CHECK(preserve_schedule IN (0,1)),
+        expires_at INTEGER NOT NULL,
+        accepted_at INTEGER
+    )""")
+
+
 _MIGRATIONS = (_initialize_legacy_schema, _add_sensor_model, _retire_unsupported_sensors,
                _factory_tickets, _sensor_history, _session_revocations, _max_delivery_failures,
-               _admin_audit, _sensor_sync_status, _sensor_schedule)
+               _admin_audit, _sensor_sync_status, _sensor_schedule, _sensor_boot_debug)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
