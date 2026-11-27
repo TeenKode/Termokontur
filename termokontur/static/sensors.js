@@ -108,6 +108,27 @@ async function refreshSensors(){
   }catch(e){if(request===sensorRefreshId){$("sensor-state").textContent="Ошибка: "+e.message;toast(e.message,true);}}
   finally{if(request===sensorRefreshId)delete $("sensor-state").dataset.loading;}
 }
+function supportsRemoteBoot(d){
+  const parts=String(d.firmware||"").split(".");
+  if(parts.length!==3||parts.some(x=>!/^\d{1,3}$/.test(x)))return false;
+  const [major,minor,patch]=parts.map(Number);
+  return major>1||major===1&&(minor>5||minor===5&&patch>=34);
+}
+function renderRemoteBoot(d,status){
+  const capable=supportsRemoteBoot(d),eligible=capable&&Boolean(d.enabled&&d.hardware_id)&&!["retired","authorization_pending","rejected","disabled","not_enrolled"].includes(d.status);
+  const pending=status?.status==="pending";
+  const state=$("sensor-boot-debug-state");
+  state.textContent=!capable?"Требуется прошивка 1.5.34 или новее.":
+    !eligible?"Для запуска подключите и разрешите датчик.":
+    pending?"Ожидает связи · "+status.duration_s/60+" мин · до "+sensorWhen(status.expires_at):
+    status?.status==="accepted"?"Команда получена "+sensorWhen(status.accepted_at)+". Фактическое состояние сессии не подтверждено.":
+    status?.status==="expired"?"Срок ожидания истёк. Назначьте новую команду.":"Нет ожидающей команды.";
+  $("sensor-boot-debug-duration").value=String(status?.duration_s||300);
+  $("sensor-boot-debug-send").checked=status?.send_now??true;
+  $("sensor-boot-debug-preserve").checked=status?.preserve_schedule??true;
+  for(const id of ["sensor-boot-debug-duration","sensor-boot-debug-send","sensor-boot-debug-preserve","sensor-boot-debug-queue"])$(id).disabled=!eligible;
+  $("sensor-boot-debug-cancel").disabled=!pending;
+}
 let tkSensorTrigger=null;
 $("tk-sensor-close")?.addEventListener("click",()=>{
   sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;
@@ -117,7 +138,8 @@ async function openSensor(id,reveal=false){
   if(reveal)tkSensorTrigger=document.activeElement;
   const request=++sensorLoadId;
   try{
-    const [records,events,firmwares,bundle]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit="+sensorPageSize),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase)]);
+    const known=sensorDevices.find(x=>x.id===id);
+    const [records,events,firmwares,bundle,bootStatus]=await Promise.all([api("/api/sensors/devices/"+id+"/records?limit="+sensorPageSize),api("/api/sensors/devices/"+id+"/events"),api("/api/sensors/firmware"),api(sensorFirmwareBase),known?.status==="retired"?Promise.resolve(null):api("/api/sensors/devices/"+id+"/boot-debug")]);
     if(request!==sensorLoadId)return;
     const d=sensorDevices.find(x=>x.id===id);if(!d)return;
     sensorSelected=id;sensorRecords=records;sensorConfig={...d.config};
@@ -126,7 +148,8 @@ async function openSensor(id,reveal=false){
     $("sensor-detail-state").textContent=sensorStatusText(d)+" · "+d.id+" · "+(retired?"Поддержка модели завершена":"ESP32-C3")+" · "+(d.sensor_type||"sht4x").toUpperCase()+" · прошивка "+(d.firmware||"—")+" · настройки "+d.config_version+" / "+d.config.version+" · потеряно записей: "+d.lost;
     renderSensorSyncTimes($("sensor-sync-times"),d);
     const notes=$("sensor-sync-notes");notes.textContent=sensorSyncNotes(d);notes.hidden=!notes.textContent;
-    for(const id of ["sensor-device-form","sensor-config-details","sensor-ota-details"])$(id).hidden=retired;
+    for(const id of ["sensor-device-form","sensor-config-details","sensor-ota-details","sensor-boot-debug-details"])$(id).hidden=retired;
+    renderRemoteBoot(d,bootStatus);
     $("sensor-rekey").textContent=d.identity_fingerprint?"Отозвать доступ":"Перевыпустить ключ";
     $("sensor-edit-name").value=d.name;sensorRoomOptions($("sensor-edit-room"),d.room_id);$("sensor-enabled").checked=Boolean(d.enabled);
     const configForm=$("sensor-config-form");renderSensorConfigFields(configForm,d.config);
@@ -204,6 +227,25 @@ onOperation($("sensor-refresh"),"Обновляем список датчико�
 onOperation($("sensor-device-form"),"Сохраняем датчик…",async e=>{e.preventDefault();try{const enabled=$("sensor-enabled").checked;await api("/api/sensors/devices/"+sensorSelected,"PATCH",{name:$("sensor-edit-name").value.trim(),room_id:Number($("sensor-edit-room").value),enabled});await refreshSensors();if(enabled)await openSensor(sensorSelected);else{sensorSelected=null;sensorLoadId++;$("sensor-detail").hidden=true;}toast(enabled?"Изменения сохранены":"Датчик перемещён в архив, история сохранена");}catch(e){toast(e.message,true);}});
 onOperation($("sensor-rekey"),"Отзываем доступ датчика…",async()=>{if(!confirm("Отозвать доступ датчика? Для восстановления настройте его по USB, подтвердите заявку или используйте новый код."))return;try{const reply=await api("/api/sensors/devices/"+sensorSelected+"/rekey","POST");if(reply.requires_authorization){await refreshSensors();toast("Доступ отозван. Настройте датчик по USB или подтвердите его новую заявку.");}else revealSensorCode(reply);}catch(e){toast(e.message,true);}});
 onOperation($("sensor-config-form"),"Сохраняем настройки датчика…",async e=>{e.preventDefault();try{const body=readSensorConfig(e.target,sensorConfig,e.target.elements.enabled.checked);await api("/api/sensors/devices/"+sensorSelected+"/config","PUT",body);await refreshSensors();await openSensor(sensorSelected);toast("Настройки применятся при следующем подключении");}catch(e){toast(e.message,true);}});
+onOperation($("sensor-boot-debug-form"),"Назначаем отладку BOOT…",async e=>{
+  e.preventDefault();
+  const id=sensorSelected,d=sensorDevices.find(x=>x.id===id);
+  if(!d||!supportsRemoteBoot(d)||$("sensor-boot-debug-queue").disabled)return;
+  const status=await api("/api/sensors/devices/"+id+"/boot-debug","PUT",{
+    duration_s:Number($("sensor-boot-debug-duration").value),
+    send_now:$("sensor-boot-debug-send").checked,
+    preserve_schedule:$("sensor-boot-debug-preserve").checked
+  });
+  if(sensorSelected===id)renderRemoteBoot(d,status);
+  toast("Команда отладки назначена до следующей связи");
+});
+onOperation($("sensor-boot-debug-cancel"),"Отменяем ожидание BOOT…",async()=>{
+  const id=sensorSelected,d=sensorDevices.find(x=>x.id===id);
+  if(!d)return;
+  await api("/api/sensors/devices/"+id+"/boot-debug","DELETE");
+  if(sensorSelected===id)renderRemoteBoot(d,null);
+  toast("Ожидающая команда удалена");
+});
 $("sensor-firmware").addEventListener("change",()=>{
   $("sensor-ota-assign").disabled=!$("sensor-firmware").value;
 });

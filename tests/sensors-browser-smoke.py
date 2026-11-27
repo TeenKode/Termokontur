@@ -58,6 +58,36 @@ with tempfile.TemporaryDirectory(prefix="termokontur-ui-") as tmp:
                 page.fill('#sensor-config-form input[name="measure_s"]','3600')
                 page.click('#sensor-config-form button')
                 expect(page.locator('#sensor-detail-state')).to_contain_text('1 / 2')
+                # Remote debug is not offered on old firmware; upgrade the
+                # simulated device, exercise queue/cancel and receipt rendering.
+                page.locator("#sensor-boot-debug-details summary").click()
+                expect(page.locator("#sensor-boot-debug-queue")).to_be_disabled()
+                expect(page.locator("#sensor-boot-debug-state")).to_contain_text("1.5.34")
+                endpoint='/api/sensors/devices/'+created['device_id']
+                headers={"Authorization":"Bearer "+enroll.json()["token"]}
+                payload={"model":"c3-sht40-v1","firmware":"1.5.34","records":[],
+                         "next_seq":49,"lost":0,"rssi":-65,"battery_mv":3910,
+                         "config_version":2,"boots":49,"boot_debug_supported":True}
+                assert api.post(endpoint+'/sync',headers=headers,json=payload).status_code==200
+                page.click("#sensor-refresh")
+                expect(page.locator("#sensor-boot-debug-queue")).to_be_enabled()
+                page.select_option("#sensor-boot-debug-duration","900")
+                page.uncheck("#sensor-boot-debug-send")
+                page.click("#sensor-boot-debug-queue")
+                expect(page.locator("#sensor-boot-debug-state")).to_contain_text("Ожидает связи")
+                command=api.get(endpoint+'/boot-debug').json()
+                assert command["duration_s"]==900 and command["send_now"] is False
+                page.click("#sensor-boot-debug-cancel")
+                expect(page.locator("#sensor-boot-debug-state")).to_contain_text("Нет ожидающей")
+                assert api.get(endpoint+'/boot-debug').json() is None
+                page.click("#sensor-boot-debug-queue")
+                expect(page.locator("#sensor-boot-debug-state")).to_contain_text("Ожидает связи")
+                command=api.post(endpoint+'/sync',headers=headers,json=payload).json()["boot_debug"]
+                confirmed=api.post(endpoint+'/sync',headers=headers,json={**payload,"boot_debug_ack":command["command_id"]})
+                assert confirmed.status_code==200,confirmed.text
+                page.click("#sensor-refresh")
+                expect(page.locator("#sensor-boot-debug-state")).to_contain_text("Команда получена")
+                expect(page.locator("#sensor-boot-debug-cancel")).to_be_disabled()
                 for width,height,theme in [(1440,1000,'light'),(390,844,'light'),(390,844,'dark')]:
                     page.set_viewport_size({"width":width,"height":height})
                     page.evaluate('(value)=>window.termokonturTheme.setPreference(value)',theme)
