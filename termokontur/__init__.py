@@ -1,2 +1,2 @@
 """Termokontur — room temperature monitoring."""
-__version__ = "1.5.32"
+__version__ = "1.5.34"

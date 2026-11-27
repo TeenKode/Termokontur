@@ -1,10 +1,28 @@
 #pragma once
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
+#include <string_view>
 
 namespace sensor {
 inline bool boot_debug_duration(double seconds) {
   return seconds == 300 || seconds == 900 || seconds == 1800 || seconds == 3600;
+}
+inline bool boot_command_id(std::string_view id) {
+  return id.size() == 32 && std::all_of(id.begin(), id.end(), [](char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+  });
+}
+inline bool boot_command_expiry(double now, double expires) {
+  return std::isfinite(now) && std::isfinite(expires) &&
+         std::floor(now) == now && std::floor(expires) == expires &&
+         now >= 1700000000 && now <= 4102444800 &&
+         expires > now && expires - now <= 7 * 86400;
+}
+// Only start after a durable receipt, never retry the same command after reset.
+template<class Save>
+bool consume_boot_command(std::string_view id, std::string_view previous, Save save) {
+  return boot_command_id(id) && id != previous && save(id);
 }
 // One absolute monotonic deadline for the entire debug session.
 inline int64_t boot_session_end(int64_t now, uint32_t duration_s) {

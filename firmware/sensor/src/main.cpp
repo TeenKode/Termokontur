@@ -61,6 +61,9 @@ static uint32_t boot_debug_duration_s = BOOT_DEBUG_WINDOW_S;
 static bool boot_debug_continuous = false;
 static sensor::BootOptions boot_options;
 static int64_t boot_debug_end_us = 0;
+static bool remote_boot_pending = false;
+static bool remote_receipt_loaded = false, remote_receipt_valid = false;
+static char remote_receipt[33]{};
 static constexpr char MODEL[] = "c3-sht40-v1";
 static const char *firmware_version() { return esp_app_get_description()->version; }
 static nvs_handle_t nv;
@@ -598,6 +601,7 @@ static bool server_supports_replay = false;
 static bool server_supports_usb_sync = false;
 static bool server_supports_tail_loss = false;
 static bool server_supports_next_send = false;
+static bool server_supports_boot_debug = false;
 static bool sync_time() {
   // The stored server time anchors certificate validation on a cold boot.
   // Never fetch trust material through an unverified connection.
@@ -628,6 +632,7 @@ static bool sync_time() {
   server_supports_usb_sync = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "usb_powered_sync"));
   server_supports_tail_loss = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_tail_loss"));
   server_supports_next_send = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "sync_next_send"));
+  server_supports_boot_debug = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "boot_debug"));
   cJSON_Delete(j);
   if (certificate != ca) {
     auto previous = ca;
@@ -938,8 +943,48 @@ static cJSON *measurement_json(const Record &r) {
   return json;
 }
 
+static bool load_remote_receipt() {
+  if (!remote_receipt_loaded) {
+    const int loaded = load_blob("boot_debug_id", remote_receipt, sizeof remote_receipt);
+    remote_receipt_valid = loaded == 0 || (loaded == 1 && remote_receipt[32] == '\0' &&
+        sensor::boot_command_id(std::string_view(remote_receipt, 32)));
+    remote_receipt_loaded = true;
+    if (!remote_receipt_valid) puts("BOOT: receipt unreadable; remote debug disabled");
+  }
+  return remote_receipt_valid;
+}
+static bool accept_remote_boot(cJSON *command, double server_now) {
+  if (!cJSON_IsObject(command) || charging() || remote_boot_pending || !load_remote_receipt())
+    return false;
+  const auto id = text(command, "command_id");
+  const auto *duration = cJSON_GetObjectItemCaseSensitive(command, "duration_s");
+  const auto *send_now = cJSON_GetObjectItemCaseSensitive(command, "send_now");
+  const auto *preserve = cJSON_GetObjectItemCaseSensitive(command, "preserve_schedule");
+  const auto *expires = cJSON_GetObjectItemCaseSensitive(command, "expires_at");
+  if (!cJSON_IsNumber(duration) || !sensor::boot_debug_duration(duration->valuedouble) ||
+      !cJSON_IsBool(send_now) || !cJSON_IsBool(preserve) ||
+      !cJSON_IsNumber(expires) || !sensor::boot_command_expiry(server_now, expires->valuedouble))
+    return false;
+  if (!sensor::consume_boot_command(id, remote_receipt, [](std::string_view value) {
+        char candidate[33]{};
+        memcpy(candidate, value.data(), value.size());
+        if (charging() || !save_blob("boot_debug_id", candidate, sizeof candidate)) {
+          remote_receipt_valid = false;
+          return false;
+        }
+        memcpy(remote_receipt, candidate, sizeof remote_receipt);
+        return true;
+      })) return false;
+  boot_options = {cJSON_IsTrue(send_now) != 0, cJSON_IsTrue(preserve) != 0};
+  boot_debug_duration_s = static_cast<uint32_t>(duration->valuedouble);
+  boot_debug_continuous = true;
+  remote_boot_pending = true;
+  puts("BOOT: remote command accepted and receipt persisted");
+  return true;
+}
+
 static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
-                 bool allow_ota, uint64_t preserved_send) {
+                 bool allow_ota, uint64_t preserved_send, bool allow_remote_debug) {
   // Reuse the trusted server time and Wi-Fi connection if already obtained.
   if (!time_prepared) {
     if (!wifi_up())
@@ -964,6 +1009,11 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
     add(j, "model", MODEL);
     add(j, "sensor_type", sensor_type);
     add(j, "firmware", firmware_version());
+    if (server_supports_boot_debug && load_remote_receipt()) {
+      // Existing servers reject unknown fields: negotiate via authenticated bootstrap.
+      cJSON_AddBoolToObject(j, "boot_debug_supported", true);
+      if (remote_receipt[0]) add(j, "boot_debug_ack", remote_receipt);
+    }
     num(j, "next_seq", state.next);
     num(j, "lost", lost);
     if (server_supports_next_send && preserved_send) {
@@ -1054,8 +1104,19 @@ static bool sync(sensor::Journal &journal, uint16_t mv, bool time_prepared,
       save_provision();
     }
     if (ack == state.next) {
-      if (allow_ota) ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
+      const auto *server_time = cJSON_GetObjectItemCaseSensitive(j, "time");
+      const bool accepted = server_supports_boot_debug && allow_remote_debug &&
+          mv >= cfg.cutoff_mv && mv <= 5000 && cJSON_IsNumber(server_time) &&
+          accept_remote_boot(cJSON_GetObjectItemCaseSensitive(j, "boot_debug"),
+                             server_time->valuedouble);
+      if (allow_ota && !remote_boot_pending)
+        ota(cJSON_GetObjectItemCaseSensitive(j, "ota"), mv);
       cJSON_Delete(j);
+      // Best-effort immediate empty ACK; persisted ID is sent on later syncs too.
+      if (accepted && available() && page < 63) {
+        cursor = ack;
+        continue;
+      }
       return true;
     }
     cJSON_Delete(j);
@@ -2230,7 +2291,8 @@ extern "C" void app_main() {
            (unsigned long long)state.ack, (unsigned long long)state.next);
     bool ok = (!bootstrap_after_sample || time_prepared) &&
               sync(journal, mv, time_prepared, scheduled_send && !boot_session_active && !boot_debug && !requested_sync,
-                   advance_send ? 0 : rt.next_send_uptime);
+                   advance_send ? 0 : rt.next_send_uptime,
+                   !boot_session_active && !boot_debug && !usb_without_battery);
     stop_network();
     const auto next_interval = state.ack < state.next ? std::min(cfg.send_s, cfg.measure_s) : cfg.send_s;
     const auto updated = sensor::after_send({rt.next_send_uptime, rt.failures}, advance_send, ok,
@@ -2262,6 +2324,12 @@ extern "C" void app_main() {
     } else {
       boot_debug_result("Замер сохранён на плате. Ошибка отправки — " + last_error + ".");
     }
+  }
+  if (remote_boot_pending && !boot_session_active && !charging()) {
+    remote_boot_pending = false;
+    boot_session_active = true;
+    boot_debug_end_us = sensor::boot_session_end(esp_timer_get_time(), boot_debug_duration_s);
+    boot_debug_result("Удалённая сессия BOOT активна.");
   }
   if (!boot_session_active || charging() || esp_timer_get_time() >= boot_debug_end_us) break;
   stop_network();
