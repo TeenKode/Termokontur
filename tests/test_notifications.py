@@ -21,6 +21,7 @@ def test_notifications_require_admin(client):
 
 
 def test_notification_audience_and_idempotency(admin):
+    settings.update({"reminder_days": "0,1,2,3,4,5,6"})
     room = db.create_room("Школа", "1", "101", "Кабинет", 18, 24)
     inactive = db.create_room("Школа", "1", "102", "Кабинет", 18, 24)
     _bound_user("123", room)

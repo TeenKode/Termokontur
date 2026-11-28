@@ -80,7 +80,7 @@ def test_example_admin_secrets_cannot_start(monkeypatch, tmp_path):
 
 def test_daily_requires_auth_and_counts(admin, client, monkeypatch):
     from termokontur import settings
-    settings.update({"timezone": "UTC"})
+    settings.update({"timezone": "UTC", "reminder_days": "0,1,2,3,4,5,6"})
     assert client.get("/api/daily").status_code == 200  # same authenticated client
     room_id = admin.post("/api/rooms", json=room_payload()).json()["id"]
     before = admin.get("/api/daily").json()
