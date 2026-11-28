@@ -5,10 +5,11 @@ import asyncio
 import logging
 import os
 import re
+import socket
 
 import httpx
 
-from . import db, daily, settings, max_delivery, max_ui
+from . import db, daily, max_connection, max_delivery, max_ui, settings, write_gate
 
 API = "https://platform-api2.max.ru"
 logger = logging.getLogger("termokontur.max")
@@ -161,7 +162,7 @@ def process_update(update: dict) -> tuple[str, str] | None:
         max_ui._set(uid)
     return uid, result
 
-async def send_reminders(client: httpx.AsyncClient) -> None:
+async def send_reminders(client: httpx.AsyncClient, *, expected=None) -> None:
     """Send at most one reminder per user and local day, with bounded retries."""
     if not daily.reminders_due():
         return
@@ -174,7 +175,11 @@ async def send_reminders(client: httpx.AsyncClient) -> None:
         still_missing = [room for room in missing if room["id"] in missing_now]
         if not still_missing or current["local_date"] != snapshot["local_date"]:
             continue
-        if not daily.claim_reminder(snapshot["local_date"], uid):
+        with db.atomic() as conn:
+            if expected:
+                max_connection.require_current(conn, expected)
+            claimed = daily.claim_reminder(snapshot["local_date"], uid)
+        if not claimed:
             continue
         try:
             response = await client.post(
@@ -190,73 +195,98 @@ async def send_reminders(client: httpx.AsyncClient) -> None:
         await asyncio.sleep(0.15)  # under MAX's global request-rate limit
 
 
+async def _identified(client: httpx.AsyncClient, active: max_connection.Connection):
+    if active.bot_id:
+        return active
+    response = await client.get("/me", timeout=8)
+    response.raise_for_status()
+    return max_connection.identify(active, response.json())
+
+
 async def poll(token: str):
     headers = {"Authorization": token}
     async with httpx.AsyncClient(base_url=API, headers=headers,
                                  timeout=httpx.Timeout(45, connect=12)) as client:
         backoff = 2
         while True:
-            _heartbeat("polling")
-            if token != settings.get("max_token", "") or settings.get("max_mode", "polling") != "polling":
-                logger.info("MAX mode or token updated; reconnecting")
-                return
             try:
-                await send_reminders(client)
-                max_delivery.queue_temperature_alerts()
-                await max_delivery.drain(client)
-                marker = db.get_state("max_marker")
-                params = {"timeout": 30, "limit": 100}
-                if marker:
-                    params["marker"] = marker
-                response = await client.get("/updates", params=params)
-                response.raise_for_status()
-                payload = response.json()
-                for update in payload.get("updates", []):
-                    max_delivery.enqueue(update)
-                next_marker = payload.get("marker")
-                if next_marker is not None:
-                    db.set_state("max_marker", str(next_marker))
-                await max_delivery.drain(client)
-                db.set_state("max_poll_last_success_at", db.utc_now())
-                db.set_state("max_poll_last_error", "")
-                backoff = 2
-            except (httpx.HTTPError, ValueError, KeyError, max_delivery.ProcessingPending) as exc:
-                db.set_state("max_poll_last_error", _poll_failure_reason(exc))
-                logger.warning("MAX polling cycle failed: %s", exc)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 90)
+                with write_gate.activity():
+                    active = max_connection.current()
+                    if active.token != token or active.mode != "polling":
+                        return
+                    _heartbeat("polling")
+                    try:
+                        active = await _identified(client, active)
+                        await send_reminders(client, expected=active)
+                        max_delivery.queue_temperature_alerts(expected=active)
+                        await max_delivery.drain(client, expected=active)
+                        marker = max_connection.marker(active)
+                        params = {"timeout": 30, "limit": 100}
+                        if marker:
+                            params["marker"] = marker
+                        response = await client.get("/updates", params=params)
+                        response.raise_for_status()
+                        payload = response.json()
+                        for update in payload.get("updates", []):
+                            max_delivery.enqueue(update, expected=active)
+                        max_connection.poll_result(active, cursor=payload.get("marker"))
+                        await max_delivery.drain(client, expected=active)
+                    except (httpx.HTTPError, ValueError, KeyError, max_delivery.ProcessingPending) as exc:
+                        max_connection.poll_result(active, error=_poll_failure_reason(exc))
+                        logger.warning("MAX polling cycle failed: %s", exc)
+                    else:
+                        backoff = 2
+                        continue
+            except write_gate.Busy:
+                await asyncio.sleep(1)
+                continue
+            except max_connection.Changed:
+                return
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 90)
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    db.initialize()
-    settings.bootstrap()
+    with write_gate.startup():
+        db.initialize()
+        settings.bootstrap()
+    if notify_socket := os.getenv("NOTIFY_SOCKET"):
+        address = "\0" + notify_socket[1:] if notify_socket.startswith("@") else notify_socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as connection:
+            connection.sendto(b"READY=1", address)
 
     async def worker():
         next_webhook_sync = 0.0
+        webhook_generation = ""
         while True:
-            token = settings.get("max_token", "") or ""
-            if not token:
-                _heartbeat("waiting_for_token")
-                await asyncio.sleep(10)
+            try:
+                with write_gate.activity():
+                    active = max_connection.current()
+                    if not active.token:
+                        _heartbeat("waiting_for_token")
+                    elif active.mode == "webhook":
+                        _heartbeat("webhook")
+                        async with httpx.AsyncClient(base_url=API, headers={"Authorization": active.token},
+                                                     timeout=httpx.Timeout(30, connect=12)) as client:
+                            try:
+                                active = await _identified(client, active)
+                                now = asyncio.get_running_loop().time()
+                                if active.generation != webhook_generation or now >= next_webhook_sync:
+                                    verified = await max_delivery.ensure_webhook_subscription(client, expected=active)
+                                    webhook_generation = active.generation
+                                    next_webhook_sync = now + (3600 if verified else 120)
+                                max_delivery.queue_temperature_alerts(expected=active)
+                                await max_delivery.drain(client, expected=active)
+                                await send_reminders(client, expected=active)
+                            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                                logger.warning("MAX webhook cycle failed: %s", exc)
+            except (write_gate.Busy, max_connection.Changed):
+                await asyncio.sleep(1)
                 continue
-            if settings.get("max_mode", "polling") == "webhook":
-                _heartbeat("webhook")
-                async with httpx.AsyncClient(base_url=API, headers={"Authorization": token},
-                                             timeout=httpx.Timeout(30, connect=12)) as client:
-                    now = asyncio.get_running_loop().time()
-                    if now >= next_webhook_sync:
-                        try:
-                            verified = await max_delivery.ensure_webhook_subscription(client)
-                        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                            logger.warning("MAX webhook subscription check failed: %s", exc)
-                            verified = False
-                        next_webhook_sync = now + (3600 if verified else 120)
-                    max_delivery.queue_temperature_alerts()
-                    await max_delivery.drain(client)
-                    await send_reminders(client)
-                await asyncio.sleep(3)
+            if active.token and active.mode == "polling":
+                await poll(active.token)
             else:
-                await poll(token)
+                await asyncio.sleep(3 if active.token else 10)
 
     asyncio.run(worker())
 

@@ -1,6 +1,6 @@
 """MAX profile recovery for users who were bound before names were stored."""
 import httpx
-from termokontur import db, settings
+from termokontur import db, max_connection, settings
 from termokontur.web import max_api
 
 
@@ -14,8 +14,8 @@ def remember(uid, first="", last="", username="", name=""):
 def record_chat(uid: str, chat_id: str = "4321"):
     with db.connect() as conn:
         conn.execute(
-            "INSERT INTO max_inbox(event_id,state,updated_at) VALUES (?,'complete',?)",
-            ("profile-event-" + uid, db.utc_now()),
+            "INSERT INTO max_inbox(event_id,state,updated_at,bot_scope) VALUES (?,'complete',?,?)",
+            ("profile-event-" + uid, db.utc_now(), max_connection.current(conn).scope),
         )
         conn.execute(
             "INSERT INTO max_outbox(event_id,user_id,text,next_retry_at) VALUES (?,?,?,?)",
@@ -31,8 +31,8 @@ def test_bound_user_refreshes_name_without_changing_rooms(admin, monkeypatch):
     room = db.create_room("Старшая школа", "", "102", "Кабинет", 18, 24)
     uid = "4567"
     assert db.bind_code(uid, db.issue_code(room["id"]))
-    record_chat(uid)
     settings.set_secret("max_token", "test-max-token-987654321")
+    record_chat(uid)
 
     def fake_get(url, **kwargs):
         assert url == "https://platform-api2.max.ru/chats/4321"
@@ -69,8 +69,8 @@ def test_refresh_is_admin_only(client):
 
 def test_refresh_rejects_mismatched_identity(admin, monkeypatch):
     remember("4567")
-    record_chat("4567")
     settings.set_secret("max_token", "test-max-token-987654321")
+    record_chat("4567")
     def fake_get(url, **kwargs):
         return httpx.Response(200, json={
             "type": "dialog", "dialog_with_user": {
@@ -85,8 +85,8 @@ def test_refresh_rejects_mismatched_identity(admin, monkeypatch):
 
 def test_refresh_max_api_failure_is_safe(admin, monkeypatch):
     remember("4567")
-    record_chat("4567")
     settings.set_secret("max_token", "test-max-token-987654321")
+    record_chat("4567")
     def fake_get(*args, **kwargs):
         raise httpx.ConnectError("PRIVATE NETWORK DETAILS")
     monkeypatch.setattr(max_api.httpx, "get", fake_get)

@@ -6,7 +6,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pydantic import Field, model_validator
-from . import db, sensors
+from . import db, sensors, write_gate
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +140,8 @@ async def worker():
     while True:
         await asyncio.sleep(30)
         try:
-            await asyncio.to_thread(drain)
+            await asyncio.to_thread(write_gate.run, drain)
+        except write_gate.Busy:
+            continue
         except Exception:
             log.exception("Sensor MQTT worker failed")

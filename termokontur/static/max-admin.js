@@ -431,6 +431,7 @@ async function loadMaxDiagnostics() {
       else if(state.worker_running&&state.token_valid===true) lines.push("Сообщения с текущим токеном ещё не получены.");
     }
     lines.push("Неотправленных ответов: "+state.undelivered+".");
+    if(state.parked_other_bots) lines.push("Ожидают подключения прежнего бота: "+state.parked_other_bots+".");
     if(state.repeatedly_failed) lines.push("Повторных ошибок доставки (10+): "+state.repeatedly_failed+".");
     if(state.permanently_failed) lines.push("Окончательно отклонено MAX: "+state.permanently_failed+". Проверьте доступность получателей.");
     if(state.stalled_events) lines.push("Зависших входящих событий: "+state.stalled_events+".");

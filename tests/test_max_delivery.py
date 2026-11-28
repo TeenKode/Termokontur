@@ -1,7 +1,11 @@
 """Regression coverage for MAX webhooks, durable queues and replay safety."""
 import asyncio
+import socket
+import subprocess
+import sys
+
 import httpx
-from termokontur import db, max_delivery, settings
+from termokontur import bot, db, max_connection, max_delivery, settings, write_gate
 
 
 def message(mid, user=123, value="/help"):
@@ -14,6 +18,11 @@ def message(mid, user=123, value="/help"):
             "body": {"mid": mid, "text": value},
         },
     }
+
+
+def bot_identity(url, **_):
+    assert url.endswith("/me")
+    return httpx.Response(200, request=httpx.Request("GET", url), json={"user_id": 7, "is_bot": True})
 
 
 def test_max_inbox_and_outbox_idempotency(client):
@@ -73,6 +82,7 @@ def test_webhook_registration_and_secret(admin, monkeypatch):
             return {"success": True}
     from termokontur.web import max_api
     monkeypatch.setattr(max_api.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(max_api.httpx, "get", bot_identity)
     url="https://school.example/api/max/webhook"
     assert admin.post("/api/settings/max-webhook",json={"url":url}).status_code == 409
     token="test-token-for-webhook-test-123"
@@ -153,13 +163,15 @@ def test_webhook_incomplete_event_returns_retryable_status(admin,monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {"success":True}
     monkeypatch.setattr(max_api.httpx,"post",lambda *args,**kwargs:Response())
+    monkeypatch.setattr(max_api.httpx, "get", bot_identity)
     admin.put("/api/settings/max-token",json={"value":"this-is-a-valid-token-123456789"})
     admin.post("/api/settings/max-webhook",json={"url":"https://school.example/api/max/webhook"})
     import hashlib
     update=message("incomplete-2")
     key=hashlib.sha256(max_delivery.event_key(update).encode()).hexdigest()
     with db.connect() as conn:
-        conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'processing',?)",(key,db.utc_now()))
+        conn.execute("INSERT INTO max_inbox(event_id,state,updated_at,bot_scope) VALUES(?,'processing',?,?)",
+                     (key, db.utc_now(), max_connection.current(conn).scope))
     secret=settings.get("max_webhook_secret")
     resp=admin.post("/api/max/webhook",json=update,headers={"X-Max-Bot-Api-Secret":secret})
     assert resp.status_code==503
@@ -292,6 +304,71 @@ def test_replacing_bot_token_resets_old_poll_marker(admin):
     assert admin.put("/api/settings/max-token", json={"value": replacement}).status_code == 200
     assert db.get_state("max_marker") == ""
     assert max_delivery.menu_message_id("777") is None
+
+
+def test_late_poll_response_cannot_change_new_connection(client, monkeypatch):
+    old_token = "test-token-for-first-polling-bot"
+    new_token = "test-token-for-second-polling-bot"
+    settings.set_secret("max_token", old_token)
+    old = max_connection.identify(max_connection.current(), {"is_bot": True, "user_id": 1})
+    max_connection.poll_result(old, cursor="first-cursor")
+
+    def receive(request):
+        assert request.url.path == "/updates"
+        assert request.url.params["marker"] == "first-cursor"
+        settings.set_secret("max_token", new_token)
+        return httpx.Response(200, json={"updates": [message("late-response")], "marker": "late-cursor"})
+
+    actual_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs:
+                        actual_client(**kwargs, transport=httpx.MockTransport(receive)))
+    asyncio.run(asyncio.wait_for(bot.poll(old_token), timeout=3))
+
+    new = max_connection.identify(max_connection.current(), {"is_bot": True, "user_id": 2})
+    assert new.token == new_token and max_connection.marker(new) is None
+    assert max_connection.marker(old) == "first-cursor"
+    assert max_delivery.diagnostics()["parked_other_bots"] == 0
+    assert not db.list_max_users()
+
+
+def test_outbox_resumes_only_for_same_verified_bot(client):
+    settings.set_secret("max_token", "test-original-token-for-bot-one")
+    original = max_connection.identify(max_connection.current(), {"is_bot": True, "user_id": 1})
+    max_connection.poll_result(original, cursor="bot-one")
+    assert max_delivery.enqueue(message("bot-scoped-message"), expected=original)
+
+    settings.set_secret("max_token", "test-original-token-for-bot-two")
+    second = max_connection.identify(max_connection.current(), {"is_bot": True, "user_id": 2})
+    assert not max_delivery.pending(expected=second)
+    assert max_delivery.diagnostics()["parked_other_bots"] == 1
+    assert max_delivery.enqueue(message("bot-scoped-message"), expected=second)
+    assert len(max_delivery.pending(expected=second)) == 1
+
+    settings.set_secret("max_token", "test-replacement-token-for-bot-one")
+    renewed = max_connection.identify(max_connection.current(), {"is_bot": True, "user_id": 1})
+    assert max_connection.marker(renewed) == "bot-one"
+    assert not max_delivery.enqueue(message("bot-scoped-message"), expected=renewed)
+    assert len(max_delivery.pending(expected=renewed)) == 1
+
+
+def test_worker_reports_ready_with_delivery_paused(tmp_path, monkeypatch):
+    monkeypatch.setenv("TERMOKONTUR_DB", str(tmp_path / "termokontur.sqlite3"))
+    monkeypatch.delenv("MAX_BOT_TOKEN", raising=False)
+    write_gate.pause_for_update()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notify:
+        address = str(tmp_path / "notify.sock")
+        notify.bind(address)
+        notify.settimeout(5)
+        monkeypatch.setenv("NOTIFY_SOCKET", address)
+        with subprocess.Popen([sys.executable, "-m", "termokontur.bot"]) as worker:
+            try:
+                assert notify.recv(128) == b"READY=1"
+                with db.connect() as conn:
+                    assert conn.execute("SELECT 1 FROM settings WHERE key='__bootstrapped'").fetchone()
+                assert db.get_state("max_worker_heartbeat") is None
+            finally:
+                worker.terminate()
+                worker.wait(timeout=5)
 
 
 def test_max_webhook_stream_has_strict_size_limit(admin):

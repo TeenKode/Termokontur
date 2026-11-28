@@ -4,7 +4,8 @@ After=network-online.target termokontur.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+TimeoutStartSec=90
 User=termokontur
 Group=termokontur
 WorkingDirectory=/opt/termokontur

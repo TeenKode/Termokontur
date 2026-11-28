@@ -10,7 +10,7 @@ import hashlib
 import re
 from datetime import datetime, time, timedelta, timezone
 
-from . import db, reports, settings
+from . import db, max_connection, max_delivery, reports, settings
 
 
 def subscriptions() -> list[dict]:
@@ -141,17 +141,14 @@ def _queue_period(subscription, start, end, period_key, instant, zone, cached) -
     stamp = db.utc_now()
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if not max_connection.current(conn).token:
+            return 0
         claim = conn.execute("""
             INSERT OR IGNORE INTO report_dispatches(subscription_id,period_key,event_id)
             SELECT id,?,? FROM report_subscriptions WHERE id=? AND enabled=1
         """, (period_key, event_id, sid))
         if not claim.rowcount:
             return 0
-        conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)",
-                     (event_id, stamp))
-        conn.execute("INSERT INTO max_outbox(event_id,user_id,text,next_retry_at) VALUES(?,?,?,?)",
-                     (event_id, subscription["user_id"], message, stamp))
-        conn.execute("INSERT INTO max_outbox_ui(event_id,delivery_mode,notify) VALUES(?,'notice',1)",
-                     (event_id,))
+        max_delivery.queue_notice(conn, event_id, subscription["user_id"], message, stamp)
         conn.execute("DELETE FROM report_waiting WHERE subscription_id=? AND period_key=?", (sid, period_key))
     return 1

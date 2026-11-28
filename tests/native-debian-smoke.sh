@@ -93,6 +93,12 @@ chmod 0755 /usr/local/bin/git
 cat >/usr/local/bin/runuser <<'SH'
 #!/usr/bin/env bash
 if [[ "${TEST_BREAK_FINISH:-0}" == 1 && "${6:-}" == success && "${8:-}" == success ]]; then
+  code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --request POST http://127.0.0.1:8092/api/ingest)
+  if [[ "$code" != 503 ]]; then
+    echo "candidate accepted writes before commit (HTTP $code)" >&2
+    touch /tmp/tk-unfenced-update
+  fi
   echo "intentional final status write failure" >&2
   exit 1
 fi
@@ -227,6 +233,8 @@ if TEST_BREAK_FINISH=1 PIP_NO_INDEX=1 /usr/local/sbin/termokontur-apply-update; 
 fi
 grep -q '"state": "failed"' /var/lib/termokontur/update-status.json
 grep -q 'Сбой на этапе: finishing' /var/lib/termokontur/update-status.json
+test ! -e /tmp/tk-unfenced-update
+test ! -e /var/lib/termokontur/termokontur.sqlite3.update-paused
 cmp /tmp/updater-before /usr/local/sbin/termokontur-apply-update
 cmp /tmp/revision-before /var/lib/termokontur/installed-revision
 curl --silent --show-error --fail http://127.0.0.1:8092/health
@@ -241,6 +249,7 @@ if TEST_BREAK_UPGRADE=1 TEST_BREAK_RESTORE=1 /usr/local/sbin/termokontur-apply-u
   exit 1
 fi
 grep -q 'Восстановление не подтверждено' /var/lib/termokontur/update-status.json
+test -f /var/lib/termokontur/termokontur.sqlite3.update-paused
 test ! -f /run/termokontur-test.pid
 test -n "$(find /var/lib/termokontur/backups -name 'pre-update-*' -print -quit)"
 echo "Debian 13 native install, update and rollback smoke succeeded."

@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
+from itertools import chain
 from zoneinfo import ZoneInfo
 
 from . import db, school_calendar, sensor_monitor, settings
 
 MAX_DAYS = 366
-MAX_READINGS = 500_000
 
 
 def period(start: str, end: str, now: datetime | None = None, *,
@@ -49,8 +49,16 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None,
     epochs = [int(datetime.fromisoformat(boundary).timestamp()) for boundary in boundaries]
     now_epoch = int((now or datetime.now(timezone.utc)).timestamp())
     calendar, weekdays = school_calendar.load()
-    day_set = set(days)
     day_index = {name: index for index, name in enumerate(days)}
+    # Per-day UTC bounds preserve both the index ranges and DST transitions.
+    # Older UTC timestamps may omit the explicit offset.
+    utc_prefixes = [stamp.removesuffix("+00:00") for stamp in boundaries]
+    windows = zip(days, utc_prefixes[:-1], utc_prefixes[1:], epochs[:-1], epochs[1:], strict=True)
+    day_windows = ("WITH days(day, begins, ends, starts_epoch, ends_epoch) AS (VALUES "
+                   + ",".join(["(?,?,?,?,?)"] * len(days)) + ")")
+    scoped = (*chain.from_iterable(windows), building, building)
+    authors = defaultdict(set)
+    authored = defaultdict(int)
     with db.connect() as conn:
         conn.execute("BEGIN")
         rooms = [dict(row) for row in conn.execute(
@@ -76,19 +84,31 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None,
         ) for row in conn.execute("""
             SELECT user_id, first_name, last_name, username FROM max_users
         """)}
-        # Bounded by one-year date window; refuse exceptionally large exports.
-        measurements = conn.execute("""
-            SELECT r.id, r.room_id, r.value, r.source, r.reporter, r.observed_at
-            FROM readings r JOIN rooms p ON p.id=r.room_id
-            WHERE (?='' OR p.building=?)
-              AND r.observed_at >= ? AND r.observed_at < ?
-            ORDER BY r.observed_at, r.id
-        """, (building, building, start_utc, end_utc))
-        readings = []
-        for row in measurements:
-            if len(readings) >= MAX_READINGS:
-                raise ValueError("Слишком много измерений. Уменьшите период отчёта")
-            readings.append(dict(row))
+        measurements = {(row["room_id"], row["day"]): row for row in conn.execute(day_windows + """,
+            aggregate AS (
+                SELECT p.id AS room_id, d.day, COUNT(*) AS readings, AVG(r.value) AS average,
+                       MIN(r.value) AS minimum, MAX(r.value) AS maximum,
+                       SUM(r.value<p.min_temp OR r.value>p.max_temp) AS deviations,
+                       (SELECT id FROM readings
+                        WHERE room_id=p.id AND observed_at>=d.begins AND observed_at<d.ends
+                        ORDER BY observed_at DESC, id DESC LIMIT 1) AS latest_id
+                FROM days d CROSS JOIN rooms p JOIN readings r
+                  ON r.room_id=p.id AND r.observed_at>=d.begins AND r.observed_at<d.ends
+                WHERE (?='' OR p.building=?)
+                GROUP BY p.id,d.day
+            )
+            SELECT a.*, r.source, r.reporter, r.observed_at
+            FROM aggregate a JOIN readings r ON r.id=a.latest_id
+        """, scoped)}
+        for row in conn.execute(day_windows + """
+            SELECT p.id AS room_id, d.day, substr(r.reporter,5) AS user_id, COUNT(*) AS readings
+            FROM days d CROSS JOIN rooms p JOIN readings r
+              ON r.room_id=p.id AND r.observed_at>=d.begins AND r.observed_at<d.ends
+            WHERE (?='' OR p.building=?) AND r.source='max' AND substr(r.reporter,1,4)='MAX:'
+            GROUP BY p.id,d.day,user_id
+        """, scoped):
+            authors[(row["user_id"], row["day"])].add(row["room_id"])
+            authored[row["user_id"]] += row["readings"]
         assignments = list(conn.execute("""
             SELECT a.user_id,a.room_id,a.starts_at,a.ends_at
             FROM max_binding_periods a JOIN rooms p ON p.id=a.room_id
@@ -98,37 +118,15 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None,
         """, (building, building, end_utc, start_utc)))
         history_start = conn.execute("SELECT value FROM app_state WHERE key='binding_history_since'").fetchone()
         devices = sensor_monitor.by_room(conn, building)
-        humidity = {}
-        for row in conn.execute("""
-            SELECT r.room_id,r.measured_at,r.humidity FROM sensor_records r JOIN rooms p ON p.id=r.room_id
-            WHERE r.measured_at>=? AND r.measured_at<? AND r.humidity IS NOT NULL
-              AND r.error='' AND (?='' OR p.building=?)
-        """, (epochs[0], epochs[-1], building, building)):
-            local_date = datetime.fromtimestamp(row["measured_at"], zone).date().isoformat()
-            value = row["humidity"]
-            stats = humidity.setdefault((row["room_id"], local_date), [0.0, 0, value, value])
-            stats[0] += value
-            stats[1] += 1
-            stats[2] = min(stats[2], value)
-            stats[3] = max(stats[3], value)
+        humidity = {(row["room_id"], row["day"]): row for row in conn.execute(day_windows + """
+            SELECT r.room_id, d.day, AVG(r.humidity) AS average, COUNT(*) AS readings,
+                   MIN(r.humidity) AS minimum, MAX(r.humidity) AS maximum
+            FROM days d CROSS JOIN sensor_records r JOIN rooms p ON p.id=r.room_id
+            WHERE r.measured_at>=d.starts_epoch AND r.measured_at<d.ends_epoch
+              AND r.humidity IS NOT NULL AND r.error='' AND (?='' OR p.building=?)
+            GROUP BY r.room_id,d.day
+        """, scoped)}
     room_map = {r["id"]: r for r in rooms}
-    # One value per classroom and calendar day for fair building averages.
-    samples = defaultdict(list)
-    authors = defaultdict(set)
-    authored = defaultdict(int)
-    for reading in readings:
-        dt = datetime.fromisoformat(reading["observed_at"])
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        day = dt.astimezone(zone).date().isoformat()
-        if day not in day_set:
-            continue
-        key = (reading["room_id"], day)
-        samples[key].append(reading)
-        if reading["source"] == "max" and str(reading["reporter"]).startswith("MAX:"):
-            uid = reading["reporter"][4:]
-            authors[(uid, day)].add(reading["room_id"])
-            authored[uid] += 1
 
     daily_rows = []
     room_daily = []
@@ -154,51 +152,50 @@ def build(start: str, end: str, building: str = "", now: datetime | None = None,
                 active_any |= active
                 change = next(events, None)
             scheduled = room["started_at"] < ends and active_any
-            entries = samples.get((room["id"], day), [])
+            readings = measurements.get((room["id"], day))
             wet = humidity.get((room["id"], day))
-            if not scheduled and not entries and not wet:
+            if not scheduled and not readings and not wet:
                 continue
             expected = scheduled and schedules[room["building"]](dates[i])
             waiting = sensor_monitor.waiting_until(devices.get(room["id"], ()), epochs[i], epochs[i + 1],
                                                  now_epoch) if expected else None
-            values = [float(x["value"]) for x in entries]
-            average = _average(values)
-            minimum = min(values) if values else None
-            maximum = max(values) if values else None
-            abnormal = bool(values and not room["min_temp"] <= average <= room["max_temp"])
-            raw_deviations = sum(not room["min_temp"] <= v <= room["max_temp"] for v in values)
-            latest = entries[-1] if entries else None
+            average = round(readings["average"], 2) if readings else None
+            abnormal = bool(readings and not room["min_temp"] <= average <= room["max_temp"])
             reporter_name = None
-            if latest:
-                if latest["source"] == "max":
-                    uid = str(latest["reporter"])[4:] if str(latest["reporter"]).startswith("MAX:") else ""
+            if readings:
+                if readings["source"] == "max":
+                    reporter = readings["reporter"]
+                    uid = reporter[4:] if reporter.startswith("MAX:") else ""
                     reporter_name = profiles.get(uid, "MAX ID " + uid)
-                elif latest["source"] == "ha":
+                elif readings["source"] == "ha":
                     reporter_name = "Автоматический датчик"
                 else:
                     reporter_name = "Администратор панели"
             record = {
                 "date": day, "room_id": room["id"], "building": room["building"],
                 "room": room["name"], "average": average,
-                "minimum": minimum, "maximum": maximum,
-                "humidity_average": round(wet[0] / wet[1], 2) if wet else None,
-                "humidity_minimum": wet[2] if wet else None, "humidity_maximum": wet[3] if wet else None,
-                "humidity_readings": wet[1] if wet else 0,
-                "readings": len(entries), "deviations": raw_deviations,
+                "minimum": readings["minimum"] if readings else None,
+                "maximum": readings["maximum"] if readings else None,
+                "humidity_average": round(wet["average"], 2) if wet else None,
+                "humidity_minimum": wet["minimum"] if wet else None,
+                "humidity_maximum": wet["maximum"] if wet else None,
+                "humidity_readings": wet["readings"] if wet else 0,
+                "readings": readings["readings"] if readings else 0,
+                "deviations": readings["deviations"] if readings else 0,
                 "expected": expected,
                 "waiting_until": waiting,
                 "out_of_range": abnormal,
-                "source": latest["source"] if latest else None,
-                "reporter": latest["reporter"] if latest else None,
+                "source": readings["source"] if readings else None,
+                "reporter": readings["reporter"] if readings else None,
                 "reporter_name": reporter_name,
-                "measured_at": latest["observed_at"] if latest else None,
+                "measured_at": readings["observed_at"] if readings else None,
                 "min_limit": room["min_temp"], "max_limit": room["max_temp"],
             }
             room_daily.append(record)
             by_room[room["id"]].append(record)
             by_day[day].append(record)
             by_building_day[(room["building"], day)].append(record)
-            if values:
+            if readings:
                 room_totals[room["id"]].append(average)
             elif expected and waiting is None:
                 missing.append({"date": day, "room_id": room["id"],

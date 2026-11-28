@@ -10,15 +10,13 @@ from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from threading import Lock
 
-from . import db, migrations, settings
+from . import db, migrations, settings, write_gate
 
 UPDATE_NAME_PATTERN = re.compile(r"^pre-update-[0-9TZ]{16}-[a-f0-9]{40}\.sqlite3$")
 NAME_PATTERN = re.compile(r"^termokontur-(?:manual|auto|import|pre-restore)-[0-9TZ]{16}-[0-9a-f]{12}\.sqlite3$")
 REQUIRED_TABLES = {"rooms", "readings", "settings", "admin_account", "max_bindings"}
 MAX_IMPORT_BYTES = 1024**3
-_restore_lock = Lock()
 logger = logging.getLogger(__name__)
 
 def backup_dir() -> Path:
@@ -145,10 +143,17 @@ def list_backups() -> list[dict]:
                        "created_at":datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds")})
     return sorted(result,key=lambda row:row["created_at"],reverse=True)
 
-def restore(name: str) -> dict:
+def restore(name: str, *, authorize=None) -> dict:
+    with write_gate.exclusive():
+        if authorize is not None:
+            authorize()
+        return _restore(name)
+
+
+def _restore(name: str) -> dict:
     source_path = backup_path(name)
     inspect(source_path)
-    with _restore_lock, TemporaryDirectory(dir=source_path.parent, prefix=".restore-") as workspace:
+    with TemporaryDirectory(dir=source_path.parent, prefix=".restore-") as workspace:
         staged = Path(workspace) / "restore.sqlite3"
         _copy_database(source_path, staged)
         db.initialize(staged)

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from . import db
+from . import db, max_connection
 
 logger = logging.getLogger("termokontur.max_delivery")
 
@@ -42,21 +42,26 @@ def event_key(update: dict) -> str | None:
         return f"start:{uid}:{timestamp}"
     return None
 
-def enqueue(update: dict) -> bool:
+def enqueue(update: dict, *, expected=None) -> bool:
     """Returns False for duplicate/irrelevant events. Raises on processing errors."""
     raw_key = event_key(update)
     if not raw_key:
         return False
-    key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    legacy_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     now = db.utc_now()
     stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
     with db.atomic() as conn:
+        active = max_connection.require_current(conn, expected) if expected else max_connection.current(conn)
+        scope = active.scope
+        legacy = conn.execute("SELECT 1 FROM max_inbox WHERE event_id=? AND bot_scope=?",
+                              (legacy_key, scope)).fetchone()
+        key = hashlib.sha256(f"{scope}:{raw_key}".encode()).hexdigest() if scope and not legacy else legacy_key
         cur = conn.execute("""
-            INSERT INTO max_inbox(event_id, state, updated_at)
-            VALUES (?, 'processing', ?)
+            INSERT INTO max_inbox(event_id, state, updated_at, bot_scope)
+            VALUES (?, 'processing', ?, ?)
             ON CONFLICT(event_id) DO UPDATE SET updated_at=excluded.updated_at
             WHERE state='processing' AND max_inbox.updated_at<?
-        """, (key, now, stale))
+        """, (key, now, scope, stale))
         claimed = bool(cur.rowcount)
         if not claimed:
             row = conn.execute("SELECT state FROM max_inbox WHERE event_id=?", (key,)).fetchone()
@@ -95,53 +100,76 @@ def enqueue(update: dict) -> bool:
         """, (db.utc_now(), key))
     return True
 
+
+def queue_notice(conn, key: str, uid: str, text: str, stamp: str, *, notify=True) -> bool:
+    scope = max_connection.current(conn).scope
+    if not conn.execute("""INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at,bot_scope)
+                         VALUES(?,'complete',?,?)""", (key, stamp, scope)).rowcount:
+        return False
+    conn.execute("INSERT INTO max_outbox(event_id,user_id,text,next_retry_at) VALUES(?,?,?,?)",
+                 (key, uid, text, stamp))
+    conn.execute("INSERT INTO max_outbox_ui(event_id,delivery_mode,notify) VALUES(?,'notice',?)",
+                 (key, int(notify)))
+    return True
+
+
 def diagnostics() -> dict:
     """Counts for authenticated administrators; never exposes message contents."""
     stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
     with db.connect() as conn:
+        scope = max_connection.current(conn).scope
         outbox = conn.execute("""
             SELECT
                 COUNT(*) AS undelivered,
                 SUM(CASE WHEN attempts >= 10 THEN 1 ELSE 0 END) AS repeatedly_failed,
                 SUM(CASE WHEN next_retry_at <= ? THEN 1 ELSE 0 END) AS ready
-            FROM max_outbox WHERE delivered_at IS NULL
+            FROM max_outbox JOIN max_inbox USING(event_id) WHERE delivered_at IS NULL AND bot_scope=?
               AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=max_outbox.event_id)
-        """, (db.utc_now(),)).fetchone()
-        terminal = conn.execute("SELECT count(*) FROM max_delivery_failures").fetchone()[0]
+        """, (db.utc_now(), scope)).fetchone()
+        terminal = conn.execute("""SELECT count(*) FROM max_delivery_failures JOIN max_inbox USING(event_id)
+                                 WHERE bot_scope=?""", (scope,)).fetchone()[0]
         stuck = conn.execute("""
             SELECT COUNT(*) FROM max_inbox
-            WHERE state='processing' AND updated_at < ?
-        """, (stale,)).fetchone()[0]
+            WHERE state='processing' AND updated_at < ? AND bot_scope=?
+        """, (stale, scope)).fetchone()[0]
+        parked = conn.execute("""SELECT count(*) FROM max_outbox o JOIN max_inbox i USING(event_id)
+                              WHERE o.delivered_at IS NULL AND i.bot_scope<>?
+                                AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=o.event_id)
+                              """, (scope,)).fetchone()[0]
     return {
         "undelivered": outbox["undelivered"],
         "repeatedly_failed": outbox["repeatedly_failed"] or 0,
         "ready": outbox["ready"] or 0,
         "stalled_events": stuck,
         "permanently_failed": terminal,
+        "parked_other_bots": parked,
     }
 
 
-def pending(limit: int = 20) -> list[dict]:
+def pending(limit: int = 20, *, expected=None) -> list[dict]:
     with db.connect() as conn:
+        active = max_connection.require_current(conn, expected) if expected else max_connection.current(conn)
         rows = conn.execute("""
             SELECT o.event_id, o.user_id, o.text, o.attempts,
                    u.buttons_json, u.callback_id, u.origin_mid, u.chat_id,
                    COALESCE(u.delivery_mode, 'menu') AS delivery_mode,
                    COALESCE(u.notify, 1) AS notify
             FROM max_outbox o
+            JOIN max_inbox i ON i.event_id=o.event_id
             LEFT JOIN max_outbox_ui u ON u.event_id=o.event_id
-            WHERE o.delivered_at IS NULL AND o.next_retry_at<=?
+            WHERE i.bot_scope=? AND o.delivered_at IS NULL AND o.next_retry_at<=?
               AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=o.event_id)
               AND (COALESCE(u.delivery_mode,'menu') <> 'menu' OR NOT EXISTS (
                   SELECT 1 FROM max_outbox earlier
+                  JOIN max_inbox ei ON ei.event_id=earlier.event_id
                   LEFT JOIN max_outbox_ui eu ON eu.event_id=earlier.event_id
-                  WHERE earlier.user_id=o.user_id AND earlier.rowid<o.rowid
+                  WHERE ei.bot_scope=i.bot_scope AND earlier.user_id=o.user_id AND earlier.rowid<o.rowid
                     AND earlier.delivered_at IS NULL AND earlier.next_retry_at>?
                     AND COALESCE(eu.delivery_mode,'menu')='menu'
                     AND NOT EXISTS (SELECT 1 FROM max_delivery_failures f WHERE f.event_id=earlier.event_id)
               ))
             ORDER BY o.rowid LIMIT ?
-        """, (db.utc_now(), db.utc_now(), limit))
+        """, (active.scope, db.utc_now(), db.utc_now(), limit))
         return [dict(row) for row in rows]
 
 def mark_sent(key: str) -> None:
@@ -173,19 +201,28 @@ def mark_permanent_failure(key: str, status: int) -> None:
         conn.execute("INSERT OR IGNORE INTO max_delivery_failures VALUES(?,?,?)", (key, status, db.utc_now()))
 
 
-def menu_message_id(uid: str) -> str | None:
+def menu_message_id(uid: str, *, expected=None) -> str | None:
     """The last bot message containing the reusable menu for this user."""
     with db.connect() as conn:
+        db.begin(conn)
+        if expected:
+            max_connection.require_current(conn, expected)
         row = conn.execute(
             "SELECT message_id FROM max_menu_messages WHERE user_id=?", (str(uid),)
         ).fetchone()
     return row["message_id"] if row else None
 
 
-def set_menu_message_id(uid: str, mid: str) -> None:
+def set_menu_message_id(uid: str, mid: str, *, expected=None) -> None:
     if not isinstance(mid, str) or not mid:
         return
     with db.connect() as conn:
+        db.begin(conn, immediate=True)
+        if expected:
+            try:
+                max_connection.require_current(conn, expected)
+            except max_connection.Changed:
+                return
         conn.execute("""
             INSERT INTO max_menu_messages(user_id, message_id) VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET message_id=excluded.message_id
@@ -225,13 +262,13 @@ async def _send_typing(client: httpx.AsyncClient, chat_id: str) -> None:
         logger.debug("MAX typing indicator unavailable (%s)", type(exc).__name__)
 
 
-async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> None:
+async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict, expected) -> None:
     """Prefer one editable menu per user; create only when editing is impossible.
 
     Keep the MAX keyboard in every bot message, so it stays editable even
     after the seven-day limit for ordinary text-only messages.
     """
-    mid = menu_message_id(uid)
+    mid = menu_message_id(uid, expected=expected)
     if mid:
         try:
             response = await client.put(
@@ -250,13 +287,16 @@ async def _edit_or_post(client: httpx.AsyncClient, uid: str, message: dict) -> N
     response.raise_for_status()
     new_mid = _response_mid(response)
     if new_mid:
-        set_menu_message_id(uid, new_mid)
+        set_menu_message_id(uid, new_mid, expected=expected)
 
 
-async def drain(client: httpx.AsyncClient) -> None:
+async def drain(client: httpx.AsyncClient, *, expected=None) -> None:
     from .max_ui import keyboard
     blocked_users = set()
-    for item in pending():
+    for item in pending(expected=expected):
+        if expected:
+            with db.connect() as conn:
+                max_connection.require_current(conn, expected)
         if item["delivery_mode"] == "menu" and item["user_id"] in blocked_users:
             continue
         if item["delivery_mode"] == "notice":
@@ -288,15 +328,15 @@ async def drain(client: httpx.AsyncClient) -> None:
                     )
                     response.raise_for_status()
                     if item["origin_mid"]:
-                        set_menu_message_id(item["user_id"], item["origin_mid"])
+                        set_menu_message_id(item["user_id"], item["origin_mid"], expected=expected)
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code not in (400, 404, 410):
                         raise
                     # The callback expired while queued. Edit the existing
                     # menu instead of creating an unnecessary new message.
-                    await _edit_or_post(client, item["user_id"], message)
+                    await _edit_or_post(client, item["user_id"], message, expected)
             else:
-                await _edit_or_post(client, item["user_id"], message)
+                await _edit_or_post(client, item["user_id"], message, expected)
         except httpx.HTTPError as exc:
             status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             if status in (400, 403, 404, 410):
@@ -313,7 +353,7 @@ async def drain(client: httpx.AsyncClient) -> None:
         await asyncio.sleep(0.06)
 
 
-async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
+async def ensure_webhook_subscription(client: httpx.AsyncClient, *, expected=None) -> bool:
     """Refresh a legacy MAX subscription to receive button clicks.
 
     MAX explicitly supports updating an existing subscription through POST
@@ -321,11 +361,10 @@ async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
     value validated by the inbound webhook endpoint.
     Returns True if already current or successfully updated.
     """
-    from . import settings
-    if settings.get("max_mode", "polling") != "webhook":
+    active = expected or max_connection.current()
+    if active.mode != "webhook":
         return False
-    url = settings.get("max_webhook_url", "") or ""
-    secret = settings.get("max_webhook_secret", "") or ""
+    url, secret = active.webhook_url, active.webhook_secret
     if not url or not secret:
         return False
     response = await client.get("/subscriptions")
@@ -340,6 +379,9 @@ async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
     if current and (current.get("update_types") is None or
                     set(required).issubset(set(current["update_types"]))):
         return True
+    if expected:
+        with db.connect() as conn:
+            max_connection.require_current(conn, expected)
     response = await client.post("/subscriptions", json={
         "url": url, "secret": secret, "update_types": list(required),
     })
@@ -350,7 +392,7 @@ async def ensure_webhook_subscription(client: httpx.AsyncClient) -> bool:
     return True
 
 
-def queue_temperature_alerts() -> int:
+def queue_temperature_alerts(*, expected=None) -> int:
     """Queue limited deviation alerts for users assigned to affected rooms."""
     from . import settings
     if settings.get("alerts_enabled", "0") != "1" or not settings.get("max_token", ""):
@@ -361,6 +403,9 @@ def queue_temperature_alerts() -> int:
     count = 0
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        active = max_connection.require_current(conn, expected) if expected else max_connection.current(conn)
+        if not active.token:
+            return 0
         rows = conn.execute("""
             SELECT p.id AS room_id, p.name, p.building, p.min_temp, p.max_temp,
                    b.user_id, x.id AS reading_id, x.value, x.observed_at, x.source
@@ -403,12 +448,7 @@ def queue_temperature_alerts() -> int:
             msg=(f"⚠️ Термоконтур: температура {label}!\n"
                  f"{row['building']} / {row['name']}: {row['value']:g} °C\n"
                  f"Допустимый диапазон: {row['min_temp']:g}–{row['max_temp']:g} °C.")
-            conn.execute("""INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
-                            VALUES(?,'complete',?)""",(key,stamp))
-            conn.execute("""INSERT OR IGNORE INTO max_outbox(event_id,user_id,text,next_retry_at)
-                            VALUES(?,?,?,?)""",(key,row["user_id"],msg,stamp))
-            conn.execute("""INSERT OR IGNORE INTO max_outbox_ui(event_id,delivery_mode,notify)
-                            VALUES(?,'notice',1)""", (key,))
+            queue_notice(conn, key, row["user_id"], msg, stamp)
             conn.execute("""
                 INSERT INTO temperature_alert_state(room_id,user_id,last_status,last_at,last_reading_id)
                 VALUES(?,?,?,?,?)

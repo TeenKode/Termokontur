@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from . import daily, db, settings
+from . import daily, db, max_connection, max_delivery
 
 
 def recipients() -> list[dict]:
@@ -43,8 +43,6 @@ def recipients() -> list[dict]:
 
 def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -> dict:
     """Atomically queue a batch; retries with the same request id cannot duplicate it."""
-    if not settings.get("max_token", ""):
-        raise ValueError("Сначала настройте токен MAX")
     text = text.strip()
     if not text or len(text) > 2000:
         raise ValueError("Введите сообщение от 1 до 2000 символов")
@@ -56,6 +54,8 @@ def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -
     stamp = db.utc_now()
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if not max_connection.current(conn).token:
+            raise ValueError("Сначала настройте токен MAX")
         previous = conn.execute(
             "SELECT recipients,payload_hash FROM notification_batches WHERE id=?", (request_id,)
         ).fetchone()
@@ -78,18 +78,7 @@ def queue_batch(request_id: str, text: str, user_ids: list[str], silent: bool) -
         rendered = "📣 Термоконтур · Сообщение администрации\n\n" + text
         for uid in user_ids:
             key = hashlib.sha256(f"admin:{request_id}:{uid}".encode()).hexdigest()
-            conn.execute(
-                "INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)",
-                (key, stamp),
-            )
-            conn.execute("""
-                INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
-                VALUES(?,?,?,?)
-            """, (key, uid, rendered, stamp))
-            conn.execute("""
-                INSERT INTO max_outbox_ui(event_id,delivery_mode,notify)
-                VALUES(?,'notice',?)
-            """, (key, 0 if silent else 1))
+            max_delivery.queue_notice(conn, key, uid, rendered, stamp, notify=not silent)
             conn.execute("""
                 INSERT INTO notification_recipients(batch_id,user_id,event_id)
                 VALUES(?,?,?)

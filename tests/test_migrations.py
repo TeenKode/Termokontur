@@ -5,7 +5,7 @@ from threading import Barrier
 
 import pytest
 
-from termokontur import auth, db, migrations, settings
+from termokontur import auth, db, max_connection, max_delivery, migrations, settings
 
 
 def test_concurrent_first_start(tmp_path, monkeypatch):
@@ -67,6 +67,7 @@ def test_upgrade_from_v4_preserves_existing_data(tmp_path, monkeypatch):
     monkeypatch.setenv("TERMOKONTUR_DB", str(path))
     monkeypatch.setenv("TERMOKONTUR_ADMIN_PASSWORD", "legacy-test-password")
     monkeypatch.setenv("TERMOKONTUR_SECRET", "legacy-test-secret-which-is-long-enough")
+    monkeypatch.setenv("MAX_BOT_TOKEN", "legacy-test-max-token-for-the-existing-bot")
     # 1.2.4 used the first four migrations. Construct that schema before
     # creating any records, then open it using the complete current chain.
     with monkeypatch.context() as old:
@@ -79,7 +80,12 @@ def test_upgrade_from_v4_preserves_existing_data(tmp_path, monkeypatch):
         db.add_reading(room["id"], 21.5, "manual")
         assert db.bind_code("123456", db.issue_code(room["id"]))
         settings.update({"organization_name": "Старая школа"})
+        db.set_state("max_marker", "legacy-marker")
         with db.connect() as conn:
+            conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES('legacy','complete',?)",
+                         (db.utc_now(),))
+            conn.execute("""INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
+                         VALUES('legacy','123456','Ответ',?)""", (db.utc_now(),))
             conn.execute("""INSERT INTO sensor_devices(id,name,room_id,enrollment_until,
                 token_hash,config,created_at,ack_seq,last_seen,last_complete_sync) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 ("legacy-device", "Старый датчик", room["id"], 0, "old-token-hash",
@@ -93,7 +99,7 @@ def test_upgrade_from_v4_preserves_existing_data(tmp_path, monkeypatch):
     assert auth.check_password("legacy-test-password")
     assert settings.get("organization_name") == "Старая школа"
     with db.connect() as conn:
-        assert migrations.read_version(conn) == migrations.SCHEMA_VERSION == 12
+        assert migrations.read_version(conn) == migrations.SCHEMA_VERSION == 13
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("SELECT value FROM readings").fetchone()[0] == 21.5
         assert conn.execute("SELECT user_id FROM max_bindings").fetchone()[0] == "123456"
@@ -105,3 +111,6 @@ def test_upgrade_from_v4_preserves_existing_data(tmp_path, monkeypatch):
         for name in ("sensor_record_receipts", "session_revocations", "max_delivery_failures", "admin_audit", "sensor_config_history", "sensor_boot_debug"):
             assert conn.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
     maintenance.inspect(path)
+    bot = max_connection.identify(max_connection.current(), {"user_id": 123, "is_bot": True})
+    assert max_connection.marker(bot) == "legacy-marker"
+    assert [item["event_id"] for item in max_delivery.pending(expected=bot)] == ["legacy"]

@@ -90,17 +90,21 @@ def update(values: dict[str, str]) -> None:
 def set_secret(key: str, value: str | None) -> None:
     if key not in ("max_token", "ingest_key"):
         raise ValueError("Unknown secret")
+    if value is not None and not _valid_secret(value):
+        raise ValueError("Ключ должен содержать минимум 20 символов")
+    if key == "max_token":
+        from . import max_connection
+        max_connection.replace_token(value)
+        return
     with db.connect() as conn:
         if value is None:
             conn.execute("DELETE FROM settings WHERE key=?", (key,))
-        elif _valid_secret(value):
+        else:
             conn.execute(
                 """INSERT INTO settings(key, value) VALUES (?, ?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (key, value),
             )
-        else:
-            raise ValueError("Ключ должен содержать минимум 20 символов")
 
 def public(conn=None) -> dict:
     if conn is None:
@@ -182,10 +186,14 @@ def validated(data: dict) -> dict[str, str]:
         "alert_cooldown_minutes": str(cooldown),
     }
 
-def set_max_webhook(url: str, secret: str) -> None:
+def set_max_webhook(url: str, secret: str, *, expected=None) -> None:
+    from . import max_connection
     if not _valid_secret(secret):
         raise ValueError("Invalid MAX webhook secret")
     with db.connect() as conn:
+        db.begin(conn, immediate=True)
+        if expected is not None:
+            max_connection.require_current(conn, expected)
         for key, value in (("max_mode", "webhook"), ("max_webhook_url", url),
                            ("max_webhook_secret", secret)):
             conn.execute(
@@ -193,10 +201,16 @@ def set_max_webhook(url: str, secret: str) -> None:
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (key, value),
             )
+        max_connection.renew_generation(conn)
 
-def clear_max_webhook() -> None:
+def clear_max_webhook(*, expected=None) -> None:
+    from . import max_connection
     with db.connect() as conn:
+        db.begin(conn, immediate=True)
+        if expected is not None:
+            max_connection.require_current(conn, expected)
         conn.execute("DELETE FROM settings WHERE key IN ('max_webhook_secret', 'max_webhook_url')")
         conn.execute("""INSERT INTO settings(key, value) VALUES ('max_mode','polling')
                      ON CONFLICT(key) DO UPDATE SET value='polling'""")
+        max_connection.renew_generation(conn)
 

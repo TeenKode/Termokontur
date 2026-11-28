@@ -11,7 +11,7 @@ import hashlib
 import math
 import re
 
-from . import daily, db, settings
+from . import daily, db, max_delivery, settings
 
 TEMPERATURES = [18 + n * 0.5 for n in range(17)]
 NUMBER = re.compile(r"[-+]?\d{1,2}(?:[.,]\d{1,2})?")
@@ -240,18 +240,7 @@ def _write(uid: str, room_id: int, mode: str, raw: str, event_id: str) -> str:
                     recipient = colleague["user_id"]
                     token = f"max-room-deviation:{room_id}:{local_day}:{recipient}"
                     alert_id = hashlib.sha256(token.encode("utf-8")).hexdigest()
-                    conn.execute("""
-                        INSERT OR IGNORE INTO max_inbox(event_id,state,updated_at)
-                        VALUES(?,'complete',?)
-                    """, (alert_id, now))
-                    conn.execute("""
-                        INSERT OR IGNORE INTO max_outbox(event_id,user_id,text,next_retry_at)
-                        VALUES(?,?,?,?)
-                    """, (alert_id, recipient, notice, now))
-                    conn.execute("""
-                        INSERT OR IGNORE INTO max_outbox_ui(event_id,delivery_mode,notify)
-                        VALUES(?,'notice',1)
-                    """, (alert_id,))
+                    max_delivery.queue_notice(conn, alert_id, recipient, notice, now)
     # Session changes must happen after the transaction to avoid SQLite locks.
     _set(uid, next_mode, room_id if next_mode else None)
     if message is not None:

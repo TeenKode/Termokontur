@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 import secrets
 
-from . import db, settings
+from . import db, max_connection, max_delivery, settings
 
 
 def applied_config(device: dict) -> dict | None:
@@ -73,6 +73,8 @@ def queue_alerts(now: datetime | None = None) -> int:
     count = 0
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if not max_connection.current(conn).token:
+            return 0
         recipients = defaultdict(set)
         for row in conn.execute("SELECT building,max_user_id FROM building_accounts WHERE max_user_id IS NOT NULL"):
             recipients[row["building"]].add(row["max_user_id"])
@@ -96,12 +98,7 @@ def queue_alerts(now: datetime | None = None) -> int:
                     if key in existing:
                         continue
                     event_id = "sensor-alert:" + secrets.token_hex(16)
-                    conn.execute("INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)",
-                                 (event_id, stamp))
-                    conn.execute("INSERT INTO max_outbox(event_id,user_id,text,next_retry_at) VALUES(?,?,?,?)",
-                                 (event_id, recipient, message, stamp))
-                    conn.execute("INSERT INTO max_outbox_ui(event_id,delivery_mode,notify) VALUES(?,'notice',1)",
-                                 (event_id,))
+                    max_delivery.queue_notice(conn, event_id, recipient, message, stamp)
                     conn.execute("INSERT INTO sensor_alert_state VALUES(?,?,?,?)", (*key, event_id))
                     count += 1
         for key in existing.keys() - active:

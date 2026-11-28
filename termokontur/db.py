@@ -549,13 +549,15 @@ def max_user_dialog_chat_id(user_id: str) -> str | None:
     Never guess a chat ID from a MAX user ID. Old installations may not have
     captured chat IDs yet; those users can send /start to refresh their profile.
     """
+    from . import max_connection
     with connect() as conn:
         row = conn.execute("""
             SELECT ui.chat_id
             FROM max_outbox o JOIN max_outbox_ui ui ON ui.event_id=o.event_id
-            WHERE o.user_id=? AND ui.chat_id IS NOT NULL
+            JOIN max_inbox i ON i.event_id=o.event_id
+            WHERE o.user_id=? AND i.bot_scope=? AND ui.chat_id IS NOT NULL
             ORDER BY o.rowid DESC LIMIT 1
-        """, (str(user_id),)).fetchone()
+        """, (str(user_id), max_connection.current(conn).scope)).fetchone()
     return str(row["chat_id"]) if row and row["chat_id"] else None
 
 
@@ -602,9 +604,12 @@ def set_max_user_rooms(user_id: str, room_ids: list[int],
     Optionally queue *one* MAX notification listing only newly assigned rooms.
     Repeating the same operation never queues another notification.
     """
+    from . import max_connection, max_delivery
     chosen = list(dict.fromkeys(room_ids))
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if notify and not max_connection.current(conn).token:
+            raise ValueError("Сначала настройте токен MAX")
         known = conn.execute("""
             SELECT 1 FROM max_users WHERE user_id=?
             UNION SELECT 1 FROM max_bindings WHERE user_id=?
@@ -642,18 +647,7 @@ def set_max_user_rooms(user_id: str, room_ids: list[int],
                       + "\n\nОткройте меню бота, чтобы передать показания температуры.")
             now = utc_now()
             key = "max-admin-assign:" + secrets.token_hex(16)
-            conn.execute("""
-                INSERT INTO max_inbox(event_id,state,updated_at) VALUES(?,'complete',?)
-            """, (key, now))
-            conn.execute("""
-                INSERT INTO max_outbox(event_id,user_id,text,next_retry_at)
-                VALUES(?,?,?,?)
-            """, (key, user_id, notice[:4000], now))
-            conn.execute("""
-                INSERT INTO max_outbox_ui(event_id,delivery_mode,notify)
-                VALUES(?,'notice',1)
-            """, (key,))
-            queued = True
+            queued = max_delivery.queue_notice(conn, key, user_id, notice[:4000], now)
     return {"user_id": user_id, "room_ids": chosen, "added": added,
             "removed": removed, "notification_queued": queued}
 
