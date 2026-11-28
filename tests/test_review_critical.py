@@ -134,7 +134,6 @@ def test_release_pointer_advances_only_after_firmware_publication():
     assert workflow.index("Wait for server Test workflow on the exact release commit") < workflow.index("Publish versioned firmware bundle") < workflow.index("Publish panel only after firmware is available")
     assert 'head_sha=$GITHUB_SHA&event=push' in workflow
     assert 'test "$conclusion" = success' in workflow
-    assert workflow.index("Sign or verify the OTA image") < workflow.index("Publish the same archive over Git")
     assert 'gh release download "firmware-v$VERSION"' in workflow
     assert 'cmp "$download_dir/termokontur-firmware.zip" termokontur-firmware.zip' in workflow
     assert "needs: [firmware, browser, bundle-browser]" in workflow

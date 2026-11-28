@@ -17,6 +17,9 @@ if sdkconfig.is_file():
     config = sdkconfig.read_text(encoding="utf-8")
     updated = config.replace("# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set\n",
                              "CONFIG_MBEDTLS_HAVE_TIME_DATE=y\n")
+    # Existing build trees can still carry the signed-OTA setting.
+    updated = updated.replace("CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y\n",
+                              "# CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT is not set\n")
     if updated != config:
         sdkconfig.write_text(updated, encoding="utf-8")
         sdkconfig_changed = True
