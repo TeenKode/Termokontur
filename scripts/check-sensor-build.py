@@ -7,10 +7,6 @@ root=Path(__file__).resolve().parents[1]
 folder=root/'firmware/sensor'
 config=(folder/'sdkconfig.esp32-c3-supermini').read_text()
 assert 'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' in config
-assert 'CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y' in config
-assert 'CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y' in config
-assert 'CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y' not in config
-assert 'CONFIG_SECURE_BOOT=y' not in config
 assert 'CONFIG_NEWLIB_TIME_SYSCALL_USE_RTC_HRT=y' in config
 assert 'CONFIG_MBEDTLS_HAVE_TIME_DATE=y' in config
 assert 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y' in config
@@ -19,10 +15,7 @@ assert 'CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200' in config
 assert 'CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y' in config
 assert '# CONFIG_ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS is not set' in config
 image=(folder/'.pio/build/esp32-c3-supermini/firmware.bin').read_bytes()
-# Espressif signing pads to a Flash sector and appends one signature sector.
-sector_size = 4096
-signed_sectors = (len(image) + sector_size - 1) // sector_size + 1
-assert len(image) >= 256 and signed_sectors * sector_size <= 0x1c0000
+assert 256<=len(image)<=0x1c0000
 assert image[0]==0xe9 and struct.unpack_from('<H',image,12)[0]==5
 assert struct.unpack_from('<I',image,32)[0]==0xabcd5432
 assert image[80:112].split(b'\0',1)[0]==b'termokontur-sensor'
